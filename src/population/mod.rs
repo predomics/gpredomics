@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 
 pub struct Population {
     pub individuals: Vec<Individual>,

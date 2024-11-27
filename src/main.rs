@@ -1,11 +1,10 @@
-mod individual; // Declare the individual module
+mod data; // Declare the data module
 
-use individual::Individual; // Bring the Individual struct into scope
+use data::Data; // Bring the Data struct into scope
 
 fn main() {
-    let person = Individual {
-        // Initialize fields as needed
-    };
-    println!("{:?}", person); // Example usage
+    let mut my_data = data::Data::new();
+    my_data.load_data("samples/X.tsv","samples/y.tsv");
+    println!("{:?}", my_data.X); // Example usage
 }
 
