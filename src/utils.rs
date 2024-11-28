@@ -1,5 +1,13 @@
 use rand::Rng;
 
+/// a macro to declare simple Vec<String>
+#[macro_export]
+macro_rules! string_vec {
+    ($($x:expr),*) => {
+        vec![$($x.into()),*]
+    };
+}
+
 pub fn generate_random_vector(reference_size: usize) -> Vec<i8> {
     let mut rng = rand::thread_rng();
 
@@ -13,3 +21,4 @@ pub fn generate_random_vector(reference_size: usize) -> Vec<i8> {
         }
     }).collect()
 }
+

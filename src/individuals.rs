@@ -44,11 +44,11 @@ impl Individual {
         }
     }
 
-    pub fn evaluate(&self, d: &Data) -> Vec<f32> {
+    pub fn evaluate(&self, d: &Data) -> Vec<f64> {
         let mut value=vec![0.0; d.samples.len()];
-        for row in d.X.iter() {
-            for (i,x) in row.iter().enumerate() {
-                value[i]+=self.features[i] as f32*x;
+        for (i,row) in d.X.iter().enumerate() {
+            for (j,x) in row.iter().enumerate() {
+                value[j]+=self.features[i] as f64*x;
             }
         }
         value

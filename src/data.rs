@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::fmt;
 
 pub struct Data {
-    pub X: Vec<Vec<f32>>,         // Matrix for feature values
+    pub X: Vec<Vec<f64>>,         // Matrix for feature values
     pub y: Vec<u8>,              // Vector for target values
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
     pub samples: Vec<String>,     // Sample names (from the first row of X.tsv)
@@ -49,8 +49,8 @@ impl Data {
             }
 
             // Remaining fields are the feature values
-            let row: Vec<f32> = fields
-                .map(|value| value.parse::<f32>().unwrap_or(0.0))
+            let row: Vec<f64> = fields
+                .map(|value| value.parse::<f64>().unwrap_or(0.0))
                 .collect();
             self.X.push(row);
         }
