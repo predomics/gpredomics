@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use crate::utils::generate_random_vector;
+use crate::data::Data;
 
 pub struct Individual {
-    pub feature_indices: HashMap<u32,u8>, /// a vector of feature indices with their corresponding signs
+    pub features: Vec<i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices
-    pub fit_method: string, /// AUC, accuracy, etc.
-    pub accuracy: f64, /// accuracy of the model
+    pub fit_method: String, // AUC, accuracy, etc.
+    pub accuracy: f64, // accuracy of the model
 }
 
 impl Individual {
@@ -37,20 +38,37 @@ impl Individual {
 
     pub fn new() -> Individual {
         Individual {
-            feature_indices: HashMap::new(),
-            feature_names: Vec::new(),
+            features: Vec::new(),
             fit_method: String::from("AUC"),
             accuracy: 0.0,
         }
     }
 
-    /// write a function fit_model that takes in the data and computes all the following fields
+    pub fn evaluate(&self, d: &Data) -> Vec<f32> {
+        let mut value=vec![0.0; d.samples.len()];
+        for row in d.X.iter() {
+            for (i,x) in row.iter().enumerate() {
+                value[i]+=self.features[i] as f32*x;
+            }
+        }
+        value
+    }
 
-    /// write a function evaluate_contingency_table that takes in the data and evaluates the contingency table of the model
+    pub fn random(d: &Data) -> Individual {
+        Individual {
+            features: generate_random_vector(d.features.len()),
+            fit_method: String::from("AUC"),
+            accuracy: 0.0,
+        }
+    }
 
-    /// write a function evaluate_accuracy that takes in the data and evaluates the accuracy of the model
+    // write a function fit_model that takes in the data and computes all the following fields
 
-    /// write a function evaluate_auc that takes in the data and evaluates the AUC of the model
+    // write a function evaluate_contingency_table that takes in the data and evaluates the contingency table of the model
+
+    // write a function evaluate_accuracy that takes in the data and evaluates the accuracy of the model
+
+    // write a function evaluate_auc that takes in the data and evaluates the AUC of the model
 
 
 }

@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-import super()::data::Data;
+
+mod data;
+
+use data::Data;
 
 pub struct Population {
     pub individuals: Vec<Individual>,
@@ -33,5 +36,6 @@ impl Population {
             data: data,
         }
     }
+
 
 }
