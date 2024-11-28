@@ -54,6 +54,89 @@ impl Individual {
         value
     }
 
+    /// Compute AUC based on the target vector y
+    pub fn compute_auc(&self, d: &Data) -> f64 {
+        let value = self.evaluate(d);
+        let mut thresholds: Vec<f64> = (&value).clone();
+        thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        thresholds.insert(0, thresholds[0] - 1.0); // Add a threshold below the minimum
+        thresholds.push(thresholds.last().unwrap() + 1.0); // Add a threshold above the maximum
+
+
+        let mut auc = 0.0;
+        let mut roc_points = Vec::new();
+
+        for &threshold in &thresholds {
+            let (tp, fp, tn, fn_count) = self.calculate_confusion_matrix(&value, &d.y, threshold);
+
+            let tpr = if (tp + fn_count) > 0 {
+                tp as f64 / (tp + fn_count) as f64
+            } else {
+                0.0
+            };
+
+            let fpr = if (fp + tn) > 0 {
+                fp as f64 / (fp + tn) as f64
+            } else {
+                0.0
+            };
+
+            roc_points.push((fpr, tpr));
+        }
+
+        // Sort points by FPR to ensure proper order for AUC calculation
+        roc_points.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap())
+        });
+
+        // Compute AUC using trapezoidal rule
+        for i in 1..roc_points.len() {
+            let (prev_fpr, prev_tpr) = roc_points[i - 1];
+            let (fpr, tpr) = roc_points[i];
+
+            auc += (fpr - prev_fpr) * (tpr + prev_tpr) / 2.0;
+        }
+
+        auc
+    }
+
+    /// Calculate the confusion matrix at a given threshold
+    fn calculate_confusion_matrix(&self, value: &Vec<f64>, y: &[u8], threshold: f64) -> (usize, usize, usize, usize) {
+        let mut tp = 0; // True Positives
+        let mut fp = 0; // False Positives
+        let mut tn = 0; // True Negatives
+        let mut fn_count = 0; // False Negatives
+
+        for (i, &pred) in value.iter().enumerate() {
+            match y[i] {
+                1 => {
+                    // Positive class
+                    if pred > threshold {
+                        tp += 1;
+                    } else {
+                        fn_count += 1;
+                    }
+                }
+                0 => {
+                    // Negative class
+                    if pred > threshold {
+                        fp += 1;
+                    } else {
+                        tn += 1;
+                    }
+                }
+                2 => {
+                    // Unknown class, ignore
+                }
+                _ => panic!("Invalid class label in y: {}", y[i]),
+            }
+        }
+
+
+        (tp, fp, tn, fn_count)
+    }   
+
+
     pub fn random(d: &Data) -> Individual {
         Individual {
             features: generate_random_vector(d.features.len()),
