@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+import super()::data::Data;
 
 pub struct Population {
     pub individuals: Vec<Individual>,
-    pub feature_names: HashMap<u32, String>,
+    pub data: &Data
 }
 
 impl Population {
@@ -26,10 +27,11 @@ impl Population {
     }
 
 
-    pub fn new() -> Population {
+    pub fn new(data: &Data) -> Population {
         Population {
             individuals: Vec::new(),
-            feature_names: HashMap::new(),
+            data: data,
         }
     }
+
 }
