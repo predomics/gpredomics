@@ -7,35 +7,35 @@ use rand::Rng;
 use rand::seq::index::sample;
 
 
-pub fn ga<'a>(mut data: &'a Data, param: &'a Param) -> Vec<Population<'a>> {
+pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     // generate a random population with a given size  (and evaluate it for selection)
-    let mut pop = Population::new(data);
+    let mut pop = Population::new();
     let mut epoch:u32 = 0;
     let mut populations: Vec<Population> = Vec::new();
 
     data.select_features(param);
-    pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax);
+    pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data);
+    pop.evaluate(data);
     
     loop {
         epoch += 1;
 
 
         // we create a new generation
-        let mut new_pop = Population::new(data);
+        let mut new_pop = Population::new();
 
         // select some parents (according to elitiste/random params)
         // these individuals are flagged with the parent attribute
         // this populate half the new generation new_pop
-        pop.evaluate();
         let sorted_pop = pop.sort();  
         new_pop.add(select_parents(&sorted_pop, param));
 
-        let mut children = cross_over(&new_pop,param);
-        mutate(&mut children, param);
-        children.evaluate();
+        let mut children = cross_over(&new_pop,param,data.feature_len);
+        mutate(&mut children, param, data.feature_len);
+        children.evaluate(data);
         new_pop.add(children);
 
-        populations.push(pop);
+        populations.push(sorted_pop);
         pop = new_pop;
 
         if (epoch>=param.ga.epochs) {
@@ -48,7 +48,7 @@ pub fn ga<'a>(mut data: &'a Data, param: &'a Param) -> Vec<Population<'a>> {
 }
 
 /// pick params.ga_select_elite_pct% of the best individuals and params.ga_select_random_pct%  
-fn select_parents<'a>(pop: &'a Population, param: &Param) -> Population<'a> {
+fn select_parents(pop: &Population, param: &Param) -> Population {
     
     // order pop by fit and select params.ga_select_elite_pct
     let (mut parents, n) = pop.select_first_pct(param.ga.select_elite_pct);
@@ -62,10 +62,10 @@ fn select_parents<'a>(pop: &'a Population, param: &Param) -> Population<'a> {
 
 
 /// create children from parents
-fn cross_over<'a>(parents: &'a Population, param: &Param) -> Population<'a> {
+fn cross_over(parents: &Population, param: &Param, feature_len: usize) -> Population {
     let mut rng = rand::thread_rng();
 
-    let mut children=Population::new(parents.data);
+    let mut children=Population::new();
 
     for i in 0..(param.ga.population_size as usize-parents.individuals.len()) {
         let mut child=Individual::new();        
@@ -73,7 +73,7 @@ fn cross_over<'a>(parents: &'a Population, param: &Param) -> Population<'a> {
                         .collect::<Vec<&Individual>>()
                         .try_into()
                         .expect("Vec must have exactly 2 elements");
-        let x=rng.gen_range(1..parents.data.feature_len-1);
+        let x=rng.gen_range(1..feature_len-1);
         child.features = p1.features[..x].to_vec();
         child.features.extend_from_slice(&p2.features[x..]);
 
@@ -85,14 +85,14 @@ fn cross_over<'a>(parents: &'a Population, param: &Param) -> Population<'a> {
 }
 
 /// change a sign, remove a variable, add a new variable
-fn mutate<'a>(children: &mut Population<'a>, param: &Param) {
+fn mutate(children: &mut Population, param: &Param, feature_len: usize) {
     let mut rng = rand::thread_rng();
 
     if param.ga.mutated_individuals_pct > 0.0 {
         let num_mutated_individuals = (children.individuals.len() as f64 
             * param.ga.mutated_individuals_pct / 100.0) as usize;
 
-        let num_mutated_features = (children.data.feature_len as f64 
+        let num_mutated_features = (feature_len as f64 
             * param.ga.mutated_features_pct / 100.0) as usize;
 
         // Select indices of the individuals to mutate
@@ -101,7 +101,7 @@ fn mutate<'a>(children: &mut Population<'a>, param: &Param) {
         for idx in individuals_to_mutate {
             // Mutate features for each selected individual
             let individual = &mut children.individuals[idx]; // Get a mutable reference
-            let feature_indices = sample(&mut rng, children.data.feature_len, num_mutated_features);
+            let feature_indices = sample(&mut rng, feature_len, num_mutated_features);
 
             for i in feature_indices {
                 individual.features[i] = match rng.gen_range(0..3) {

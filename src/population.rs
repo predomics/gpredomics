@@ -4,13 +4,12 @@ use crate::data::Data;
 use crate::individual::Individual;
 use rand::prelude::SliceRandom;
 
-pub struct Population<'a> {
+pub struct Population {
     pub individuals: Vec<Individual>,
-    pub fit: Vec<f64>,
-    pub data: &'a Data,
+    pub fit: Vec<f64>
 }
 
-impl Population<'_> {
+impl Population {
     /// Provides a help message describing the `Population` struct and its fields.
     pub fn help() -> &'static str {
         "
@@ -31,16 +30,15 @@ impl Population<'_> {
     }
 
 
-    pub fn new(data: &Data) -> Population {
+    pub fn new() -> Population {
         Population {
             individuals: Vec::new(),
-            fit: Vec::new(),
-            data: data,
+            fit: Vec::new()
         }
     }
 
-    pub fn evaluate(& mut self) -> & mut Self {
-        self.fit = self.individuals.iter().map(|i|{i.evaluate(self.data); i.compute_auc(self.data)}).collect();
+    pub fn evaluate(& mut self, data: &Data) -> & mut Self {
+        self.fit = self.individuals.iter().map(|i|{i.evaluate(data); i.compute_auc(data)}).collect();
         self
     }
 
@@ -61,11 +59,11 @@ impl Population<'_> {
     }
 
     /// populate the population with a set of random individuals
-    pub fn generate(&mut self, population_size: u32, kmin: u32, kmax: u32) {
+    pub fn generate(&mut self, population_size: u32, kmin: u32, kmax: u32, data: &Data) {
         for i in 0..population_size {
-            self.individuals.push(Individual::random_select_k(self.data.feature_len, 
-                                    &self.data.feature_selection, kmin, kmax,
-                                    &self.data.feature_class_sign))
+            self.individuals.push(Individual::random_select_k(data.feature_len, 
+                                    &data.feature_selection, kmin, kmax,
+                                    &data.feature_class_sign))
         }
     }
 
@@ -84,14 +82,13 @@ impl Population<'_> {
     
 
     /// select first element of a (sorted) population
-    pub fn select_first_pct(&self, pct: f64) -> (Population<'_>,usize) {
+    pub fn select_first_pct(&self, pct: f64) -> (Population,usize) {
         let n: usize = (self.individuals.len() as f64 * pct/100.0) as usize;
 
         (
             Population {
                 individuals: self.individuals.iter().take(n).map(|i|i.clone()).collect(),
-                fit: self.fit.iter().take(n).cloned().collect(),
-                data: self.data
+                fit: self.fit.iter().take(n).cloned().collect()
             },
             n
         )
@@ -114,8 +111,7 @@ impl Population<'_> {
 
         Population {
             individuals: individuals,
-            fit: fit,
-            data: self.data
+            fit: fit
         }
 
 
