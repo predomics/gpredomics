@@ -15,7 +15,6 @@ fn main() {
     println!("{:?}", my_data); // Example usage
     
     let mut auc_max = 0.0;
-    let mut best_model: Vec<u8>;
     let mut best_individual: Individual = Individual::new();
     for i in 0..100000 {
     let my_individual = Individual::random(&my_data);
