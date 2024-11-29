@@ -1,9 +1,12 @@
 mod data;
 mod utils;
-mod individuals;
+mod individual;
+mod param;
+mod population;
+mod ga;
 
 use data::Data;
-use individuals::Individual;
+use individual::Individual;
 
 fn main() {
     let mut my_data = Data::new();
@@ -14,6 +17,11 @@ fn main() {
     my_data.load_data("samples/X.tsv","samples/y.tsv");
     println!("{:?}", my_data); // Example usage
     
+    //let (averages,prevalences)=my_data.compute_feature_stats();
+    //println!("averages {:?}",averages);
+    //println!("prevalences {:?}",prevalences);
+    
+
     let mut auc_max = 0.0;
     let mut best_individual: Individual = Individual::new();
     for i in 0..100000 {

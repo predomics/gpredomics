@@ -1,0 +1,18 @@
+general:
+  - seed: 42
+
+data:
+  - X: "sample/X.tsv"
+  - y: "sample/y.tsv"
+  - feature_minimal_prevalence: 10 # per class, e.g. if any of the class reaches this level
+
+algorithm:
+  - type: "GA"
+  - population_size: 100
+  - epochs: 100
+  - kmin: 1
+  - kmax: 50
+  - select_elite_pct: 25
+  - select_random_pct: 25
+  - mutated_individuals_pct: 10
+  - mutated_features_pct: 10

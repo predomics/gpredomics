@@ -1,11 +1,16 @@
 use crate::utils::generate_random_vector;
 use crate::data::Data;
+use rand::seq::SliceRandom; // Provides the `choose_multiple` method
+use std::collections::{HashMap, HashSet};
+use rand::Rng;
 
+#[derive(Debug)]
 pub struct Individual {
     pub features: Vec<i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices
     pub fit_method: String, // AUC, accuracy, etc.
     pub accuracy: f64, // accuracy of the model
+    pub k: u32 // nb of variables used
 }
 
 impl Individual {
@@ -41,6 +46,16 @@ impl Individual {
             features: Vec::new(),
             fit_method: String::from("AUC"),
             accuracy: 0.0,
+            k: 0,
+        }
+    }
+
+    pub fn clone(&self) -> Individual {
+        Individual {
+            features: self.features.clone(),
+            fit_method: self.fit_method.clone(),
+            accuracy: self.accuracy,
+            k: self.k
         }
     }
 
@@ -137,13 +152,59 @@ impl Individual {
     }   
 
 
+    /// completely random individual, not very usefull
     pub fn random(d: &Data) -> Individual {
+
+        let features = generate_random_vector(d.feature_len);
+        let k = (&features).iter().map(|x| {if *x==0 {0} else {1}}).sum();
+
         Individual {
-            features: generate_random_vector(d.features.len()),
+            features: features,
             fit_method: String::from("AUC"),
             accuracy: 0.0,
+            k: k
         }
     }
+
+    /// 
+    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<u32>, kmin: u32, kmax: u32, feature_sign: &HashMap<u32,u8>) -> Individual {
+        // chose k variables amount feature_selection
+        // set a random coeficient for these k variables
+    
+    
+        let mut rng = rand::thread_rng();
+        let k: u32=rng.gen_range(kmin..(kmax+1));
+
+        // Randomly pick k values
+        let random_values = feature_selection.choose_multiple(&mut rng, k as usize);
+        let mut chosen_feature_sign: HashMap<u32,u8>=HashMap::new();
+        for i in random_values {
+            chosen_feature_sign.insert(*i, feature_sign[i]);
+        }
+        
+        let mut features:Vec<i8> = Vec::new();
+
+        // Generate a vector of random values: 1, 0, or -1
+        for i in 0..(reference_size as u32) {
+            if chosen_feature_sign.contains_key(&i) {
+                if chosen_feature_sign[&i]==0 {
+                    features.push(-1);
+                }
+                else {
+                    features.push(1);
+                }
+            }
+        }
+
+        Individual {
+            features: features,
+            fit_method: String::from("AUC"),
+            accuracy: 0.0,
+            k: k
+        }
+
+    }
+    
 
     // write a function fit_model that takes in the data and computes all the following fields
 
