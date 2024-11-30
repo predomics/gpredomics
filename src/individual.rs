@@ -183,7 +183,6 @@ impl Individual {
         }
         
         let mut features:Vec<i8> = Vec::new();
-
         // Generate a vector of random values: 1, 0, or -1
         for i in 0..(reference_size as u32) {
             if chosen_feature_sign.contains_key(&i) {
@@ -194,8 +193,11 @@ impl Individual {
                     features.push(1);
                 }
             }
+            else {
+                features.push(0);
+            }
         }
-
+        //println!("Model {:?}",features);
         Individual {
             features: features,
             fit_method: String::from("AUC"),

@@ -49,7 +49,7 @@ impl Population {
             .collect::<Vec<_>>();
 
 
-        combined.sort_by(|f, i| f.0.partial_cmp(i.0).unwrap());
+        combined.sort_by(|f, i| i.0.partial_cmp(f.0).unwrap());
 
         (self.fit, self.individuals)=combined
             .into_iter()

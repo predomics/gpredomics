@@ -36,7 +36,7 @@ impl Data {
 
     /// Load data from `X.tsv` and `y.tsv` files.
     pub fn load_data(&mut self, X_path: &str, y_path: &str) -> Result<(), Box<dyn Error>> {
-        println!("Loading file...");
+        println!("Loading files {} and {}...", X_path, y_path);
         // Open and read the X.tsv file
         let file_X = File::open(X_path)?;
         let mut reader_X = BufReader::new(file_X);
@@ -152,7 +152,7 @@ impl Data {
         self.feature_class_sign = HashMap::new();
 
         for (i,row) in self.X.iter().enumerate() {
-            match compare_classes(row, &(self.y), 0.5, param.data.feature_minimal_prevalence as f64) {
+            match compare_classes(row, &(self.y), 0.5, param.data.feature_minimal_prevalence as f64/100.0) {
                 0 => {self.feature_selection.push(i as u32); self.feature_class_sign.insert(i as u32, 0);},
                 1 => {self.feature_selection.push(i as u32); self.feature_class_sign.insert(i as u32, 1);},
                 _ => {}

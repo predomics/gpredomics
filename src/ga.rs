@@ -12,13 +12,19 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     let mut pop = Population::new();
     let mut epoch:u32 = 0;
     let mut populations: Vec<Population> = Vec::new();
+    let mut auc_values: Vec<f64> = Vec::new();
 
+    println!("Selecting features");
     data.select_features(param);
+    println!("Feature selection {:?}",data.feature_selection);
+
+    println!("Generate initial population");
     pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data);
     pop.evaluate(data);
     
     loop {
         epoch += 1;
+        println!("Starting epoch {}",epoch);
 
 
         // we create a new generation
@@ -28,6 +34,9 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         // these individuals are flagged with the parent attribute
         // this populate half the new generation new_pop
         let sorted_pop = pop.sort();  
+        println!("best AUC so far {} among {:?}", &sorted_pop.fit[0], &sorted_pop.fit[0..10]);
+        auc_values.push(sorted_pop.fit[0]);
+
         new_pop.add(select_parents(&sorted_pop, param));
 
         let mut children = cross_over(&new_pop,param,data.feature_len);
@@ -39,7 +48,15 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         pop = new_pop;
 
         if (epoch>=param.ga.epochs) {
+            println!("The target number of epoch {} has been reached, stopping",epoch);
             break
+        }
+        if auc_values.len()>10 {
+            let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
+            if auc_values.iter().map(|x| (*x-avg).abs()).sum::<f64>()<avg*0.0001 {
+                println!("AUCs stay stable for 3 rounds, stopping");
+                break
+            }
         }
     }
 
@@ -104,7 +121,7 @@ fn mutate(children: &mut Population, param: &Param, feature_len: usize) {
             let feature_indices = sample(&mut rng, feature_len, num_mutated_features);
 
             for i in feature_indices {
-                individual.features[i] = match rng.gen_range(0..3) {
+                individual.features[i] = match rng.gen_range(0..10) {
                     0 => 1,
                     1 => -1,
                     _ => 0,
