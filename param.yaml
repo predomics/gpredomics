@@ -2,8 +2,8 @@ general:
   seed: 42
 
 data:
-  X: "samples/X.tsv"
-  y: "samples/y.tsv"
+  X: "samples/Qin2014/Xtrain.tsv"
+  y: "samples/Qin2014/Ytrain.tsv"
   feature_minimal_prevalence: 10 # per class, e.g. if any of the class reaches this level
 
 ga:

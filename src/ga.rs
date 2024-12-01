@@ -55,8 +55,9 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         }
         if auc_values.len()>10 {
             let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
-            if auc_values.iter().map(|x| (*x-avg).abs()).sum::<f64>()<avg*0.0001 {
-                println!("AUCs stay stable for 3 rounds, stopping");
+            let divergence = auc_values[auc_values.len()-10..].iter().map(|x| (*x-avg).abs()).sum::<f64>();
+            if divergence<avg*0.01 {
+                println!("AUCs stays stable for last 10 rounds (divergence {} is below {}), stopping",divergence,avg*0.01);
                 break
             }
         }

@@ -35,7 +35,7 @@ fn random_test() {
     println!("                          RANDOM TEST\n-----------------------------------------------------");
     // use some data
     let mut my_data = Data::new();
-    my_data.load_data("sample/X.tsv","sample/y.tsv");
+    my_data.load_data("sample/Derosa2022/X.tsv","sample/Derosa2022/y.tsv");
     let mut rng = ChaCha8Rng::seed_from_u64(42);
 
     let mut auc_max = 0.0;
@@ -62,11 +62,35 @@ fn ga_test() {
 
     println!("Best model: {:?}",populations.pop().unwrap().individuals[0]);
 
+}
+
+
+
+/// the Genetic Algorithm test
+fn ga_test_qin2014() {
+    println!("                          GA TEST\n-----------------------------------------------------");
+    let param= param::get("param.yaml".to_string()).unwrap();
+    let mut my_data = Data::new();
+    
+    my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    println!("{:?}", my_data); 
+    
+    let mut populations = ga::ga(&mut my_data,&param);
+
+    let mut population=populations.pop().unwrap();
+    let mut test_data=Data::new();
+    test_data.load_data("samples/Qin2014/Xtest.tsv", "samples/Qin2014/Ytest.tsv");
+    
+    for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
+        let auc=individual.auc;
+        let test_auc=individual.compute_auc(&test_data);
+        println!("Model #{} [k={}]: train AUC {}  / test AUC {}",i+1,individual.k,auc,test_auc);
+    }
 
 
 }
 
 fn main() {
-    ga_test();
+    ga_test_qin2014();
 }
 
