@@ -9,3 +9,4 @@ rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 statrs = "0.15"
+rand_chacha = "0.3"

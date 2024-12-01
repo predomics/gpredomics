@@ -7,6 +7,8 @@ mod ga;
 
 use data::Data;
 use individual::Individual;
+use rand_chacha::ChaCha8Rng;
+use rand::prelude::*;
 
 /// a very basic use
 fn basic_test() {
@@ -34,11 +36,12 @@ fn random_test() {
     // use some data
     let mut my_data = Data::new();
     my_data.load_data("sample/X.tsv","sample/y.tsv");
+    let mut rng = ChaCha8Rng::seed_from_u64(42);
 
     let mut auc_max = 0.0;
     let mut best_individual: Individual = Individual::new();
     for i in 0..10000 {
-        let my_individual = Individual::random(&my_data);
+        let my_individual = Individual::random(&my_data, &mut rng);
 
         let auc = my_individual.compute_auc(&my_data);
         if (auc>auc_max) {auc_max=auc;best_individual=my_individual;}

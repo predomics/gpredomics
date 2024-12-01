@@ -1,6 +1,8 @@
+use rand::rngs::ThreadRng;
 use rand::Rng;
 use statrs::statistics::Statistics;
 use statrs::distribution::{ContinuousCDF, StudentsT};
+use rand_chacha::ChaCha8Rng;
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -10,12 +12,10 @@ macro_rules! string_vec {
     };
 }
 
-pub fn generate_random_vector(reference_size: usize) -> Vec<i8> {
+pub fn generate_random_vector(reference_size: usize, rng: &mut ChaCha8Rng) -> Vec<i8> {
     // chose k variables amount feature_selection
     // set a random coeficient for these k variables
 
-
-    let mut rng = rand::thread_rng();
 
     // Generate a vector of random values: 1, 0, or -1
     (0..reference_size).map(|i| { rng.gen_range(-1..1) }).collect()

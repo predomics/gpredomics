@@ -73,6 +73,7 @@ version = "0.1.0"
 dependencies = [
  "csv",
  "rand",
+ "rand_chacha",
  "serde",
  "serde_yaml",
  "statrs",

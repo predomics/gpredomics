@@ -1,8 +1,9 @@
 use crate::utils::generate_random_vector;
 use crate::data::Data;
-use rand::seq::SliceRandom; // Provides the `choose_multiple` method
+use rand::{rngs::ThreadRng, seq::SliceRandom}; // Provides the `choose_multiple` method
 use std::collections::{HashMap, HashSet};
 use rand::Rng;
+use rand_chacha::ChaCha8Rng;
 
 #[derive(Debug)]
 pub struct Individual {
@@ -153,9 +154,9 @@ impl Individual {
 
 
     /// completely random individual, not very usefull
-    pub fn random(d: &Data) -> Individual {
+    pub fn random(d: &Data, rng: &mut ChaCha8Rng) -> Individual {
 
-        let features = generate_random_vector(d.feature_len);
+        let features = generate_random_vector(d.feature_len, rng);
         let k = (&features).iter().map(|x| {if *x==0 {0} else {1}}).sum();
 
         Individual {
@@ -167,16 +168,15 @@ impl Individual {
     }
 
     /// 
-    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<u32>, kmin: u32, kmax: u32, feature_sign: &HashMap<u32,u8>) -> Individual {
+    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<u32>, kmin: u32, kmax: u32, feature_sign: &HashMap<u32,u8>, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
     
-        let mut rng = rand::thread_rng();
         let k: u32=rng.gen_range(kmin..(kmax+1));
 
         // Randomly pick k values
-        let random_values = feature_selection.choose_multiple(&mut rng, k as usize);
+        let random_values = feature_selection.choose_multiple(rng, k as usize);
         let mut chosen_feature_sign: HashMap<u32,u8>=HashMap::new();
         for i in random_values {
             chosen_feature_sign.insert(*i, feature_sign[i]);

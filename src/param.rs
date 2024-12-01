@@ -5,8 +5,14 @@ use std::error::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Param {
+    pub general: General,
     pub data: Data,                          // Nested struct for "data"
     pub ga: GA,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct General {
+    pub seed: u64
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::data::Data;
 use crate::individual::Individual;
 use rand::prelude::SliceRandom;
+use rand_chacha::ChaCha8Rng;
 
 pub struct Population {
     pub individuals: Vec<Individual>,
@@ -59,11 +60,12 @@ impl Population {
     }
 
     /// populate the population with a set of random individuals
-    pub fn generate(&mut self, population_size: u32, kmin: u32, kmax: u32, data: &Data) {
+    pub fn generate(&mut self, population_size: u32, kmin: u32, kmax: u32, data: &Data, rng: &mut ChaCha8Rng) {
         for i in 0..population_size {
             self.individuals.push(Individual::random_select_k(data.feature_len, 
                                     &data.feature_selection, kmin, kmax,
-                                    &data.feature_class_sign))
+                                    &data.feature_class_sign,
+                                rng))
         }
     }
 
@@ -94,8 +96,7 @@ impl Population {
         )
     }
 
-    pub fn select_random_above_n(&self, pct: f64, n: usize) -> Population {
-        let mut rng = rand::thread_rng();
+    pub fn select_random_above_n(&self, pct: f64, n: usize, rng: &mut ChaCha8Rng) -> Population {
         let k = ( self.individuals.len() as f64 * pct / 100.0 ) as usize;
 
         let combined = self.individuals.iter()
@@ -104,7 +105,7 @@ impl Population {
             .collect::<Vec<(&Individual,&f64)>>();
             
             
-        let selected = combined.choose_multiple(&mut rng, k);
+        let selected = combined.choose_multiple(rng, k);
 
         let (individuals,fit):(Vec<Individual>,Vec<f64>) = selected.map(|(x,f)| ((**x).clone(),*f))
             .unzip();
