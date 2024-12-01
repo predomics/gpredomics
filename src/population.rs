@@ -39,9 +39,22 @@ impl Population {
     }
 
     pub fn evaluate(& mut self, data: &Data) -> & mut Self {
-        self.fit = self.individuals.iter().map(|i|{i.evaluate(data); i.compute_auc(data)}).collect();
+        self.fit = self.individuals.iter_mut().map(|i|{
+            i.evaluate(data); 
+            i.compute_auc(data)
+        }).collect();
         self
     }
+
+    pub fn evaluate_with_k_penalty(& mut self, data: &Data, k_penalty: f64) -> & mut Self {
+        self.fit = self.individuals.iter_mut().map(|i|{
+            i.evaluate(data); 
+            let auc=i.compute_auc(data);
+            auc - i.k as f64 * k_penalty
+        }).collect();
+        self
+    }
+    
 
     pub fn sort(mut self) -> Self {
 

@@ -41,7 +41,7 @@ fn random_test() {
     let mut auc_max = 0.0;
     let mut best_individual: Individual = Individual::new();
     for i in 0..10000 {
-        let my_individual = Individual::random(&my_data, &mut rng);
+        let mut my_individual = Individual::random(&my_data, &mut rng);
 
         let auc = my_individual.compute_auc(&my_data);
         if (auc>auc_max) {auc_max=auc;best_individual=my_individual;}

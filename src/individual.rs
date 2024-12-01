@@ -10,7 +10,7 @@ pub struct Individual {
     pub features: Vec<i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices
     pub fit_method: String, // AUC, accuracy, etc.
-    pub accuracy: f64, // accuracy of the model
+    pub auc: f64, // accuracy of the model
     pub k: u32 // nb of variables used
 }
 
@@ -46,7 +46,7 @@ impl Individual {
         Individual {
             features: Vec::new(),
             fit_method: String::from("AUC"),
-            accuracy: 0.0,
+            auc: 0.0,
             k: 0,
         }
     }
@@ -55,7 +55,7 @@ impl Individual {
         Individual {
             features: self.features.clone(),
             fit_method: self.fit_method.clone(),
-            accuracy: self.accuracy,
+            auc: self.auc,
             k: self.k
         }
     }
@@ -71,7 +71,7 @@ impl Individual {
     }
 
     /// Compute AUC based on the target vector y
-    pub fn compute_auc(&self, d: &Data) -> f64 {
+    pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
         let mut thresholds: Vec<f64> = (&value).clone();
         thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -112,7 +112,7 @@ impl Individual {
 
             auc += (fpr - prev_fpr) * (tpr + prev_tpr) / 2.0;
         }
-
+        self.auc = auc;
         auc
     }
 
@@ -152,6 +152,9 @@ impl Individual {
         (tp, fp, tn, fn_count)
     }   
 
+    pub fn count_k(&mut self) {
+        self.k = (self.features).iter().map(|x| {if *x==0 {0} else {1}}).sum();
+    }
 
     /// completely random individual, not very usefull
     pub fn random(d: &Data, rng: &mut ChaCha8Rng) -> Individual {
@@ -162,7 +165,7 @@ impl Individual {
         Individual {
             features: features,
             fit_method: String::from("AUC"),
-            accuracy: 0.0,
+            auc: 0.0,
             k: k
         }
     }
@@ -201,7 +204,7 @@ impl Individual {
         Individual {
             features: features,
             fit_method: String::from("AUC"),
-            accuracy: 0.0,
+            auc: 0.0,
             k: k
         }
 

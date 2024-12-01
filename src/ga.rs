@@ -22,7 +22,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
 
     println!("Generate initial population");
     pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
-    pop.evaluate(data);
+    pop.evaluate_with_k_penalty(data, param.ga.kpenalty);
     
     loop {
         epoch += 1;
@@ -36,14 +36,14 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         // these individuals are flagged with the parent attribute
         // this populate half the new generation new_pop
         let sorted_pop = pop.sort();  
-        println!("best AUC so far {} among {:?}", &sorted_pop.fit[0], &sorted_pop.fit[0..10]);
+        println!("best AUC so far {} (k={})", &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k);
         auc_values.push(sorted_pop.fit[0]);
 
         new_pop.add(select_parents(&sorted_pop, param, &mut rng));
 
         let mut children = cross_over(&new_pop,param,data.feature_len, &mut rng);
         mutate(&mut children, param, data.feature_len, &mut rng);
-        children.evaluate(data);
+        children.evaluate_with_k_penalty(data, param.ga.kpenalty);
         new_pop.add(children);
 
         populations.push(sorted_pop);
@@ -94,6 +94,8 @@ fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut
         child.features = p1.features[..x].to_vec();
         child.features.extend_from_slice(&p2.features[x..]);
 
+        child.count_k();
+
         children.individuals.push(child);
     }
 
@@ -103,7 +105,9 @@ fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut
 
 /// change a sign, remove a variable, add a new variable
 fn mutate(children: &mut Population, param: &Param, feature_len: usize, rng: &mut ChaCha8Rng) {
-    
+    let p1 = param.ga.mutation_non_null_chance_pct/200.0;
+    let p2= 2.0*p1;
+
     if param.ga.mutated_individuals_pct > 0.0 {
         let num_mutated_individuals = (children.individuals.len() as f64 
             * param.ga.mutated_individuals_pct / 100.0) as usize;
@@ -120,9 +124,10 @@ fn mutate(children: &mut Population, param: &Param, feature_len: usize, rng: &mu
             let feature_indices = sample(rng, feature_len, num_mutated_features);
 
             for i in feature_indices {
-                individual.features[i] = match rng.gen_range(0..10) {
-                    0 => 1,
-                    1 => -1,
+                if individual.features[i]!=0 { individual.k-=1 }
+                individual.features[i] = match rng.gen::<f64>() {
+                    r if r < p1 => {individual.k+=1; 1},
+                    r if r < p2 => {individual.k+=1; -1},
                     _ => 0,
                 };
             }

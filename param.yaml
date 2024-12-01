@@ -11,7 +11,9 @@ ga:
   epochs: 100
   kmin: 1
   kmax: 50
+  kpenalty: 0.003
   select_elite_pct: 25
   select_random_pct: 25
   mutated_individuals_pct: 10
   mutated_features_pct: 10
+  mutation_non_null_chance_pct: 5
