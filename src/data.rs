@@ -152,7 +152,7 @@ impl Data {
         self.feature_class_sign = HashMap::new();
 
         for (i,row) in self.X.iter().enumerate() {
-            match compare_classes(row, &(self.y), 0.5, param.data.feature_minimal_prevalence as f64/100.0) {
+            match compare_classes(row, &(self.y), param.data.feature_maximal_pvalue, param.data.feature_minimal_prevalence as f64/100.0) {
                 0 => {self.feature_selection.push(i as u32); self.feature_class_sign.insert(i as u32, 0);},
                 1 => {self.feature_selection.push(i as u32); self.feature_class_sign.insert(i as u32, 1);},
                 _ => {}

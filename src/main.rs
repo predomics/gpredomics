@@ -11,6 +11,8 @@ use data::Data;
 use individual::Individual;
 use rand_chacha::ChaCha8Rng;
 use rand::prelude::*;
+use param::Param;
+use std::process;
 
 /// a very basic use
 fn basic_test() {
@@ -33,11 +35,11 @@ fn basic_test() {
 }
 
 /// a more elaborate use with random models
-fn random_test() {
+fn random_run(param: &Param) {
     println!("                          RANDOM TEST\n-----------------------------------------------------");
     // use some data
     let mut my_data = Data::new();
-    my_data.load_data("sample/Derosa2022/X.tsv","sample/Derosa2022/y.tsv");
+    my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
     let mut rng = ChaCha8Rng::seed_from_u64(42);
 
     let mut auc_max = 0.0;
@@ -51,27 +53,10 @@ fn random_test() {
     println!("AUC max: {} model: {:?}",auc_max, best_individual.features);
 }
 
-/// the Genetic Algorithm test
-fn ga_test() {
-    println!("                          GA TEST\n-----------------------------------------------------");
-    let param= param::get("param.yaml".to_string()).unwrap();
-    let mut my_data = Data::new();
-    
-    my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
-    println!("{:?}", my_data); 
-    
-    let mut populations = ga::ga(&mut my_data,&param);
-
-    println!("Best model: {:?}",populations.pop().unwrap().individuals[0]);
-
-}
-
-
 
 /// the Genetic Algorithm test
-fn ga_test_qin2014() {
+fn ga_run(param: &Param) {
     println!("                          GA TEST\n-----------------------------------------------------");
-    let param= param::get("param.yaml".to_string()).unwrap();
     let mut my_data = Data::new();
     
     my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
@@ -103,9 +88,8 @@ fn ga_test_qin2014() {
 
 
 /// the Genetic Algorithm test with Crossval (not useful but test CV)
-fn gacv_test_qin2014() {
+fn gacv_run(param: &Param) {
     println!("                          GA CV TEST\n-----------------------------------------------------");
-    let param= param::get("param.yaml".to_string()).unwrap();
     let mut my_data = Data::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
     
@@ -134,6 +118,12 @@ fn gacv_test_qin2014() {
 }
 
 fn main() {
-    gacv_test_qin2014();
+    let param= param::get("param.yaml".to_string()).unwrap();
+    match param.general.algo.as_str() {
+        "random" => random_run(&param),
+        "ga" => ga_run(&param),
+        "ga+cv" => gacv_run(&param),
+        other => { println!("ERROR! No such algorithm {}", other);  process::exit(1); }
+    }
 }
 

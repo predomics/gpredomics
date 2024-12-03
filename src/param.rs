@@ -12,7 +12,9 @@ pub struct Param {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct General {
-    pub seed: u64
+    pub seed: u64,
+    #[serde(default = "algorithm_default")]  
+    pub algo: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,7 +25,10 @@ pub struct Data {
     pub Xtest: String,
     #[serde(default = "empty_string")]                      // Path to y data
     pub ytest: String,
+    #[serde(default = "feature_minimal_prevalence_default")]                      // Path to y data
     pub feature_minimal_prevalence: u32, // Minimum prevalence
+    #[serde(default = "feature_maximal_pvalue_default")]                      // Path to y data
+    pub feature_maximal_pvalue: f64, // Minimum prevalence
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,3 +63,6 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
 fn empty_string() -> String { "".to_string() }
 fn min_epochs_default() -> usize { 10 }
 fn max_divergence_default() -> f64 { 0.01 }
+fn algorithm_default() -> String { "ga".to_string() }
+fn feature_minimal_prevalence_default() -> u32 { 10 }
+fn feature_maximal_pvalue_default() -> f64 { 0.5 }
