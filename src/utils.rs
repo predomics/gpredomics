@@ -3,6 +3,7 @@ use rand::Rng;
 use statrs::statistics::Statistics;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use rand_chacha::ChaCha8Rng;
+use rand::seq::SliceRandom; // For random shuffling
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -72,3 +73,27 @@ pub fn compare_classes(values: &Vec<f64>, targets: &Vec<u8>, max_p_value: f64, m
     else {2}
 }
 
+/// a function used essentially in CV that split randomly a Vec<T> into p Vec<T> of approximatively the same size
+pub fn split_into_balanced_random_chunks<T: std::clone::Clone>(vec: Vec<T>, p: usize, rng: &mut ChaCha8Rng) -> Vec<Vec<T>> {
+    // Step 1: Shuffle the original vector
+    let mut shuffled = vec;
+    shuffled.shuffle(rng);
+
+    // Step 2: Determine sizes for balanced chunks
+    let n = shuffled.len();
+    let base_size = n / p; // Minimum size for each chunk
+    let extra_elements = n % p; // Remaining elements to distribute
+
+    // Step 3: Create chunks with balanced sizes
+    let mut chunks = Vec::new();
+    let mut start = 0;
+
+    for i in 0..p {
+        let chunk_size = base_size + if i < extra_elements { 1 } else { 0 }; // Add one extra element to the first `extra_elements` chunks
+        let end = start + chunk_size;
+        chunks.push(shuffled[start..end].to_vec());
+        start = end;
+    }
+
+    chunks
+}

@@ -4,6 +4,8 @@ mod individual;
 mod param;
 mod population;
 mod ga;
+mod cv;
+mod hyper;
 
 use data::Data;
 use individual::Individual;
@@ -78,19 +80,60 @@ fn ga_test_qin2014() {
     let mut populations = ga::ga(&mut my_data,&param);
 
     let mut population=populations.pop().unwrap();
-    let mut test_data=Data::new();
-    test_data.load_data("samples/Qin2014/Xtest.tsv", "samples/Qin2014/Ytest.tsv");
+
+    if param.data.Xtest.len()>0 {
+        let mut test_data=Data::new();
+        test_data.load_data(&param.data.Xtest, &param.data.ytest);
+        
+        for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
+            let auc=individual.auc;
+            let test_auc=individual.compute_auc(&test_data);
+            println!("Model #{} [k={}]: train AUC {}  / test AUC {} : {:?}",i+1,individual.k,auc,test_auc,individual);
+        }    
+    }
+    else {
+        for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
+            let auc=individual.auc;
+            println!("Model #{} [k={}]: train AUC {}",i+1,individual.k,auc);
+        }    
+    }
+
+
+}
+
+
+/// the Genetic Algorithm test with Crossval (not useful but test CV)
+fn gacv_test_qin2014() {
+    println!("                          GA CV TEST\n-----------------------------------------------------");
+    let param= param::get("param.yaml".to_string()).unwrap();
+    let mut my_data = Data::new();
+    let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
     
-    for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
-        let auc=individual.auc;
-        let test_auc=individual.compute_auc(&test_data);
-        println!("Model #{} [k={}]: train AUC {}  / test AUC {}",i+1,individual.k,auc,test_auc);
+    my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    println!("{:?}", my_data); 
+
+    let mut crossval = cv::CV::new(&my_data, 10, &mut rng);
+    let results=crossval.pass(ga::ga, &param);
+    
+    if param.data.Xtest.len()>0 {
+        let mut test_data=Data::new();
+        test_data.load_data(&param.data.Xtest, &param.data.ytest);
+        
+        for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
+            let holdout_auc=best_model.compute_auc(&test_data);
+            println!("Model #{} [k={}]: train AUC {:.3} | test AUC {:.3} | holdout AUC {:.3} | {:?}",i+1,best_model.k,train_auc,test_auc,holdout_auc,best_model);
+        }    
+    }
+    else {
+        for (i,(best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
+            println!("Model #{} [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.k,train_auc,test_auc,best_model);
+        }    
     }
 
 
 }
 
 fn main() {
-    ga_test_qin2014();
+    gacv_test_qin2014();
 }
 

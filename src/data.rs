@@ -159,6 +159,45 @@ impl Data {
             }
         }
     }
+
+    pub fn subset(&self, indices: Vec<usize>) -> Data {
+        Data {
+            X: self.X.iter().map(|row| { 
+                indices.iter().map(|i| {row[*i]}).collect()
+                }).collect(),
+            y: indices.iter().map(|i| {self.y[*i]}).collect(),
+            features: self.features.clone(),
+            samples: indices.iter().map(|i| {self.samples[*i].clone()}).collect(),
+            univariate_order: Vec::new(),
+            feature_class_sign: HashMap::new(),
+            feature_selection: Vec::new(),
+            feature_len: self.feature_len,
+            sample_len: indices.len()
+        }
+    }
+
+    pub fn clone(&self) -> Data {
+        Data {
+            X: self.X.clone(),
+            y: self.y.clone(),
+            features: self.features.clone(),
+            samples: self.samples.clone(),
+            univariate_order: Vec::new(),
+            feature_class_sign: self.feature_class_sign.clone(),
+            feature_selection: self.feature_selection.clone(),
+            feature_len: self.feature_len,
+            sample_len: self.sample_len
+        }
+    }
+
+    pub fn add(&mut self, other: &Data) {
+        self.samples.extend_from_slice(&other.samples);
+        self.y.extend_from_slice(&other.y);
+        for (i,row) in self.X.iter_mut().enumerate() {
+            row.extend_from_slice(&other.X[i]);
+        }
+    }
+
 }
 
 /// Implement a custom Debug trait for Data

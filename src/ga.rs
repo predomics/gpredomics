@@ -16,17 +16,17 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     let mut auc_values: Vec<f64> = Vec::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
-    println!("Selecting features");
+    //println!("Selecting features");
     data.select_features(param);
-    println!("Feature selection {:?}",data.feature_selection);
+    //println!("Feature selection {:?}",data.feature_selection);
 
-    println!("Generate initial population");
+    //println!("Generate initial population");
     pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
     pop.evaluate_with_k_penalty(data, param.ga.kpenalty);
     
     loop {
         epoch += 1;
-        println!("Starting epoch {}",epoch);
+        //println!("Starting epoch {}",epoch);
 
 
         // we create a new generation
@@ -36,7 +36,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         // these individuals are flagged with the parent attribute
         // this populate half the new generation new_pop
         let sorted_pop = pop.sort();  
-        println!("best AUC so far {} (k={})", &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k);
+        //println!("best AUC so far {} (k={})", &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k);
         auc_values.push(sorted_pop.fit[0]);
 
         new_pop.add(select_parents(&sorted_pop, param, &mut rng));
@@ -50,14 +50,14 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         pop = new_pop;
 
         if (epoch>=param.ga.epochs) {
-            println!("The target number of epoch {} has been reached, stopping",epoch);
+            //println!("The target number of epoch {} has been reached, stopping",epoch);
             break
         }
-        if auc_values.len()>10 {
+        if auc_values.len()>10 && auc_values.len()>param.ga.min_epochs {
             let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
             let divergence = auc_values[auc_values.len()-10..].iter().map(|x| (*x-avg).abs()).sum::<f64>();
-            if divergence<avg*0.01 {
-                println!("AUCs stay stable for the last 10 rounds (divergence {} is below {}), stopping",divergence,avg*0.01);
+            if divergence<avg*param.ga.max_divergence {
+                //println!("AUCs stay stable for the last 10 rounds (divergence {} is below {}), stopping",divergence,avg*param.ga.max_divergence);
                 break
             }
         }

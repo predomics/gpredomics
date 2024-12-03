@@ -18,7 +18,11 @@ pub struct General {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Data {
     pub X: String,                      // Path to X data
-    pub y: String,                      // Path to y data
+    pub y: String,
+    #[serde(default = "empty_string")]                      // Path to y data
+    pub Xtest: String,
+    #[serde(default = "empty_string")]                      // Path to y data
+    pub ytest: String,
     pub feature_minimal_prevalence: u32, // Minimum prevalence
 }
 
@@ -26,6 +30,10 @@ pub struct Data {
 pub struct GA {
     pub population_size: u32,                // Population size
     pub epochs: u32,                         // Number of epochs/generations
+    #[serde(default = "min_epochs_default")]    
+    pub min_epochs: usize,                     // Do not stop before reaching this
+    #[serde(default = "max_divergence_default")]    
+    pub max_divergence: f64,                 // Stop only if fit function divergence is lower than this in average
     pub kmin: u32,                           // Minimum value of k
     pub kmax: u32,                           // Maximum value of k
     pub kpenalty: f64,                       // A penalty of this per value of k is deleted from AUC in the fit function
@@ -46,3 +54,7 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
 
     Ok(config)
 }
+
+fn empty_string() -> String { "".to_string() }
+fn min_epochs_default() -> usize { 10 }
+fn max_divergence_default() -> f64 { 0.01 }

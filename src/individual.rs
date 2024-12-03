@@ -4,8 +4,9 @@ use rand::{rngs::ThreadRng, seq::SliceRandom}; // Provides the `choose_multiple`
 use std::collections::{HashMap, HashSet};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
+use std::fmt;
 
-#[derive(Debug)]
+
 pub struct Individual {
     pub features: Vec<i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices
@@ -220,4 +221,20 @@ impl Individual {
     // write a function evaluate_auc that takes in the data and evaluates the AUC of the model
 
 
+}
+
+impl fmt::Debug for Individual {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut desc = self.features.iter().enumerate()
+                .map(|(i,feature)| {
+                    match feature {
+                        0 => "".to_string(),
+                        1 => format!("[{}] ",i+1),
+                        -1 => format!("-[{}] ",i+1),
+                        other => format!("{}[{}] ",other,i+1)
+                    }
+                }).collect::<Vec<String>>().join("");
+        if desc.len()>0 { desc=desc[0..desc.len()-1].to_string() }
+        write!(f, "{}", desc)
+    }
 }
