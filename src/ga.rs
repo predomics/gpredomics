@@ -42,7 +42,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         new_pop.add(select_parents(&sorted_pop, param, &mut rng));
 
         let mut children = cross_over(&new_pop,param,data.feature_len, &mut rng);
-        mutate(&mut children, param, data.feature_len, &mut rng);
+        mutate(&mut children, param, &data.feature_selection, &mut rng);
         children.evaluate_with_k_penalty(data, param.ga.kpenalty);
         new_pop.add(children);
 
@@ -105,9 +105,10 @@ fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut
 }
 
 /// change a sign, remove a variable, add a new variable
-fn mutate(children: &mut Population, param: &Param, feature_len: usize, rng: &mut ChaCha8Rng) {
+fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<usize>, rng: &mut ChaCha8Rng) {
     let p1 = param.ga.mutation_non_null_chance_pct/200.0;
     let p2= 2.0*p1;
+    let feature_len = feature_selection.len();
 
     if param.ga.mutated_children_pct > 0.0 {
         let num_mutated_individuals = (children.individuals.len() as f64 
@@ -122,7 +123,10 @@ fn mutate(children: &mut Population, param: &Param, feature_len: usize, rng: &mu
         for idx in individuals_to_mutate {
             // Mutate features for each selected individual
             let individual = &mut children.individuals[idx]; // Get a mutable reference
-            let feature_indices = sample(rng, feature_len, num_mutated_features);
+            let feature_indices = sample(rng, feature_len, num_mutated_features)
+                            .iter()
+                            .map(|i| {feature_selection[i]}).collect::<Vec<usize>>();
+
 
             for i in feature_indices {
                 if individual.features[i]!=0 { individual.k-=1 }

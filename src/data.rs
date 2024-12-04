@@ -12,8 +12,8 @@ pub struct Data {
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
     pub samples: Vec<String>,     // Sample names (from the first row of X.tsv)
     pub univariate_order: Vec<u32>,     // Order of univariate features
-    pub feature_class_sign: HashMap<u32, u8>, // Sign for each feature
-    pub feature_selection: Vec<u32>,
+    pub feature_class_sign: HashMap<usize, u8>, // Sign for each feature
+    pub feature_selection: Vec<usize>,
     pub feature_len: usize,
     pub sample_len: usize
 }
@@ -153,8 +153,8 @@ impl Data {
 
         for (i,row) in self.X.iter().enumerate() {
             match compare_classes(row, &(self.y), param.data.feature_maximal_pvalue, param.data.feature_minimal_prevalence as f64/100.0) {
-                0 => {self.feature_selection.push(i as u32); self.feature_class_sign.insert(i as u32, 0);},
-                1 => {self.feature_selection.push(i as u32); self.feature_class_sign.insert(i as u32, 1);},
+                0 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 0);},
+                1 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 1);},
                 _ => {}
             }
         }

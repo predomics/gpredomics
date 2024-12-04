@@ -278,7 +278,7 @@ impl Individual {
     }
 
     /// 
-    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<u32>, kmin: u32, kmax: u32, feature_sign: &HashMap<u32,u8>, rng: &mut ChaCha8Rng) -> Individual {
+    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<usize>, kmin: u32, kmax: u32, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
@@ -287,14 +287,14 @@ impl Individual {
 
         // Randomly pick k values
         let random_values = feature_selection.choose_multiple(rng, k as usize);
-        let mut chosen_feature_sign: HashMap<u32,u8>=HashMap::new();
+        let mut chosen_feature_sign: HashMap<usize,u8>=HashMap::new();
         for i in random_values {
             chosen_feature_sign.insert(*i, feature_sign[i]);
         }
         
         let mut features:Vec<i8> = Vec::new();
         // Generate a vector of random values: 1, 0, or -1
-        for i in 0..(reference_size as u32) {
+        for i in 0..reference_size {
             if chosen_feature_sign.contains_key(&i) {
                 if chosen_feature_sign[&i]==0 {
                     features.push(-1);
