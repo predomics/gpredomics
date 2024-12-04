@@ -2,7 +2,7 @@
 
 gpredomics is a rewrite of predomics in Rust, with the goal of using GPU, which is not the case right now. For the time being, it is a pure CPU program in _safe_ Rust, single thread. Only a very small subset of predomics is coded:
 
-- only the Genetic Algorithm is coded, the equivalent of gabin in Predomics terms,
+- only the Genetic Algorithm is coded, the equivalent of terga2 in Predomics terms,
 - a shortcut is taken as to evaluate only on AUC (a specific care has been taken so as to optimize the computation time of AUC),
 (a small test to compare some AUCs with scikit-learn show that values convergent - for some model, a small divergence (less than 0.5%) can appear)
 - feature importance is estimated by OOB algorithm using mean decreased AUC,
