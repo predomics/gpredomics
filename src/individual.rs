@@ -72,9 +72,30 @@ impl Individual {
         value
     }
 
+    pub fn evaluate_from_features(&self, X: &Vec<Vec<f64>>) -> Vec<f64> {
+        let mut value=vec![0.0; X[0].len()];
+        for (i,row) in X.iter().enumerate() {
+            for (j,x) in row.iter().enumerate() {
+                value[j]+=self.features[i] as f64*x;
+            }
+        }
+        value
+    }
+
     /// Compute AUC based on the target vector y
     pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
+        self.compute_auc_from_value(value, &d.y)
+    }
+
+    /// Compute AUC based on X and y rather than a complete Data object
+    pub fn compute_auc_from_features(&mut self, X: &Vec<Vec<f64>>, y: &Vec<u8>) -> f64 {
+        let value = self.evaluate_from_features(X);
+        self.compute_auc_from_value(value, y)
+    }
+
+    /// Compute AUC based on the target vector y
+    fn compute_auc_from_value(&mut self, value: Vec<f64>, y: &Vec<u8>) -> f64 {
         let mut thresholds: Vec<(usize,&f64)> = value.iter().enumerate().collect::<Vec<(usize,&f64)>>();
 
         thresholds.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -88,7 +109,7 @@ impl Individual {
         let mut tn:usize = 0;
         let mut fn_count:usize=0;
 
-        for y_val in d.y.iter() {
+        for y_val in y.iter() {
             if *y_val == 0 {fp += 1}
             else if *y_val == 1 {tp += 1}
         }
@@ -110,8 +131,8 @@ impl Individual {
 
             roc_points.push((fpr, tpr));
             
-            if d.y[i] == 1 { tp-=1; fn_count+=1 }
-            else if d.y[i] == 0 { tn+=1; fp-=1 }
+            if y[i] == 1 { tp-=1; fn_count+=1 }
+            else if y[i] == 0 { tn+=1; fp-=1 }
         }
 
         let tpr = if (tp + fn_count) > 0 {
@@ -143,85 +164,6 @@ impl Individual {
         self.auc = auc;
         auc
     } 
-
-/*     pub fn compute_auc(&mut self, d: &Data) -> f64 {
-        let value = self.evaluate(d);
-
-        // Step 1: Compute thresholds
-        let (low,high) = self.compute_thresholds(&value);
-
-        // Step 2: Compute ROC points
-        let roc_points = self.compute_roc_points(&value, &d.y, low, high);
-
-        // Step 3: Compute AUC
-        let auc = self.compute_trapezoidal_auc(&roc_points);
-
-        self.auc = auc;
-        auc
-    }
-
-    fn compute_thresholds(&self, value: &Vec<f64>) -> (f64,f64) {
-        let mut lower_threshold = value[0] - 1.0;
-        let mut higher_threshold = value[0] + 1.0;
-
-        for &val in value.iter() {
-            if val <= lower_threshold {
-                lower_threshold = val - 1.0;
-            } else if val >= higher_threshold {
-                higher_threshold = val + 1.0;
-            }
-        }
-
-        (lower_threshold,higher_threshold)
-    }
-
-    fn compute_roc_points(
-        &self,
-        value: &Vec<f64>,
-        labels: &[u8],
-        low: f64,
-        high: f64
-    ) -> Vec<(f64, f64)> {
-        let mut roc_points = Vec::new();
-
-        for &threshold in value.iter().chain(once(&low)).chain(once(&high)) {
-            let (tp, fp, tn, fn_count) = self.calculate_confusion_matrix(value, labels, threshold);
-
-            let tpr = if (tp + fn_count) > 0 {
-                tp as f64 / (tp + fn_count) as f64
-            } else {
-                0.0
-            };
-
-            let fpr = if (fp + tn) > 0 {
-                fp as f64 / (fp + tn) as f64
-            } else {
-                0.0
-            };
-
-            roc_points.push((fpr, tpr));
-        }
-
-        // Sort points by FPR to ensure proper order for AUC calculation
-        roc_points.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap())
-        });
-
-        roc_points
-    }
-
-    fn compute_trapezoidal_auc(&self, roc_points: &[(f64, f64)]) -> f64 {
-        let mut auc = 0.0;
-
-        for i in 1..roc_points.len() {
-            let (prev_fpr, prev_tpr) = roc_points[i - 1];
-            let (fpr, tpr) = roc_points[i];
-
-            auc += (fpr - prev_fpr) * (tpr + prev_tpr) / 2.0;
-        }
-
-        auc
-    } */
 
     /// Calculate the confusion matrix at a given threshold
     fn calculate_confusion_matrix(&self, value: &Vec<f64>, y: &[u8], threshold: f64) -> (usize, usize, usize, usize) {
@@ -390,7 +332,43 @@ impl Individual {
         (best_threshold, best_metrics.0, best_metrics.1, best_metrics.2)
     }
 
-    // write a function evaluate_auc that takes in the data and evaluates the AUC of the model
+
+    fn features_index(&self) -> Vec<usize> {
+        self.features.iter().enumerate()
+            .filter(|x| {*x.1!=0})
+            .map(|x|{x.0})
+            .collect()
+    }
+
+    /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
+    /// uses mean decreased AUC
+    pub fn compute_oob_feature_importance(&mut self, data: &Data, permutations: usize, rng: &mut ChaCha8Rng) -> Vec<f64> {
+        let model_features = self.features_index();
+        let mut importances = vec![0.0; model_features.len()]; // One importance value per feature
+        let baseline_auc = self.compute_auc(data); // Baseline AUC
+
+        for (i,feature_idx) in model_features.iter().enumerate() {
+            let mut permuted_auc_sum = 0.0;
+
+            for _ in 0..permutations {
+                // Clone the feature matrix and shuffle the current feature row
+                let mut X_permuted = data.X.clone();
+                X_permuted[*feature_idx].shuffle(rng);
+
+                // Recompute AUC with the permuted feature
+                let permuted_auc = self.compute_auc_from_features(&X_permuted, &data.y);
+                permuted_auc_sum += permuted_auc;
+            }
+
+            // Compute the average AUC with permutations
+            let mean_permuted_auc = permuted_auc_sum / permutations as f64;
+
+            // Importance: how much the AUC drops due to shuffling
+            importances[i] = baseline_auc - mean_permuted_auc;
+        }
+
+        importances
+    }
 
 
 }

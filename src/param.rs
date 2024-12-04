@@ -46,7 +46,9 @@ pub struct GA {
     pub select_random_pct: f64,              // Random selection percentage
     pub mutated_children_pct: f64,        // Mutated individuals percentage
     pub mutated_features_pct: f64,           // Mutated features percentage
-    pub mutation_non_null_chance_pct: f64    // Chance pct that a mutation gives an non null value
+    pub mutation_non_null_chance_pct: f64,    // Chance pct that a mutation gives an non null value
+    #[serde(default = "feature_importance_permutations_default")]    
+    pub feature_importance_permutations: usize,
 }
 
 
@@ -66,3 +68,4 @@ fn max_divergence_default() -> f64 { 0.01 }
 fn algorithm_default() -> String { "ga".to_string() }
 fn feature_minimal_prevalence_default() -> u32 { 10 }
 fn feature_maximal_pvalue_default() -> f64 { 0.5 }
+fn feature_importance_permutations_default() -> usize { 10 }

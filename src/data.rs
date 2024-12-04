@@ -190,6 +190,20 @@ impl Data {
         }
     }
 
+    pub fn clone_with_new_x(&self, X:Vec<Vec<f64>>) -> Data {
+        Data {
+            X: X,
+            y: self.y.clone(),
+            features: self.features.clone(),
+            samples: self.samples.clone(),
+            univariate_order: Vec::new(),
+            feature_class_sign: self.feature_class_sign.clone(),
+            feature_selection: self.feature_selection.clone(),
+            feature_len: self.feature_len,
+            sample_len: self.sample_len
+        }
+    }
+
     pub fn add(&mut self, other: &Data) {
         self.samples.extend_from_slice(&other.samples);
         self.y.extend_from_slice(&other.y);

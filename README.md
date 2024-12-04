@@ -53,4 +53,5 @@ There are three sections, general, data and ga.
 - mutated_children_pct: the percentage of children mutated,
 - mutated_features_pct: the percentage of feature mutated in a mutated child,
 - mutation_non_null_chance_pct: the likeliness of "positive" mutation, e.g. a mutation that select a new feature in the model.
+- feature_importance_permutations: the number of permutations in OOB algorithm to compute feature importance
 
