@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::fmt;
+use std::iter::once;
 
 
 pub struct Individual {
@@ -74,17 +75,117 @@ impl Individual {
     /// Compute AUC based on the target vector y
     pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
-        let mut thresholds: Vec<f64> = (&value).clone();
-        thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        thresholds.insert(0, thresholds[0] - 1.0); // Add a threshold below the minimum
-        thresholds.push(thresholds.last().unwrap() + 1.0); // Add a threshold above the maximum
+        let mut thresholds: Vec<(usize,&f64)> = value.iter().enumerate().collect::<Vec<(usize,&f64)>>();
 
+        thresholds.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut auc = 0.0;
         let mut roc_points = Vec::new();
 
-        for &threshold in &thresholds {
-            let (tp, fp, tn, fn_count) = self.calculate_confusion_matrix(&value, &d.y, threshold);
+
+        let mut tp:usize = 0;
+        let mut fp:usize = 0;
+        let mut tn:usize = 0;
+        let mut fn_count:usize=0;
+
+        for y_val in d.y.iter() {
+            if *y_val == 0 {fp += 1}
+            else if *y_val == 1 {tp += 1}
+        }
+        
+        for (i,_) in thresholds {
+            //let (tp, fp, tn, fn_count) = self.calculate_confusion_matrix(&value, &d.y, threshold);
+
+            let tpr = if (tp + fn_count) > 0 {
+                tp as f64 / (tp + fn_count) as f64
+            } else {
+                0.0
+            };
+
+            let fpr = if (fp + tn) > 0 {
+                fp as f64 / (fp + tn) as f64
+            } else {
+                0.0
+            };
+
+            roc_points.push((fpr, tpr));
+            
+            if d.y[i] == 1 { tp-=1; fn_count+=1 }
+            else if d.y[i] == 0 { tn+=1; fp-=1 }
+        }
+
+        let tpr = if (tp + fn_count) > 0 {
+            tp as f64 / (tp + fn_count) as f64
+        } else {
+            0.0
+        };
+
+        let fpr = if (fp + tn) > 0 {
+            fp as f64 / (fp + tn) as f64
+        } else {
+            0.0
+        };
+
+        roc_points.push((fpr, tpr));
+
+        // Sort points by FPR to ensure proper order for AUC calculation
+        roc_points.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap())
+        });
+
+        // Compute AUC using trapezoidal rule
+        for i in 1..roc_points.len() {
+            let (prev_fpr, prev_tpr) = roc_points[i - 1];
+            let (fpr, tpr) = roc_points[i];
+
+            auc += (fpr - prev_fpr) * (tpr + prev_tpr) / 2.0;
+        }
+        self.auc = auc;
+        auc
+    } 
+
+/*     pub fn compute_auc(&mut self, d: &Data) -> f64 {
+        let value = self.evaluate(d);
+
+        // Step 1: Compute thresholds
+        let (low,high) = self.compute_thresholds(&value);
+
+        // Step 2: Compute ROC points
+        let roc_points = self.compute_roc_points(&value, &d.y, low, high);
+
+        // Step 3: Compute AUC
+        let auc = self.compute_trapezoidal_auc(&roc_points);
+
+        self.auc = auc;
+        auc
+    }
+
+    fn compute_thresholds(&self, value: &Vec<f64>) -> (f64,f64) {
+        let mut lower_threshold = value[0] - 1.0;
+        let mut higher_threshold = value[0] + 1.0;
+
+        for &val in value.iter() {
+            if val <= lower_threshold {
+                lower_threshold = val - 1.0;
+            } else if val >= higher_threshold {
+                higher_threshold = val + 1.0;
+            }
+        }
+
+        (lower_threshold,higher_threshold)
+    }
+
+    fn compute_roc_points(
+        &self,
+        value: &Vec<f64>,
+        labels: &[u8],
+        low: f64,
+        high: f64
+    ) -> Vec<(f64, f64)> {
+        let mut roc_points = Vec::new();
+
+        for &threshold in value.iter().chain(once(&low)).chain(once(&high)) {
+            let (tp, fp, tn, fn_count) = self.calculate_confusion_matrix(value, labels, threshold);
 
             let tpr = if (tp + fn_count) > 0 {
                 tp as f64 / (tp + fn_count) as f64
@@ -106,16 +207,21 @@ impl Individual {
             a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap())
         });
 
-        // Compute AUC using trapezoidal rule
+        roc_points
+    }
+
+    fn compute_trapezoidal_auc(&self, roc_points: &[(f64, f64)]) -> f64 {
+        let mut auc = 0.0;
+
         for i in 1..roc_points.len() {
             let (prev_fpr, prev_tpr) = roc_points[i - 1];
             let (fpr, tpr) = roc_points[i];
 
             auc += (fpr - prev_fpr) * (tpr + prev_tpr) / 2.0;
         }
-        self.auc = auc;
+
         auc
-    }
+    } */
 
     /// Calculate the confusion matrix at a given threshold
     fn calculate_confusion_matrix(&self, value: &Vec<f64>, y: &[u8], threshold: f64) -> (usize, usize, usize, usize) {

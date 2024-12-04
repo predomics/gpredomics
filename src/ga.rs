@@ -18,7 +18,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
 
     //println!("Selecting features");
     data.select_features(param);
-    println!("Feature selection: {} feature(s).",data.feature_selection.len());
+    print!("Features: {}",data.feature_selection.len());
 
     //println!("Generate initial population");
     pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
@@ -109,9 +109,9 @@ fn mutate(children: &mut Population, param: &Param, feature_len: usize, rng: &mu
     let p1 = param.ga.mutation_non_null_chance_pct/200.0;
     let p2= 2.0*p1;
 
-    if param.ga.mutated_individuals_pct > 0.0 {
+    if param.ga.mutated_children_pct > 0.0 {
         let num_mutated_individuals = (children.individuals.len() as f64 
-            * param.ga.mutated_individuals_pct / 100.0) as usize;
+            * param.ga.mutated_children_pct / 100.0) as usize;
 
         let num_mutated_features = (feature_len as f64 
             * param.ga.mutated_features_pct / 100.0) as usize;

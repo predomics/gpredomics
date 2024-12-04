@@ -44,7 +44,7 @@ pub struct GA {
     pub kpenalty: f64,                       // A penalty of this per value of k is deleted from AUC in the fit function
     pub select_elite_pct: f64,               // Elite selection percentage
     pub select_random_pct: f64,              // Random selection percentage
-    pub mutated_individuals_pct: f64,        // Mutated individuals percentage
+    pub mutated_children_pct: f64,        // Mutated individuals percentage
     pub mutated_features_pct: f64,           // Mutated features percentage
     pub mutation_non_null_chance_pct: f64    // Chance pct that a mutation gives an non null value
 }

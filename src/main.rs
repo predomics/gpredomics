@@ -125,5 +125,6 @@ fn main() {
         "ga+cv" => gacv_run(&param),
         other => { println!("ERROR! No such algorithm {}", other);  process::exit(1); }
     }
+    //basic_test();
 }
 
