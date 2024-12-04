@@ -73,7 +73,9 @@ fn ga_run(param: &Param) {
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
             let auc=individual.auc;
             let test_auc=individual.compute_auc(&test_data);
-            println!("Model #{} [k={}]: train AUC {}  / test AUC {} : {:?}",i+1,individual.k,auc,test_auc,individual);
+            let (threshold, accuracy, sensitivity, specificity) = individual.compute_threshold_and_metrics(&test_data);
+            println!("Model #{} [k={}]: train AUC {}  | test AUC {} | threshold {} | accuracy {} | sensitivity {} | specificity {} | {:?}",
+                        i+1,individual.k,auc,test_auc,threshold,accuracy,sensitivity,specificity,individual);
         }    
     }
     else {
@@ -105,7 +107,10 @@ fn gacv_run(param: &Param) {
         
         for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
             let holdout_auc=best_model.compute_auc(&test_data);
-            println!("Model #{} [k={}]: train AUC {:.3} | test AUC {:.3} | holdout AUC {:.3} | {:?}",i+1,best_model.k,train_auc,test_auc,holdout_auc,best_model);
+            let (threshold, accuracy, sensitivity, specificity) = best_model.compute_threshold_and_metrics(&test_data);
+            //println!("Model #{} [k={}]: train AUC {:.3} | test AUC {:.3} | holdout AUC {:.3} | {:?}",i+1,best_model.k,train_auc,test_auc,holdout_auc,best_model);
+            println!("Model #{} [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
+                        i+1,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
         }    
     }
     else {

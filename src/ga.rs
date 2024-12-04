@@ -18,7 +18,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
 
     //println!("Selecting features");
     data.select_features(param);
-    print!("Features: {}",data.feature_selection.len());
+    print!("| Features: #{} ",data.feature_selection.len());
 
     //println!("Generate initial population");
     pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);

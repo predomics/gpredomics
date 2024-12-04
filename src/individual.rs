@@ -322,7 +322,73 @@ impl Individual {
 
     // write a function evaluate_contingency_table that takes in the data and evaluates the contingency table of the model
 
-    // write a function evaluate_accuracy that takes in the data and evaluates the accuracy of the model
+    /// a function that compute accuracy,precision and sensitivity, fixing the threshold using Youden index 
+    /// return (threshold, accuracy, sensitivity, specificity)
+    pub fn compute_threshold_and_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
+        let value = self.evaluate(d); // Predicted probabilities
+        let mut combined: Vec<(f64, u8)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
+        
+        // Sort by predicted probabilities
+        combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        // Initialize confusion matrix
+        let mut tp = d.y.iter().filter(|&&label| label == 1).count();
+        let mut fn_count = 0;
+        let mut tn = 0;
+        let mut fp = d.y.len() - tp;
+
+        let mut best_threshold = 0.0;
+        let mut best_youden_index = f64::NEG_INFINITY;
+        let mut best_metrics = (0.0, 0.0, 0.0); // (Accuracy, Sensitivity, Specificity)
+
+        for i in 0..combined.len() {
+            let (threshold, label) = combined[i];
+
+            // Update confusion matrix based on current threshold
+            match label {
+                1 => {
+                    tp -= 1;
+                    fn_count += 1;
+                }
+                0 => {
+                    fp -= 1;
+                    tn += 1;
+                }
+                _ => (),
+            }
+
+            // Calculate metrics
+            let sensitivity = if (tp + fn_count) > 0 {
+                tp as f64 / (tp + fn_count) as f64
+            } else {
+                0.0
+            };
+
+            let specificity = if (fp + tn) > 0 {
+                tn as f64 / (fp + tn) as f64
+            } else {
+                0.0
+            };
+
+            let youden_index = sensitivity + specificity - 1.0;
+
+            if youden_index > best_youden_index {
+                best_youden_index = youden_index;
+                best_threshold = threshold;
+
+                let accuracy = if (tp + tn + fp + fn_count) > 0 {
+                    (tp + tn) as f64 / (tp + tn + fp + fn_count) as f64
+                } else {
+                    0.0
+                };
+
+                best_metrics = (accuracy, sensitivity, specificity);
+            }
+        }
+
+        // Add a small offset to the threshold for precision handling
+        (best_threshold, best_metrics.0, best_metrics.1, best_metrics.2)
+    }
 
     // write a function evaluate_auc that takes in the data and evaluates the AUC of the model
 

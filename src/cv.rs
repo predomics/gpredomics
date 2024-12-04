@@ -54,12 +54,12 @@ impl CV {
         let mut results_per_fold: Vec<(Individual,f64,f64)> = Vec::new();
 
         for (i,(train,test)) in self.datasets.iter_mut().zip(self.folds.iter_mut()).enumerate() {
-            print!("Fold #{} : ",i+1);
+            print!("|  Fold #{}  ",i+1);
             let mut best_model: Individual = algo(train, param).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
             let train_auc = best_model.auc;
             let test_auc = best_model.compute_auc(test);
 
-            println!("Train AUC: {:.3}  |  Test AUC: {:.3}", train_auc, test_auc);
+            println!("|  Train AUC: {:.3}  |  Test AUC: {:.3}", train_auc, test_auc);
             results_per_fold.push((best_model, train_auc, test_auc));
         }
 
