@@ -15,6 +15,8 @@ pub struct General {
     pub seed: u64,
     #[serde(default = "algorithm_default")]  
     pub algo: String,
+    #[serde(default = "thread_number_default")]  
+    pub thread_number: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,3 +77,4 @@ fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
 fn feature_maximal_pvalue_default() -> f64 { 0.5 }
 fn feature_importance_permutations_default() -> usize { 10 }
 fn feature_minimal_feature_value_default() -> f64 { 0.0 }
+fn thread_number_default() -> usize { 1 }

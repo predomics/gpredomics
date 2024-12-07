@@ -32,6 +32,7 @@ There are three sections, general, data and ga.
 
 - seed: gpredomics is fully determinist, re-running a computation with the same seed bear the same results, this should be a number,
 - algo: either `random` (not useful, for tests only), `ga` the basic genetic algorithm, `ga+cv` the same algorithm but with a simple cross val scheme
+- thread_number: how many parallel threads can we uses.
 
 ### data
 

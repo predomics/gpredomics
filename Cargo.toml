@@ -10,6 +10,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 statrs = "0.16"
 rand_chacha = "0.3"
+rayon = "1.7"
 
 [profile.flamegraph]
 inherits = "release"        # Inherit most settings from the release profile

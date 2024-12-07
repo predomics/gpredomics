@@ -1,10 +1,12 @@
+use rayon::prelude::*;
 use crate::data::Data;
 use crate::population::Population;
 use crate::param::Param;
 use crate::individual::Individual;
 use crate::utils;
-use rand::{rngs::ThreadRng, seq::SliceRandom};
+use std::sync::{Arc, Mutex};
 use rand_chacha::ChaCha8Rng;
+
 
 /// This class implement Cross Validation dataset, e.g. split the Data in N folds and create N subset of Data each with its test subset.
 pub struct CV {
@@ -49,21 +51,52 @@ impl CV {
         }
     }
 
-    pub fn pass(&mut self, algo: fn(&mut Data, &Param) -> Vec<Population>, param: &Param) -> Vec<(Individual,f64,f64)> {
+    pub fn pass(
+        &mut self,
+        algo: fn(&mut Data, &Param) -> Vec<Population>,
+        param: &Param,
+        thread_number: usize,
+    ) -> Vec<(Individual, f64, f64)> {
+        // Configure the thread pool with the specified thread number
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(thread_number)
+            .build()
+            .unwrap();
 
-        let mut results_per_fold: Vec<(Individual,f64,f64)> = Vec::new();
+        // Arc-Mutex to collect results from threads safely
+        let results_per_fold = Arc::new(Mutex::new(Vec::new()));
 
-        for (i,(train,test)) in self.datasets.iter_mut().zip(self.folds.iter_mut()).enumerate() {
-            print!("|  Fold #{}  ",i+1);
-            let mut best_model: Individual = algo(train, param).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
-            let train_auc = best_model.auc;
-            let test_auc = best_model.compute_auc(test);
+        thread_pool.install(|| {
+            self.datasets
+                .par_iter_mut()
+                .zip(self.folds.par_iter_mut())
+                .enumerate()
+                .for_each(|(i, (train, test))| {
+                    // Train and evaluate model
+                    println!("|  Fold #{}  ", i + 1);
 
-            println!("|  Train AUC: {:.3}  |  Test AUC: {:.3}", train_auc, test_auc);
-            results_per_fold.push((best_model, train_auc, test_auc));
-        }
+                    let mut best_model: Individual =
+                        algo(train, param).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
+                    let train_auc = best_model.auc;
+                    let test_auc = best_model.compute_auc(test);
 
-        results_per_fold
+                    println!(
+                        "|  Train AUC: {:.3}  |  Test AUC: {:.3}",
+                        train_auc, test_auc
+                    );
+
+                    // Store the results
+                    results_per_fold
+                        .lock()
+                        .unwrap()
+                        .push((best_model, train_auc, test_auc));
+                });
+        });
+
+        // Extract results from the Arc-Mutex
+        Arc::try_unwrap(results_per_fold)
+            .unwrap()
+            .into_inner()
+            .unwrap()
     }
 }
-

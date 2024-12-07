@@ -1,6 +1,7 @@
 general:
   seed: 42
   algo: "ga+cv"
+  thread_number: 2
 
 data:
   X: "samples/Qin2014/Xtrain.tsv"

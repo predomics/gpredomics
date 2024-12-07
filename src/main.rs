@@ -99,7 +99,7 @@ fn gacv_run(param: &Param) {
     println!("{:?}", my_data); 
 
     let mut crossval = cv::CV::new(&my_data, 10, &mut rng);
-    let results=crossval.pass(ga::ga, &param);
+    let results=crossval.pass(ga::ga, &param, param.general.thread_number);
     
     if param.data.Xtest.len()>0 {
         let mut test_data=Data::new();
