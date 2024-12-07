@@ -25,22 +25,26 @@ pub struct Data {
     pub Xtest: String,
     #[serde(default = "empty_string")]                      // Path to y data
     pub ytest: String,
-    #[serde(default = "feature_minimal_prevalence_default")]                      // Path to y data
-    pub feature_minimal_prevalence: u32, // Minimum prevalence
+    #[serde(default = "pvalue_method_default")]                      // Path to y data
+    pub pvalue_method: String,
+    #[serde(default = "feature_minimal_prevalence_pct_default")]                      // Path to y data
+    pub feature_minimal_prevalence_pct: f64, // Minimum prevalence
     #[serde(default = "feature_maximal_pvalue_default")]                      // Path to y data
     pub feature_maximal_pvalue: f64, // Minimum prevalence
+    #[serde(default = "feature_minimal_feature_value_default")]                      // Path to y data
+    pub feature_minimal_feature_value: f64, // Minimum prevalence
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GA {
     pub population_size: u32,                // Population size
-    pub epochs: u32,                         // Number of epochs/generations
+    pub max_epochs: usize,                         // Number of epochs/generations
     #[serde(default = "min_epochs_default")]    
     pub min_epochs: usize,                     // Do not stop before reaching this
-    #[serde(default = "max_divergence_default")]    
-    pub max_divergence: f64,                 // Stop only if fit function divergence is lower than this in average
-    pub kmin: u32,                           // Minimum value of k
-    pub kmax: u32,                           // Maximum value of k
+    #[serde(default = "max_age_best_model_default")]    
+    pub max_age_best_model: usize,                 // Stop if the best model has not change for this long
+    //pub kmin: u32,                           // Minimum value of k
+    //pub kmax: u32,                           // Maximum value of k
     pub kpenalty: f64,                       // A penalty of this per value of k is deleted from AUC in the fit function
     pub select_elite_pct: f64,               // Elite selection percentage
     pub select_random_pct: f64,              // Random selection percentage
@@ -64,8 +68,10 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
 
 fn empty_string() -> String { "".to_string() }
 fn min_epochs_default() -> usize { 10 }
-fn max_divergence_default() -> f64 { 0.01 }
+fn max_age_best_model_default() -> usize { 10 }
 fn algorithm_default() -> String { "ga".to_string() }
-fn feature_minimal_prevalence_default() -> u32 { 10 }
+fn pvalue_method_default() -> String { "studentt".to_string() }
+fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
 fn feature_maximal_pvalue_default() -> f64 { 0.5 }
 fn feature_importance_permutations_default() -> usize { 10 }
+fn feature_minimal_feature_value_default() -> f64 { 0.0 }

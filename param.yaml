@@ -7,17 +7,18 @@ data:
   y: "samples/Qin2014/Ytrain.tsv"
   Xtest: "samples/Qin2014/Xtest.tsv"
   ytest: "samples/Qin2014/Ytest.tsv"
-  feature_minimal_prevalence: 10 # per class, e.g. if any of the class reaches this level
-  feature_maximal_pvalue: 0.3 # feature with differences less significant than this will be removed
-  feature_minimal_value: 0.0001
+  pvalue_method: wilcoxon
+  feature_minimal_prevalence_pct: 10 # per class, e.g. if any of the class reaches this level
+  feature_maximal_pvalue: 0.001 # feature with differences less significant than this will be removed
+  feature_minimal_feature_value: 0.0001
 
 ga:
   population_size: 1000
-  epochs: 100
-  min_epochs: 100
-  max_divergence: 0.01
-  kmin: 1
-  kmax: 50
+  max_epochs: 100
+  min_epochs: 50
+  max_age_best_model: 50
+  #kmin: 1
+  #kmax: 50 # do we keep it? 
   kpenalty: 0.003
   select_elite_pct: 25
   select_random_pct: 25

@@ -11,7 +11,7 @@ use rand_chacha::ChaCha8Rng;
 pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     // generate a random population with a given size  (and evaluate it for selection)
     let mut pop = Population::new();
-    let mut epoch:u32 = 0;
+    let mut epoch:usize = 0;
     let mut populations: Vec<Population> = Vec::new();
     let mut auc_values: Vec<f64> = Vec::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
@@ -21,7 +21,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     print!("| Features: #{} ",data.feature_selection.len());
 
     //println!("Generate initial population");
-    pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
+    pop.generate(param.ga.population_size,data, &mut rng);
     pop.evaluate_with_k_penalty(data, param.ga.kpenalty);
     
     loop {
@@ -39,28 +39,33 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         //println!("best AUC so far {} (k={})", &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k);
         auc_values.push(sorted_pop.fit[0]);
 
+        if auc_values.len()>param.ga.min_epochs {
+            //let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
+            //let divergence = auc_values[auc_values.len()-10..].iter().map(|x| (*x-avg).abs()).sum::<f64>();
+            if sorted_pop.individuals[0].n>param.ga.max_age_best_model {
+                //println!("AUCs stay stable for the last 10 rounds (divergence {} is below {}), stopping",divergence,avg*param.ga.max_divergence);
+                break
+            }
+        }
+
         new_pop.add(select_parents(&sorted_pop, param, &mut rng));
 
         let mut children = cross_over(&new_pop,param,data.feature_len, &mut rng);
         mutate(&mut children, param, &data.feature_selection, &mut rng);
         children.evaluate_with_k_penalty(data, param.ga.kpenalty);
+        for i in children.individuals.iter_mut() {
+            i.n = epoch;
+        }
         new_pop.add(children);
 
         populations.push(sorted_pop);
         pop = new_pop;
 
-        if (epoch>=param.ga.epochs) {
+        if (epoch>=param.ga.max_epochs) {
             //println!("The target number of epoch {} has been reached, stopping",epoch);
             break
         }
-        if auc_values.len()>10 && auc_values.len()>param.ga.min_epochs {
-            let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
-            let divergence = auc_values[auc_values.len()-10..].iter().map(|x| (*x-avg).abs()).sum::<f64>();
-            if divergence<avg*param.ga.max_divergence {
-                //println!("AUCs stay stable for the last 10 rounds (divergence {} is below {}), stopping",divergence,avg*param.ga.max_divergence);
-                break
-            }
-        }
+
     }
 
     populations

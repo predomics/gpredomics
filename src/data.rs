@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::fmt;
 use crate::param::Param;
-use crate::utils::compare_classes;
+use crate::utils::{compare_classes_studentt, compare_classes_wilcoxon };
 
 pub struct Data {
     pub X: Vec<Vec<f64>>,         // Matrix for feature values
@@ -151,8 +151,12 @@ impl Data {
         self.feature_selection = Vec::new();
         self.feature_class_sign = HashMap::new();
 
+        let method=if param.data.pvalue_method=="studentt" { compare_classes_studentt } 
+            else { compare_classes_wilcoxon };
+
         for (i,row) in self.X.iter().enumerate() {
-            match compare_classes(row, &(self.y), param.data.feature_maximal_pvalue, param.data.feature_minimal_prevalence as f64/100.0) {
+            match method(row, &(self.y), param.data.feature_maximal_pvalue, 
+                        param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
                 0 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 0);},
                 1 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 1);},
                 _ => {}

@@ -37,18 +37,17 @@ There are three sections, general, data and ga.
 
 - The name of the files are pretty obvious: X is the matrix of features, y the target vector.
 - Xtest and ytest are optional holdouts (that should not be included in X and y)
-- feature_minimal_prevalence is a filter: this is the minimal number of sample non null for the feature in either class for the feature to be kept.
-- feature_minimal_value is a filter on the average value of the feature (not implemented yet),
+- feature_minimal_prevalence_pct is a filter: this is the minimal % of sample non null for the feature in either class for the feature to be kept.
+- feature_minimal_feature_value is a filter on the average value of the feature (if either class is above, then the feature is not rejected),
 - feature_maximal_pvalue is a filter to remove features which average is not significantly different between the two classes.
+- pvalue_method is either studentt (recommanded for features with normal distributions) or wilcoxon (recommanded for sparse/log normal features)
 
 ### ga
 
 - population_size: the number of model (a.k.a. Individual in the Rust code) per epoch,
-- epochs: the target number of epoch (an epoch is a generation in the Genetic Algorithm)
+- max_epochs: the target number of epoch (an epoch is a generation in the Genetic Algorithm)
 - min_epochs: the minimal number of epoch befor trying to see if AUC are converging
-- max_divergence: the criteria of AUC convergence,
-- kmin: the minimal number of feature in the initial random population,
-- kmax: the maximal number of feature in the initial random population,
+- max_age_best_model: when a best model reaches this age after min_epochs epochs, the ga algorithm is stopped,
 - kpenalty: the penalty applied to the AUC per number of feature in the model,
 - select_elite_pct: the percentage of best N-1 individual selected as parents,
 - select_random_pct: the percentage of random N-1 individual selected as parents,

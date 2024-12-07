@@ -13,7 +13,8 @@ pub struct Individual {
     //pub feature_names: Vec<string>, /// a vector of feature indices
     pub fit_method: String, // AUC, accuracy, etc.
     pub auc: f64, // accuracy of the model
-    pub k: u32 // nb of variables used
+    pub k: u32, // nb of variables used
+    pub n: usize // generation or other counter important in the strategy 
 }
 
 impl Individual {
@@ -50,6 +51,7 @@ impl Individual {
             fit_method: String::from("AUC"),
             auc: 0.0,
             k: 0,
+            n: 0
         }
     }
 
@@ -58,7 +60,8 @@ impl Individual {
             features: self.features.clone(),
             fit_method: self.fit_method.clone(),
             auc: self.auc,
-            k: self.k
+            k: self.k,
+            n: self.n
         }
     }
 
@@ -215,17 +218,18 @@ impl Individual {
             features: features,
             fit_method: String::from("AUC"),
             auc: 0.0,
-            k: k
+            k: k,
+            n: 0
         }
     }
 
     /// 
-    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<usize>, kmin: u32, kmax: u32, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
+    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<usize>, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
     
-        let k: u32=rng.gen_range(kmin..(kmax+1));
+        let k: usize=rng.gen_range(1..feature_selection.len());
 
         // Randomly pick k values
         let random_values = feature_selection.choose_multiple(rng, k as usize);
@@ -254,7 +258,8 @@ impl Individual {
             features: features,
             fit_method: String::from("AUC"),
             auc: 0.0,
-            k: k
+            k: k as u32,
+            n: 0
         }
 
     }

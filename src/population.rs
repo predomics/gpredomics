@@ -73,10 +73,10 @@ impl Population {
     }
 
     /// populate the population with a set of random individuals
-    pub fn generate(&mut self, population_size: u32, kmin: u32, kmax: u32, data: &Data, rng: &mut ChaCha8Rng) {
+    pub fn generate(&mut self, population_size: u32, data: &Data, rng: &mut ChaCha8Rng) {
         for i in 0..population_size {
             self.individuals.push(Individual::random_select_k(data.feature_len, 
-                                    &data.feature_selection, kmin, kmax,
+                                    &data.feature_selection,
                                     &data.feature_class_sign,
                                 rng))
         }

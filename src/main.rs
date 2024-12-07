@@ -109,8 +109,8 @@ fn gacv_run(param: &Param) {
             let holdout_auc=best_model.compute_auc(&test_data);
             let (threshold, accuracy, sensitivity, specificity) = best_model.compute_threshold_and_metrics(&test_data);
             //println!("Model #{} [k={}]: train AUC {:.3} | test AUC {:.3} | holdout AUC {:.3} | {:?}",i+1,best_model.k,train_auc,test_auc,holdout_auc,best_model);
-            println!("Model #{} [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
-                        i+1,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
+            println!("Model #{} [gen:{}] [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
+                        i+1,best_model.n,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
             print!("Features importance on train+test: ");
             for feature_importance in best_model.compute_oob_feature_importance(&my_data, param.ga.feature_importance_permutations,&mut rng) {
                 print!("[{:.4}] ",feature_importance);
@@ -125,7 +125,7 @@ fn gacv_run(param: &Param) {
     }
     else {
         for (i,(best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-            println!("Model #{} [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.k,train_auc,test_auc,best_model);
+            println!("Model #{} [gen:{}] [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.n,best_model.k,train_auc,test_auc,best_model);
         }    
     }
 
