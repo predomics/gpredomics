@@ -44,12 +44,18 @@ impl Data {
         // Read the first line to get sample names
         let mut first_line = String::new();
         reader_X.read_line(&mut first_line)?;
-        self.samples = first_line.trim_end().split('\t').skip(1).map(String::from).collect();
+        let trimmed_first_line= first_line.strip_suffix('\n')
+            .or_else(|| first_line.strip_suffix("\r\n"))
+            .unwrap_or(&first_line);
+        self.samples = trimmed_first_line.split('\t').skip(1).map(String::from).collect();
 
         // Read the remaining lines for feature names and data
         for line in reader_X.lines() {
             let line = line?;
-            let mut fields = line.trim_end().split('\t');
+            let trimmed_line= line.strip_suffix('\n')
+                .or_else(|| line.strip_suffix("\r\n"))
+                .unwrap_or(&line);
+            let mut fields = trimmed_line.split('\t');
 
             // First field is the feature name
             if let Some(feature_name) = fields.next() {
@@ -71,7 +77,10 @@ impl Data {
         let mut y_map = HashMap::new();
         for line in reader_y.lines().skip(1) {
             let line = line?;
-            let mut fields = line.trim_end().split('\t');
+            let trimmed_line= line.strip_suffix('\n')
+                .or_else(|| line.strip_suffix("\r\n"))
+                .unwrap_or(&line);
+            let mut fields = trimmed_line.split('\t');
             
             // First field is the sample name
             if let Some(sample_name) = fields.next() {
