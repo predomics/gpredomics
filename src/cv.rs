@@ -4,9 +4,9 @@ use crate::population::Population;
 use crate::param::Param;
 use crate::individual::Individual;
 use crate::utils;
+use crate::types::FloatType;
 use std::sync::{Arc, Mutex};
 use rand_chacha::ChaCha8Rng;
-
 
 /// This class implement Cross Validation dataset, e.g. split the Data in N folds and create N subset of Data each with its test subset.
 pub struct CV {
@@ -56,7 +56,7 @@ impl CV {
         algo: fn(&mut Data, &Param) -> Vec<Population>,
         param: &Param,
         thread_number: usize,
-    ) -> Vec<(Individual, f64, f64)> {
+    ) -> Vec<(Individual, FloatType, FloatType)> {
         // Configure the thread pool with the specified thread number
         let thread_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(thread_number)

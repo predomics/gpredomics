@@ -6,6 +6,7 @@ mod population;
 mod ga;
 mod cv;
 mod hyper;
+mod types;
 
 use data::Data;
 use individual::Individual;
@@ -13,6 +14,7 @@ use rand_chacha::ChaCha8Rng;
 use rand::prelude::*;
 use param::Param;
 use std::process;
+use types::FloatType;
 
 /// a very basic use
 fn basic_test() {

@@ -4,10 +4,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::fmt;
 use crate::param::Param;
+use crate::types::FloatType;
 use crate::utils::{compare_classes_studentt, compare_classes_wilcoxon };
 
 pub struct Data {
-    pub X: Vec<Vec<f64>>,         // Matrix for feature values
+    pub X: Vec<Vec<FloatType>>,         // Matrix for feature values
     pub y: Vec<u8>,              // Vector for target values
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
     pub samples: Vec<String>,     // Sample names (from the first row of X.tsv)
@@ -63,8 +64,8 @@ impl Data {
             }
 
             // Remaining fields are the feature values
-            let row: Vec<f64> = fields
-                .map(|value| value.parse::<f64>().unwrap_or(0.0))
+            let row: Vec<FloatType> = fields
+                .map(|value| value.parse::<FloatType>().unwrap_or(0.0))
                 .collect();
             self.X.push(row);
         }
@@ -105,57 +106,6 @@ impl Data {
         Ok(())
     }
 
-    /*pub fn compute_feature_stats(&self) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
-        // Number of features
-        let num_features = self.features.len();
-        
-        // Number of classes (assumed to be 0, 1, 2)
-        let num_classes = 3;
-
-        // Initialize accumulators
-        let mut sums = vec![vec![0.0; num_features]; num_classes];
-        let mut counts = vec![vec![0; num_features]; num_classes];
-        let mut non_null_counts = vec![vec![0; num_features]; num_classes];
-
-        // Iterate over rows in X and their corresponding class in y
-        for (row, &class) in self.X.iter().zip(self.y.iter()) {
-            assert!(class < num_classes as u8, "Invalid class label in y");
-
-            for (j, &value) in row.iter().enumerate() {
-                if value != 0.0 {
-                    sums[class as usize][j] += value;
-                    counts[class as usize][j] += 1;
-                }
-                non_null_counts[class as usize][j] += 1;
-            }
-        }
-
-        // Calculate averages and prevalences
-        let averages: Vec<Vec<f64>> = (0..num_classes)
-            .map(|class| {
-                (0..num_features)
-                    .map(|j| {
-                        if counts[class][j] > 0 {
-                            sums[class][j] / counts[class][j] as f64
-                        } else {
-                            0.0
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-
-        let prevalences: Vec<Vec<f64>> = (0..num_classes)
-            .map(|class| {
-                (0..num_features)
-                    .map(|j| non_null_counts[class][j] as f64 / y.len() as f64)
-                    .collect()
-            })
-            .collect();
-
-        (averages, prevalences)
-    }*/
-
     pub fn select_features(&mut self, param:&Param) {
         self.feature_selection = Vec::new();
         self.feature_class_sign = HashMap::new();
@@ -165,7 +115,7 @@ impl Data {
 
         for (i,row) in self.X.iter().enumerate() {
             match method(row, &(self.y), param.data.feature_maximal_pvalue, 
-                        param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
+                        param.data.feature_minimal_prevalence_pct as FloatType/100.0, param.data.feature_minimal_feature_value) {
                 0 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 0);},
                 1 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 1);},
                 _ => {}
@@ -203,7 +153,7 @@ impl Data {
         }
     }
 
-    pub fn clone_with_new_x(&self, X:Vec<Vec<f64>>) -> Data {
+    pub fn clone_with_new_x(&self, X:Vec<Vec<FloatType>>) -> Data {
         Data {
             X: X,
             y: self.y.clone(),

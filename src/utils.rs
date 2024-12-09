@@ -5,6 +5,7 @@ use statrs::distribution::{ContinuousCDF, StudentsT};
 use rand_chacha::ChaCha8Rng;
 use rand::seq::SliceRandom; 
 use statrs::distribution::Normal;// For random shuffling
+use crate::FloatType;
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -25,40 +26,40 @@ pub fn generate_random_vector(reference_size: usize, rng: &mut ChaCha8Rng) -> Ve
 
 
 
-pub fn compare_classes_studentt(values: &Vec<f64>, targets: &Vec<u8>, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
+pub fn compare_classes_studentt(values: &Vec<FloatType>, targets: &Vec<u8>, max_p_value: FloatType, min_prevalence: FloatType, min_mean_value: FloatType) -> u8 {
     // Separate values into two classes
-    let class_0: Vec<f64> = values.iter().zip(targets.iter())
+    let class_0: Vec<FloatType> = values.iter().zip(targets.iter())
         .filter(|(_, &class)| class == 0)
         .map(|(&value, _)| value)
         .collect();
 
-    let class_1: Vec<f64> = values.iter().zip(targets.iter())
+    let class_1: Vec<FloatType> = values.iter().zip(targets.iter())
         .filter(|(_, &class)| class == 1)
         .map(|(&value, _)| value)
         .collect();
 
     // Calculate means
-    let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
-    let mean_1 = class_1.iter().copied().sum::<f64>() / class_1.len() as f64;
+    let mean_0 = class_0.iter().copied().sum::<FloatType>() / class_0.len() as FloatType;
+    let mean_1 = class_1.iter().copied().sum::<FloatType>() / class_1.len() as FloatType;
 
     if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
 
     // Calculate t-statistic (simple, equal variance assumption)
-    let n0 = class_0.len() as f64;
-    let n1 = class_1.len() as f64;
-    let var0 = class_0.iter().map(|x| (x - mean_0).powi(2)).sum::<f64>() / (n0 - 1.0);
-    let var1 = class_1.iter().map(|x| (x - mean_1).powi(2)).sum::<f64>() / (n1 - 1.0);
-    let prev0 = class_0.iter().filter(|&&x| x != 0.0).count() as f64 / n0;
-    let prev1 = class_1.iter().filter(|&&x| x != 0.0).count() as f64 / n1;
+    let n0 = class_0.len() as FloatType;
+    let n1 = class_1.len() as FloatType;
+    let var0 = class_0.iter().map(|x| (x - mean_0).powi(2)).sum::<FloatType>() / (n0 - 1.0);
+    let var1 = class_1.iter().map(|x| (x - mean_1).powi(2)).sum::<FloatType>() / (n1 - 1.0);
+    let prev0 = class_0.iter().filter(|&&x| x != 0.0).count() as FloatType / n0;
+    let prev1 = class_1.iter().filter(|&&x| x != 0.0).count() as FloatType / n1;
     let pooled_std = ((var0 / n0) + (var1 / n1)).sqrt();
     if pooled_std > 0.0 {
         let t_stat = (mean_0 - mean_1) / pooled_std;
 
         // Compute p-value
         let degrees_of_freedom = (n0 + n1 - 2.0).round();
-        let t_dist = StudentsT::new(0.0, 1.0, degrees_of_freedom).unwrap();
+        let t_dist = StudentsT::new(0.0, 1.0, degrees_of_freedom as f64).unwrap();
         //println!("t_stat {} n0 {} n1 {} var0 {} var1 {} prev0 {} prev1 {}",t_stat,n0,n1,var0,var1,prev0,prev1);
-        let cumulative = t_dist.cdf(t_stat.abs()); // CDF up to |t_stat|
+        let cumulative = t_dist.cdf(t_stat.abs() as f64) as FloatType; // CDF up to |t_stat|
         let upper_tail = 1.0 - cumulative;         // Upper-tail area
         let p_value = 2.0 * upper_tail;            // Two-tailed test
 
@@ -101,10 +102,10 @@ pub fn split_into_balanced_random_chunks<T: std::clone::Clone>(vec: Vec<T>, p: u
     chunks
 }
 
-pub fn compare_classes_wilcoxon(values: &Vec<f64>, targets: &Vec<u8>, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
+pub fn compare_classes_wilcoxon(values: &Vec<FloatType>, targets: &Vec<u8>, max_p_value: FloatType, min_prevalence: FloatType, min_mean_value: FloatType) -> u8 {
     // Separate values into two classes
-    let mut class_0: Vec<f64> = Vec::new();
-    let mut class_1: Vec<f64> = Vec::new();
+    let mut class_0: Vec<FloatType> = Vec::new();
+    let mut class_1: Vec<FloatType> = Vec::new();
 
     for (&value, &class) in values.iter().zip(targets.iter()) {
         if class == 0 {
@@ -120,15 +121,15 @@ pub fn compare_classes_wilcoxon(values: &Vec<f64>, targets: &Vec<u8>, max_p_valu
     }
 
     // Calculate means
-    let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
-    let mean_1 = class_1.iter().copied().sum::<f64>() / class_1.len() as f64;
+    let mean_0 = class_0.iter().copied().sum::<FloatType>() / class_0.len() as FloatType;
+    let mean_1 = class_1.iter().copied().sum::<FloatType>() / class_1.len() as FloatType;
 
     //println!("Means: {} vs {}",mean_0,mean_1);
     if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
 
     // Compute prevalence for each class
-    let n0 = class_0.len() as f64;
-    let n1 = class_1.len() as f64;
+    let n0 = class_0.len() as FloatType;
+    let n1 = class_1.len() as FloatType;
     let prev0 = n0 / (n0 + n1);
     let prev1 = n1 / (n0 + n1);
 
@@ -138,7 +139,7 @@ pub fn compare_classes_wilcoxon(values: &Vec<f64>, targets: &Vec<u8>, max_p_valu
     }
 
     // Combine both classes with their labels
-    let mut combined: Vec<(f64, u8)> = class_0
+    let mut combined: Vec<(FloatType, u8)> = class_0
         .iter()
         .map(|&value| (value, 0))
         .chain(class_1.iter().map(|&value| (value, 1)))
@@ -155,7 +156,7 @@ pub fn compare_classes_wilcoxon(values: &Vec<f64>, targets: &Vec<u8>, max_p_valu
         while i + 1 < combined.len() && combined[i].0 == combined[i + 1].0 {
             i += 1;
         }
-        let rank = (start + i + 1) as f64 / 2.0;
+        let rank = (start + i + 1) as FloatType / 2.0;
         for j in start..=i {
             ranks[j] = rank;
         }
@@ -163,7 +164,7 @@ pub fn compare_classes_wilcoxon(values: &Vec<f64>, targets: &Vec<u8>, max_p_valu
     }
 
     // Compute rank sums
-    let rank_sum_0: f64 = combined
+    let rank_sum_0: FloatType = combined
         .iter()
         .zip(ranks.iter())
         .filter(|((_, class), _)| *class == 0)
@@ -179,7 +180,7 @@ pub fn compare_classes_wilcoxon(values: &Vec<f64>, targets: &Vec<u8>, max_p_valu
     let z = (u_stat - mean_u) / std_u;
 
     let normal_dist = Normal::new(0.0, 1.0).unwrap();
-    let p_value = 2.0 * (1.0 - normal_dist.cdf(z.abs())); // Two-tailed p-value
+    let p_value = 2.0 * (1.0 - normal_dist.cdf(z.abs() as f64))  as FloatType; // Two-tailed p-value
 
     // Interpretation
     if p_value < max_p_value {

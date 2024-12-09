@@ -12,6 +12,11 @@ statrs = "0.16"
 rand_chacha = "0.3"
 rayon = "1.7"
 
+[features]
+default = ["use_f64"]
+use_f32 = []
+use_f64 = []
+
 [profile.flamegraph]
 inherits = "release"        # Inherit most settings from the release profile
 debug = true                # Include debug symbols for detailed profiling

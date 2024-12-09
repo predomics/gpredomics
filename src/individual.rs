@@ -1,5 +1,6 @@
 use crate::utils::generate_random_vector;
 use crate::data::Data;
+use crate::types::FloatType;
 use rand::{rngs::ThreadRng, seq::SliceRandom}; // Provides the `choose_multiple` method
 use std::collections::{HashMap, HashSet};
 use rand::Rng;
@@ -12,7 +13,7 @@ pub struct Individual {
     pub features: Vec<i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices
     pub fit_method: String, // AUC, accuracy, etc.
-    pub auc: f64, // accuracy of the model
+    pub auc: FloatType, // accuracy of the model
     pub k: u32, // nb of variables used
     pub n: usize // generation or other counter important in the strategy 
 }
@@ -39,7 +40,7 @@ impl Individual {
             A string representing the method used to evaluate the fitness of the individual.
             This could be 'AUC', 'accuracy', or any other evaluation metric.
 
-        - accuracy: f64
+        - accuracy: FloatType
             A floating-point number representing the accuracy of the model represented by the individual.
             This value indicates how well the model performs on the given data.
         "
@@ -65,41 +66,41 @@ impl Individual {
         }
     }
 
-    pub fn evaluate(&self, d: &Data) -> Vec<f64> {
+    pub fn evaluate(&self, d: &Data) -> Vec<FloatType> {
         let mut value=vec![0.0; d.samples.len()];
         for (i,row) in d.X.iter().enumerate() {
             for (j,x) in row.iter().enumerate() {
-                value[j]+=self.features[i] as f64*x;
+                value[j]+=self.features[i] as FloatType*x;
             }
         }
         value
     }
 
-    pub fn evaluate_from_features(&self, X: &Vec<Vec<f64>>) -> Vec<f64> {
+    pub fn evaluate_from_features(&self, X: &Vec<Vec<FloatType>>) -> Vec<FloatType> {
         let mut value=vec![0.0; X[0].len()];
         for (i,row) in X.iter().enumerate() {
             for (j,x) in row.iter().enumerate() {
-                value[j]+=self.features[i] as f64*x;
+                value[j]+=self.features[i] as FloatType*x;
             }
         }
         value
     }
 
     /// Compute AUC based on the target vector y
-    pub fn compute_auc(&mut self, d: &Data) -> f64 {
+    pub fn compute_auc(&mut self, d: &Data) -> FloatType {
         let value = self.evaluate(d);
         self.compute_auc_from_value(value, &d.y)
     }
 
     /// Compute AUC based on X and y rather than a complete Data object
-    pub fn compute_auc_from_features(&mut self, X: &Vec<Vec<f64>>, y: &Vec<u8>) -> f64 {
+    pub fn compute_auc_from_features(&mut self, X: &Vec<Vec<FloatType>>, y: &Vec<u8>) -> FloatType {
         let value = self.evaluate_from_features(X);
         self.compute_auc_from_value(value, y)
     }
 
     /// Compute AUC based on the target vector y
-    fn compute_auc_from_value(&mut self, value: Vec<f64>, y: &Vec<u8>) -> f64 {
-        let mut thresholds: Vec<(usize,&f64)> = value.iter().enumerate().collect::<Vec<(usize,&f64)>>();
+    fn compute_auc_from_value(&mut self, value: Vec<FloatType>, y: &Vec<u8>) -> FloatType {
+        let mut thresholds: Vec<(usize,&FloatType)> = value.iter().enumerate().collect::<Vec<(usize,&FloatType)>>();
 
         thresholds.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -121,13 +122,13 @@ impl Individual {
             //let (tp, fp, tn, fn_count) = self.calculate_confusion_matrix(&value, &d.y, threshold);
 
             let tpr = if (tp + fn_count) > 0 {
-                tp as f64 / (tp + fn_count) as f64
+                tp as FloatType / (tp + fn_count) as FloatType
             } else {
                 0.0
             };
 
             let fpr = if (fp + tn) > 0 {
-                fp as f64 / (fp + tn) as f64
+                fp as FloatType / (fp + tn) as FloatType
             } else {
                 0.0
             };
@@ -139,13 +140,13 @@ impl Individual {
         }
 
         let tpr = if (tp + fn_count) > 0 {
-            tp as f64 / (tp + fn_count) as f64
+            tp as FloatType / (tp + fn_count) as FloatType
         } else {
             0.0
         };
 
         let fpr = if (fp + tn) > 0 {
-            fp as f64 / (fp + tn) as f64
+            fp as FloatType / (fp + tn) as FloatType
         } else {
             0.0
         };
@@ -169,7 +170,7 @@ impl Individual {
     } 
 
     /// Calculate the confusion matrix at a given threshold
-    fn calculate_confusion_matrix(&self, value: &Vec<f64>, y: &[u8], threshold: f64) -> (usize, usize, usize, usize) {
+    fn calculate_confusion_matrix(&self, value: &Vec<FloatType>, y: &[u8], threshold: FloatType) -> (usize, usize, usize, usize) {
         let mut tp = 0; // True Positives
         let mut fp = 0; // False Positives
         let mut tn = 0; // True Negatives
@@ -271,9 +272,9 @@ impl Individual {
 
     /// a function that compute accuracy,precision and sensitivity, fixing the threshold using Youden index 
     /// return (threshold, accuracy, sensitivity, specificity)
-    pub fn compute_threshold_and_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
+    pub fn compute_threshold_and_metrics(&self, d: &Data) -> (FloatType, FloatType, FloatType, FloatType) {
         let value = self.evaluate(d); // Predicted probabilities
-        let mut combined: Vec<(f64, u8)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
+        let mut combined: Vec<(FloatType, u8)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
         
         // Sort by predicted probabilities
         combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -285,7 +286,7 @@ impl Individual {
         let mut fp = d.y.len() - tp;
 
         let mut best_threshold = 0.0;
-        let mut best_youden_index = f64::NEG_INFINITY;
+        let mut best_youden_index = FloatType::NEG_INFINITY;
         let mut best_metrics = (0.0, 0.0, 0.0); // (Accuracy, Sensitivity, Specificity)
 
         for i in 0..combined.len() {
@@ -306,13 +307,13 @@ impl Individual {
 
             // Calculate metrics
             let sensitivity = if (tp + fn_count) > 0 {
-                tp as f64 / (tp + fn_count) as f64
+                tp as FloatType / (tp + fn_count) as FloatType
             } else {
                 0.0
             };
 
             let specificity = if (fp + tn) > 0 {
-                tn as f64 / (fp + tn) as f64
+                tn as FloatType / (fp + tn) as FloatType
             } else {
                 0.0
             };
@@ -324,7 +325,7 @@ impl Individual {
                 best_threshold = threshold;
 
                 let accuracy = if (tp + tn + fp + fn_count) > 0 {
-                    (tp + tn) as f64 / (tp + tn + fp + fn_count) as f64
+                    (tp + tn) as FloatType / (tp + tn + fp + fn_count) as FloatType
                 } else {
                     0.0
                 };
@@ -347,7 +348,7 @@ impl Individual {
 
     /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
     /// uses mean decreased AUC
-    pub fn compute_oob_feature_importance(&mut self, data: &Data, permutations: usize, rng: &mut ChaCha8Rng) -> Vec<f64> {
+    pub fn compute_oob_feature_importance(&mut self, data: &Data, permutations: usize, rng: &mut ChaCha8Rng) -> Vec<FloatType> {
         let model_features = self.features_index();
         let mut importances = vec![0.0; model_features.len()]; // One importance value per feature
         let baseline_auc = self.compute_auc(data); // Baseline AUC
@@ -366,7 +367,7 @@ impl Individual {
             }
 
             // Compute the average AUC with permutations
-            let mean_permuted_auc = permuted_auc_sum / permutations as f64;
+            let mean_permuted_auc = permuted_auc_sum / permutations as FloatType;
 
             // Importance: how much the AUC drops due to shuffling
             importances[i] = baseline_auc - mean_permuted_auc;

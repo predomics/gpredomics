@@ -2,6 +2,7 @@ use crate::population::Population;
 use crate::data::Data;
 use crate::individual::Individual;
 use crate::param::Param;
+use crate::types::FloatType;
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use rand::seq::index::sample;
@@ -13,7 +14,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     let mut pop = Population::new();
     let mut epoch:usize = 0;
     let mut populations: Vec<Population> = Vec::new();
-    let mut auc_values: Vec<f64> = Vec::new();
+    let mut auc_values: Vec<FloatType> = Vec::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
     //println!("Selecting features");
@@ -40,10 +41,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         auc_values.push(sorted_pop.fit[0]);
 
         if auc_values.len()>param.ga.min_epochs {
-            //let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
-            //let divergence = auc_values[auc_values.len()-10..].iter().map(|x| (*x-avg).abs()).sum::<f64>();
-            if sorted_pop.individuals[0].n>param.ga.max_age_best_model {
-                //println!("AUCs stay stable for the last 10 rounds (divergence {} is below {}), stopping",divergence,avg*param.ga.max_divergence);
+            if sorted_pop.individuals[0].n-epoch>param.ga.max_age_best_model {
                 break
             }
         }
@@ -116,10 +114,10 @@ fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<usiz
     let feature_len = feature_selection.len();
 
     if param.ga.mutated_children_pct > 0.0 {
-        let num_mutated_individuals = (children.individuals.len() as f64 
+        let num_mutated_individuals = (children.individuals.len() as FloatType 
             * param.ga.mutated_children_pct / 100.0) as usize;
 
-        let num_mutated_features = (feature_len as f64 
+        let num_mutated_features = (feature_len as FloatType 
             * param.ga.mutated_features_pct / 100.0) as usize;
 
         // Select indices of the individuals to mutate
@@ -135,7 +133,7 @@ fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<usiz
 
             for i in feature_indices {
                 if individual.features[i]!=0 { individual.k-=1 }
-                individual.features[i] = match rng.gen::<f64>() {
+                individual.features[i] = match rng.gen::<FloatType>() {
                     r if r < p1 => {individual.k+=1; 1},
                     r if r < p2 => {individual.k+=1; -1},
                     _ => 0,

@@ -2,12 +2,13 @@ use std::collections::HashMap;
 
 use crate::data::Data;
 use crate::individual::Individual;
+use crate::FloatType;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 
 pub struct Population {
     pub individuals: Vec<Individual>,
-    pub fit: Vec<f64>
+    pub fit: Vec<FloatType>
 }
 
 impl Population {
@@ -46,11 +47,11 @@ impl Population {
         self
     }
 
-    pub fn evaluate_with_k_penalty(& mut self, data: &Data, k_penalty: f64) -> & mut Self {
+    pub fn evaluate_with_k_penalty(& mut self, data: &Data, k_penalty: FloatType) -> & mut Self {
         self.fit = self.individuals.iter_mut().map(|i|{
             //i.evaluate(data); 
             let auc=i.compute_auc(data);
-            auc - i.k as f64 * k_penalty
+            auc - i.k as FloatType * k_penalty
         }).collect();
         self
     }
@@ -97,8 +98,8 @@ impl Population {
     
 
     /// select first element of a (sorted) population
-    pub fn select_first_pct(&self, pct: f64) -> (Population,usize) {
-        let n: usize = (self.individuals.len() as f64 * pct/100.0) as usize;
+    pub fn select_first_pct(&self, pct: FloatType) -> (Population,usize) {
+        let n: usize = (self.individuals.len() as FloatType * pct/100.0) as usize;
 
         (
             Population {
@@ -109,18 +110,18 @@ impl Population {
         )
     }
 
-    pub fn select_random_above_n(&self, pct: f64, n: usize, rng: &mut ChaCha8Rng) -> Population {
-        let k = ( self.individuals.len() as f64 * pct / 100.0 ) as usize;
+    pub fn select_random_above_n(&self, pct: FloatType, n: usize, rng: &mut ChaCha8Rng) -> Population {
+        let k = ( self.individuals.len() as FloatType * pct / 100.0 ) as usize;
 
         let combined = self.individuals.iter()
             .zip(self.fit.iter())
             .skip(n)
-            .collect::<Vec<(&Individual,&f64)>>();
+            .collect::<Vec<(&Individual,&FloatType)>>();
             
             
         let selected = combined.choose_multiple(rng, k);
 
-        let (individuals,fit):(Vec<Individual>,Vec<f64>) = selected.map(|(x,f)| ((**x).clone(),*f))
+        let (individuals,fit):(Vec<Individual>,Vec<FloatType>) = selected.map(|(x,f)| ((**x).clone(),*f))
             .unzip();
 
         Population {
