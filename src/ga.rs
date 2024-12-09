@@ -42,7 +42,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         if auc_values.len()>param.ga.min_epochs {
             //let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
             //let divergence = auc_values[auc_values.len()-10..].iter().map(|x| (*x-avg).abs()).sum::<f64>();
-            if sorted_pop.individuals[0].n>param.ga.max_age_best_model {
+            if sorted_pop.individuals[0].n-epoch>param.ga.max_age_best_model {
                 //println!("AUCs stay stable for the last 10 rounds (divergence {} is below {}), stopping",divergence,avg*param.ga.max_divergence);
                 break
             }
