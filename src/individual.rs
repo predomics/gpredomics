@@ -6,6 +6,7 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::fmt;
 use std::iter::once;
+use rand::prelude::IteratorRandom;
 
 
 pub struct Individual {
@@ -224,18 +225,18 @@ impl Individual {
     }
 
     /// 
-    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<usize>, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
+    pub fn random_select_k(reference_size: usize, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
     
-        let k: usize=rng.gen_range(1..feature_selection.len());
+        let k: usize=rng.gen_range(1..reference_size);
 
         // Randomly pick k values
-        let random_values = feature_selection.choose_multiple(rng, k as usize);
+        let random_values = (0..reference_size).choose_multiple(rng, k as usize);
         let mut chosen_feature_sign: HashMap<usize,u8>=HashMap::new();
         for i in random_values {
-            chosen_feature_sign.insert(*i, feature_sign[i]);
+            chosen_feature_sign.insert(i, feature_sign[&i]);
         }
         
         let mut features:Vec<i8> = Vec::new();
@@ -253,7 +254,7 @@ impl Individual {
                 features.push(0);
             }
         }
-        //println!("Model {:?}",features);
+
         Individual {
             features: features,
             fit_method: String::from("AUC"),
@@ -373,6 +374,14 @@ impl Individual {
         }
 
         importances
+    }
+
+    pub fn to_str(&self, feature_names: &Vec<String>) -> String {
+        self.features.iter().enumerate().filter(|i| {*i.1!=0})
+                                    .map(|i| {
+                                        if *i.1==-1 {format!("-{}",feature_names[i.0])} 
+                                        else {format!("{}",feature_names[i.0])} })
+                                    .collect::<Vec<String>>().join(", ")
     }
 
 

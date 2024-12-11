@@ -8,7 +8,7 @@ use rand::seq::index::sample;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 
-pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
+pub fn ga(mut data: Data, param: &Param) ->(Vec<Population>,Vec<String>) {
     // generate a random population with a given size  (and evaluate it for selection)
     let mut pop = Population::new();
     let mut epoch:usize = 0;
@@ -17,12 +17,12 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
     //println!("Selecting features");
-    data.select_features(param);
-    print!("| Features: #{} ",data.feature_selection.len());
+    data = data.select_features(param);
+    print!("| Features: #{} ",data.feature_len);
 
     //println!("Generate initial population");
-    pop.generate(param.ga.population_size,data, &mut rng);
-    pop.evaluate_with_k_penalty(data, param.ga.kpenalty);
+    pop.generate(param.ga.population_size, &data, &mut rng);
+    pop.evaluate_with_k_penalty(&data, param.ga.kpenalty);
     
     loop {
         epoch += 1;
@@ -42,7 +42,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         if auc_values.len()>param.ga.min_epochs {
             //let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
             //let divergence = auc_values[auc_values.len()-10..].iter().map(|x| (*x-avg).abs()).sum::<f64>();
-            if sorted_pop.individuals[0].n-epoch>param.ga.max_age_best_model {
+            if epoch-sorted_pop.individuals[0].n+1>param.ga.max_age_best_model {
                 //println!("AUCs stay stable for the last 10 rounds (divergence {} is below {}), stopping",divergence,avg*param.ga.max_divergence);
                 break
             }
@@ -51,8 +51,8 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         new_pop.add(select_parents(&sorted_pop, param, &mut rng));
 
         let mut children = cross_over(&new_pop,param,data.feature_len, &mut rng);
-        mutate(&mut children, param, &data.feature_selection, &mut rng);
-        children.evaluate_with_k_penalty(data, param.ga.kpenalty);
+        mutate(&mut children, param, data.feature_len, &mut rng);
+        children.evaluate_with_k_penalty(&data, param.ga.kpenalty);
         for i in children.individuals.iter_mut() {
             i.n = epoch;
         }
@@ -68,7 +68,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
 
     }
 
-    populations
+    (populations,data.features)
     
 }
 
@@ -110,10 +110,9 @@ fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut
 }
 
 /// change a sign, remove a variable, add a new variable
-fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<usize>, rng: &mut ChaCha8Rng) {
+fn mutate(children: &mut Population, param: &Param, feature_len: usize, rng: &mut ChaCha8Rng) {
     let p1 = param.ga.mutation_non_null_chance_pct/200.0;
     let p2= 2.0*p1;
-    let feature_len = feature_selection.len();
 
     if param.ga.mutated_children_pct > 0.0 {
         let num_mutated_individuals = (children.individuals.len() as f64 
@@ -128,10 +127,7 @@ fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<usiz
         for idx in individuals_to_mutate {
             // Mutate features for each selected individual
             let individual = &mut children.individuals[idx]; // Get a mutable reference
-            let feature_indices = sample(rng, feature_len, num_mutated_features)
-                            .iter()
-                            .map(|i| {feature_selection[i]}).collect::<Vec<usize>>();
-
+            let feature_indices = (0..feature_len).choose_multiple(rng, num_mutated_features);
 
             for i in feature_indices {
                 if individual.features[i]!=0 { individual.k-=1 }

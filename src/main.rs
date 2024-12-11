@@ -50,7 +50,7 @@ fn random_run(param: &Param) {
         let auc = my_individual.compute_auc(&my_data);
         if (auc>auc_max) {auc_max=auc;best_individual=my_individual;}
     }
-    println!("AUC max: {} model: {:?}",auc_max, best_individual.features);
+    println!("AUC max: {} model: {}",auc_max, best_individual.to_str(&my_data.features));
 }
 
 
@@ -62,20 +62,21 @@ fn ga_run(param: &Param) {
     my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
     println!("{:?}", my_data); 
     
-    let mut populations = ga::ga(&mut my_data,&param);
+    let (mut populations, features) = ga::ga(my_data,&param);
 
     let mut population=populations.pop().unwrap();
 
     if param.data.Xtest.len()>0 {
         let mut test_data=Data::new();
         test_data.load_data(&param.data.Xtest, &param.data.ytest);
+        test_data = test_data.filter(&features);
         
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
             let auc=individual.auc;
             let test_auc=individual.compute_auc(&test_data);
             let (threshold, accuracy, sensitivity, specificity) = individual.compute_threshold_and_metrics(&test_data);
-            println!("Model #{} [k={}]: train AUC {}  | test AUC {} | threshold {} | accuracy {} | sensitivity {} | specificity {} | {:?}",
-                        i+1,individual.k,auc,test_auc,threshold,accuracy,sensitivity,specificity,individual);
+            println!("Model #{} [k={}]: train AUC {}  | test AUC {} | threshold {} | accuracy {} | sensitivity {} | specificity {} | {}",
+                        i+1,individual.k,auc,test_auc,threshold,accuracy,sensitivity,specificity,individual.to_str(&features));
         }    
     }
     else {
@@ -105,27 +106,29 @@ fn gacv_run(param: &Param) {
         let mut test_data=Data::new();
         test_data.load_data(&param.data.Xtest, &param.data.ytest);
         
-        for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-            let holdout_auc=best_model.compute_auc(&test_data);
-            let (threshold, accuracy, sensitivity, specificity) = best_model.compute_threshold_and_metrics(&test_data);
+        for (i,(mut best_model, best_model_features, train_auc, test_auc)) in results.into_iter().enumerate() {
+            let filtered_test_data = test_data.clone().filter(&best_model_features);
+            let holdout_auc=best_model.compute_auc(&filtered_test_data);
+            let (threshold, accuracy, sensitivity, specificity) = best_model.compute_threshold_and_metrics(&filtered_test_data);
             //println!("Model #{} [k={}]: train AUC {:.3} | test AUC {:.3} | holdout AUC {:.3} | {:?}",i+1,best_model.k,train_auc,test_auc,holdout_auc,best_model);
-            println!("Model #{} [gen:{}] [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
-                        i+1,best_model.n,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
+            println!("Model #{} [gen:{}] [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {}",
+                        i+1,best_model.n,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model.to_str(&best_model_features));
             print!("Features importance on train+test: ");
-            for feature_importance in best_model.compute_oob_feature_importance(&my_data, param.ga.feature_importance_permutations,&mut rng) {
+            let filtered_data = my_data.clone().filter(&best_model_features);
+            for feature_importance in best_model.compute_oob_feature_importance(&filtered_data, param.ga.feature_importance_permutations,&mut rng) {
                 print!("[{:.4}] ",feature_importance);
             }
             println!();
             print!("Features importance on holdout: ");
-            for feature_importance in best_model.compute_oob_feature_importance(&test_data, param.ga.feature_importance_permutations,&mut rng) {
+            for feature_importance in best_model.compute_oob_feature_importance(&filtered_test_data, param.ga.feature_importance_permutations,&mut rng) {
                 print!("[{:.4}] ",feature_importance);
             }
             println!();
         }    
     }
     else {
-        for (i,(best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-            println!("Model #{} [gen:{}] [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.n,best_model.k,train_auc,test_auc,best_model);
+        for (i,(best_model, best_model_features, train_auc, test_auc)) in results.into_iter().enumerate() {
+            println!("Model #{} [gen:{}] [k={}]: train AUC {:.3} | test AUC {:.3} | {}",i+1,best_model.n,best_model.k,train_auc,test_auc,best_model.to_str(&best_model_features));
         }    
     }
 

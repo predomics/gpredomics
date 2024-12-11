@@ -52,11 +52,11 @@ impl CV {
     }
 
     pub fn pass(
-        &mut self,
-        algo: fn(&mut Data, &Param) -> Vec<Population>,
+        self,
+        algo: fn(Data, &Param) -> (Vec<Population>,Vec<String>),
         param: &Param,
         thread_number: usize,
-    ) -> Vec<(Individual, f64, f64)> {
+    ) -> Vec<(Individual, Vec<String>, f64, f64)> {
         // Configure the thread pool with the specified thread number
         let thread_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(thread_number)
@@ -68,17 +68,19 @@ impl CV {
 
         thread_pool.install(|| {
             self.datasets
-                .par_iter_mut()
-                .zip(self.folds.par_iter_mut())
+                .into_iter()
+                .zip(self.folds.into_iter())
                 .enumerate()
-                .for_each(|(i, (train, test))| {
+                .for_each(|(i, (train, mut test))| {
                     // Train and evaluate model
                     println!("|  Fold #{}  ", i + 1);
 
+                    let (mut algo_results,algo_features) = algo(train, param);
                     let mut best_model: Individual =
-                        algo(train, param).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
+                        algo_results.pop().unwrap().individuals.into_iter().take(1).next().unwrap();
                     let train_auc = best_model.auc;
-                    let test_auc = best_model.compute_auc(test);
+                    test = test.filter(&algo_features);
+                    let test_auc = best_model.compute_auc(&test);
 
                     println!(
                         "|  Train AUC: {:.3}  |  Test AUC: {:.3}",
@@ -89,7 +91,7 @@ impl CV {
                     results_per_fold
                         .lock()
                         .unwrap()
-                        .push((best_model, train_auc, test_auc));
+                        .push((best_model, algo_features, train_auc, test_auc));
                 });
         });
 

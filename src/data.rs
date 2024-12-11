@@ -10,10 +10,8 @@ pub struct Data {
     pub X: Vec<Vec<f64>>,         // Matrix for feature values
     pub y: Vec<u8>,              // Vector for target values
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
-    pub samples: Vec<String>,     // Sample names (from the first row of X.tsv)
-    pub univariate_order: Vec<u32>,     // Order of univariate features
+    pub samples: Vec<String>,     // Sample names (from the first row of X.tsv)    // Order of univariate features
     pub feature_class_sign: HashMap<usize, u8>, // Sign for each feature
-    pub feature_selection: Vec<usize>,
     pub feature_len: usize,
     pub sample_len: usize
 }
@@ -26,9 +24,7 @@ impl Data {
             y: Vec::new(),
             features: Vec::new(),
             samples: Vec::new(),
-            univariate_order: Vec::new(),
             feature_class_sign: HashMap::new(),
-            feature_selection: Vec::new(),
             feature_len: 0,
             sample_len: 0
         }
@@ -105,72 +101,31 @@ impl Data {
         Ok(())
     }
 
-    /*pub fn compute_feature_stats(&self) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
-        // Number of features
-        let num_features = self.features.len();
-        
-        // Number of classes (assumed to be 0, 1, 2)
-        let num_classes = 3;
-
-        // Initialize accumulators
-        let mut sums = vec![vec![0.0; num_features]; num_classes];
-        let mut counts = vec![vec![0; num_features]; num_classes];
-        let mut non_null_counts = vec![vec![0; num_features]; num_classes];
-
-        // Iterate over rows in X and their corresponding class in y
-        for (row, &class) in self.X.iter().zip(self.y.iter()) {
-            assert!(class < num_classes as u8, "Invalid class label in y");
-
-            for (j, &value) in row.iter().enumerate() {
-                if value != 0.0 {
-                    sums[class as usize][j] += value;
-                    counts[class as usize][j] += 1;
-                }
-                non_null_counts[class as usize][j] += 1;
-            }
-        }
-
-        // Calculate averages and prevalences
-        let averages: Vec<Vec<f64>> = (0..num_classes)
-            .map(|class| {
-                (0..num_features)
-                    .map(|j| {
-                        if counts[class][j] > 0 {
-                            sums[class][j] / counts[class][j] as f64
-                        } else {
-                            0.0
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-
-        let prevalences: Vec<Vec<f64>> = (0..num_classes)
-            .map(|class| {
-                (0..num_features)
-                    .map(|j| non_null_counts[class][j] as f64 / y.len() as f64)
-                    .collect()
-            })
-            .collect();
-
-        (averages, prevalences)
-    }*/
-
-    pub fn select_features(&mut self, param:&Param) {
-        self.feature_selection = Vec::new();
+    pub fn select_features(mut self, param:&Param) -> Data {
         self.feature_class_sign = HashMap::new();
 
         let method=if param.data.pvalue_method=="studentt" { compare_classes_studentt } 
             else { compare_classes_wilcoxon };
 
-        for (i,row) in self.X.iter().enumerate() {
-            match method(row, &(self.y), param.data.feature_maximal_pvalue, 
+        let mut new_x: Vec<Vec<f64>> = Vec::new();
+        let mut new_features: Vec<String> = Vec::new();
+        let mut i: usize= 0;
+        
+        for (row,feature) in self.X.into_iter().zip(self.features.into_iter()) {
+            match method(&row, &(self.y), param.data.feature_maximal_pvalue, 
                         param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
-                0 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 0);},
-                1 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 1);},
+                0 => {new_x.push(row); new_features.push(feature); self.feature_class_sign.insert(i, 0); i+=1; },
+                1 => {new_x.push(row); new_features.push(feature); self.feature_class_sign.insert(i, 1); i+=1; },
                 _ => {}
             }
+            if i%100000==0 {print!(".")}
         }
+
+        self.X = new_x;
+        self.features = new_features;
+        self.feature_len = self.features.len();
+
+        self
     }
 
     pub fn subset(&self, indices: Vec<usize>) -> Data {
@@ -181,12 +136,33 @@ impl Data {
             y: indices.iter().map(|i| {self.y[*i]}).collect(),
             features: self.features.clone(),
             samples: indices.iter().map(|i| {self.samples[*i].clone()}).collect(),
-            univariate_order: Vec::new(),
             feature_class_sign: HashMap::new(),
-            feature_selection: Vec::new(),
             feature_len: self.feature_len,
             sample_len: indices.len()
         }
+    }
+
+    pub fn filter(mut self, features: &Vec<String>) -> Data {
+        let mut new_x: Vec<Vec<f64>> = Vec::new();
+        let mut new_features: Vec<String> = Vec::new();
+
+        for target_feature in features {
+            loop {   
+                let current_feature = self.features.remove(0);
+                let current_row = self.X.remove(0);
+
+                if &current_feature==target_feature {
+                    new_x.push(current_row);
+                    new_features.push(current_feature);
+                    break
+                }
+            }
+        }
+
+        self.X = new_x;
+        self.features = new_features;
+
+        self
     }
 
     pub fn clone(&self) -> Data {
@@ -195,9 +171,7 @@ impl Data {
             y: self.y.clone(),
             features: self.features.clone(),
             samples: self.samples.clone(),
-            univariate_order: Vec::new(),
             feature_class_sign: self.feature_class_sign.clone(),
-            feature_selection: self.feature_selection.clone(),
             feature_len: self.feature_len,
             sample_len: self.sample_len
         }
@@ -209,9 +183,7 @@ impl Data {
             y: self.y.clone(),
             features: self.features.clone(),
             samples: self.samples.clone(),
-            univariate_order: Vec::new(),
             feature_class_sign: self.feature_class_sign.clone(),
-            feature_selection: self.feature_selection.clone(),
             feature_len: self.feature_len,
             sample_len: self.sample_len
         }
