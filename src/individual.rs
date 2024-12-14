@@ -1,7 +1,8 @@
-use crate::utils::generate_random_vector;
+use crate::utils::{generate_random_vector,shuffle_row};
 use crate::data::Data;
 use rand::{rngs::ThreadRng, seq::SliceRandom}; // Provides the `choose_multiple` method
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::fmt;
@@ -9,11 +10,11 @@ use std::iter::once;
 
 
 pub struct Individual {
-    pub features: Vec<i8>, /// a vector of feature indices with their corresponding signs
+    pub features: HashMap<usize,i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices
     pub fit_method: String, // AUC, accuracy, etc.
     pub auc: f64, // accuracy of the model
-    pub k: u32, // nb of variables used
+    pub k: usize, // nb of variables used
     pub n: usize // generation or other counter important in the strategy 
 }
 
@@ -47,7 +48,7 @@ impl Individual {
 
     pub fn new() -> Individual {
         Individual {
-            features: Vec::new(),
+            features: HashMap::new(),
             fit_method: String::from("AUC"),
             auc: 0.0,
             k: 0,
@@ -66,20 +67,24 @@ impl Individual {
     }
 
     pub fn evaluate(&self, d: &Data) -> Vec<f64> {
-        let mut value=vec![0.0; d.samples.len()];
-        for (i,row) in d.X.iter().enumerate() {
-            for (j,x) in row.iter().enumerate() {
-                value[j]+=self.features[i] as f64*x;
+        let mut value=Vec::new();
+        for i in 0..d.sample_len {
+            let mut current_value =0.0;
+            for (j,coef) in self.features.iter() {
+                if d.X.contains_key(&(i,*j)) {
+                    current_value += d.X[&(i,*j)] * *coef as f64;
+                }
             }
+            value.push(current_value);
         }
         value
     }
 
-    pub fn evaluate_from_features(&self, X: &Vec<Vec<f64>>) -> Vec<f64> {
-        let mut value=vec![0.0; X[0].len()];
-        for (i,row) in X.iter().enumerate() {
-            for (j,x) in row.iter().enumerate() {
-                value[j]+=self.features[i] as f64*x;
+    pub fn evaluate_from_features(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize) -> Vec<f64> {
+        let mut value=vec![0.0; sample_len];
+        for ((i ,j), feature_value) in X.iter() {
+            if self.features.contains_key(j) {
+                value[*i]+=*feature_value * self.features[j] as f64;
             }
         }
         value
@@ -92,13 +97,13 @@ impl Individual {
     }
 
     /// Compute AUC based on X and y rather than a complete Data object
-    pub fn compute_auc_from_features(&mut self, X: &Vec<Vec<f64>>, y: &Vec<u8>) -> f64 {
-        let value = self.evaluate_from_features(X);
+    pub fn compute_auc_from_features(&mut self, X: &HashMap<(usize,usize),f64>, sample_len: usize, y: &Vec<f64>) -> f64 {
+        let value = self.evaluate_from_features(X, sample_len);
         self.compute_auc_from_value(value, y)
     }
 
     /// Compute AUC based on the target vector y
-    fn compute_auc_from_value(&mut self, value: Vec<f64>, y: &Vec<u8>) -> f64 {
+    fn compute_auc_from_value(&mut self, value: Vec<f64>, y: &Vec<f64>) -> f64 {
         let mut thresholds: Vec<(usize,&f64)> = value.iter().enumerate().collect::<Vec<(usize,&f64)>>();
 
         thresholds.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -113,8 +118,8 @@ impl Individual {
         let mut fn_count:usize=0;
 
         for y_val in y.iter() {
-            if *y_val == 0 {fp += 1}
-            else if *y_val == 1 {tp += 1}
+            if *y_val == 0.0 {fp += 1}
+            else if *y_val == 1.0 {tp += 1}
         }
         
         for (i,_) in thresholds {
@@ -134,8 +139,8 @@ impl Individual {
 
             roc_points.push((fpr, tpr));
             
-            if y[i] == 1 { tp-=1; fn_count+=1 }
-            else if y[i] == 0 { tn+=1; fp-=1 }
+            if y[i] == 1.0 { tp-=1; fn_count+=1 }
+            else if y[i] == 0.0 { tn+=1; fp-=1 }
         }
 
         let tpr = if (tp + fn_count) > 0 {
@@ -205,14 +210,17 @@ impl Individual {
     }   
 
     pub fn count_k(&mut self) {
-        self.k = (self.features).iter().map(|x| {if *x==0 {0} else {1}}).sum();
+        self.k = self.features.len();
     }
 
     /// completely random individual, not very usefull
     pub fn random(d: &Data, rng: &mut ChaCha8Rng) -> Individual {
 
-        let features = generate_random_vector(d.feature_len, rng);
-        let k = (&features).iter().map(|x| {if *x==0 {0} else {1}}).sum();
+        let mut features: HashMap<usize,i8> = HashMap::new(); 
+        for (i,coef) in generate_random_vector(d.feature_len, rng).iter().enumerate() {
+            if *coef!=0 {features.insert(i, *coef);}
+        }
+        let k=features.len();
 
         Individual {
             features: features,
@@ -223,7 +231,7 @@ impl Individual {
         }
     }
 
-    /// 
+    /// randomly generated individual amoung the selected features
     pub fn random_select_k(reference_size: usize, feature_selection: &Vec<usize>, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
@@ -238,19 +246,16 @@ impl Individual {
             chosen_feature_sign.insert(*i, feature_sign[i]);
         }
         
-        let mut features:Vec<i8> = Vec::new();
+        let mut features:HashMap<usize,i8> = HashMap::new();
         // Generate a vector of random values: 1, 0, or -1
         for i in 0..reference_size {
             if chosen_feature_sign.contains_key(&i) {
                 if chosen_feature_sign[&i]==0 {
-                    features.push(-1);
+                    features.insert(i,-1);
                 }
                 else {
-                    features.push(1);
+                    features.insert(i,1);
                 }
-            }
-            else {
-                features.push(0);
             }
         }
         //println!("Model {:?}",features);
@@ -258,7 +263,7 @@ impl Individual {
             features: features,
             fit_method: String::from("AUC"),
             auc: 0.0,
-            k: k as u32,
+            k: k,
             n: 0
         }
 
@@ -273,16 +278,16 @@ impl Individual {
     /// return (threshold, accuracy, sensitivity, specificity)
     pub fn compute_threshold_and_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
         let value = self.evaluate(d); // Predicted probabilities
-        let mut combined: Vec<(f64, u8)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
+        let mut combined: Vec<(f64, f64)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
         
         // Sort by predicted probabilities
         combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
         // Initialize confusion matrix
-        let mut tp = d.y.iter().filter(|&&label| label == 1).count();
+        let mut tp = d.y.iter().filter(|&&label| label == 1.0).count();
         let mut fn_count = 0;
         let mut tn = 0;
-        let mut fp = d.y.len() - tp;
+        let mut fp = d.y.iter().filter(|&&label| label == 0.0).count();
 
         let mut best_threshold = 0.0;
         let mut best_youden_index = f64::NEG_INFINITY;
@@ -293,11 +298,11 @@ impl Individual {
 
             // Update confusion matrix based on current threshold
             match label {
-                1 => {
+                1.0 => {
                     tp -= 1;
                     fn_count += 1;
                 }
-                0 => {
+                0.0 => {
                     fp -= 1;
                     tn += 1;
                 }
@@ -338,11 +343,9 @@ impl Individual {
     }
 
 
+    /// return the index of features used in the individual
     fn features_index(&self) -> Vec<usize> {
-        self.features.iter().enumerate()
-            .filter(|x| {*x.1!=0})
-            .map(|x|{x.0})
-            .collect()
+        self.features.keys().copied().collect::<Vec<usize>>()
     }
 
     /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
@@ -358,10 +361,11 @@ impl Individual {
             for _ in 0..permutations {
                 // Clone the feature matrix and shuffle the current feature row
                 let mut X_permuted = data.X.clone();
-                X_permuted[*feature_idx].shuffle(rng);
+                //X_permuted[*feature_idx].shuffle(rng);
+                shuffle_row(&mut X_permuted, data.sample_len, *feature_idx, rng);
 
                 // Recompute AUC with the permuted feature
-                let permuted_auc = self.compute_auc_from_features(&X_permuted, &data.y);
+                let permuted_auc = self.compute_auc_from_features(&X_permuted, data.sample_len,&data.y);
                 permuted_auc_sum += permuted_auc;
             }
 
@@ -380,10 +384,9 @@ impl Individual {
 
 impl fmt::Debug for Individual {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut desc = self.features.iter().enumerate()
+        let mut desc = self.features.iter()
                 .map(|(i,feature)| {
-                    match feature {
-                        0 => "".to_string(),
+                    match *feature {
                         1 => format!("[{}] ",i+1),
                         -1 => format!("-[{}] ",i+1),
                         other => format!("{}[{}] ",other,i+1)

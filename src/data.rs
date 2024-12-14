@@ -4,14 +4,13 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::fmt;
 use crate::param::Param;
-use crate::utils::{compare_classes_studentt, compare_classes_wilcoxon };
-
+use statrs::distribution::{ContinuousCDF, StudentsT};
+use statrs::distribution::Normal;// For random shuffling
 pub struct Data {
-    pub X: Vec<Vec<f64>>,         // Matrix for feature values
-    pub y: Vec<u8>,              // Vector for target values
+    pub X: HashMap<(usize,usize),f64>,         // Matrix for feature values
+    pub y: Vec<f64>,              // Vector for target values
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
-    pub samples: Vec<String>,     // Sample names (from the first row of X.tsv)
-    pub univariate_order: Vec<u32>,     // Order of univariate features
+    pub samples: Vec<String>,
     pub feature_class_sign: HashMap<usize, u8>, // Sign for each feature
     pub feature_selection: Vec<usize>,
     pub feature_len: usize,
@@ -22,11 +21,10 @@ impl Data {
     /// Create a new `Data` instance with default values
     pub fn new() -> Data {
         Data {
-            X: Vec::new(),
+            X: HashMap::new(),
             y: Vec::new(),
             features: Vec::new(),
             samples: Vec::new(),
-            univariate_order: Vec::new(),
             feature_class_sign: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 0,
@@ -50,7 +48,7 @@ impl Data {
         self.samples = trimmed_first_line.split('\t').skip(1).map(String::from).collect();
 
         // Read the remaining lines for feature names and data
-        for line in reader_X.lines() {
+        for (i,line) in reader_X.lines().enumerate() {
             let line = line?;
             let trimmed_line= line.strip_suffix('\n')
                 .or_else(|| line.strip_suffix("\r\n"))
@@ -63,10 +61,12 @@ impl Data {
             }
 
             // Remaining fields are the feature values
-            let row: Vec<f64> = fields
-                .map(|value| value.parse::<f64>().unwrap_or(0.0))
-                .collect();
-            self.X.push(row);
+            for (j,value) in fields.enumerate() {
+                if let Ok(num_val)=value.parse::<f64>() {
+                    self.X.insert((i,j),num_val);
+                }
+            }
+
         }
 
         // Open and read the y.tsv file
@@ -86,7 +86,7 @@ impl Data {
             if let Some(sample_name) = fields.next() {
                 // Second field is the target value
                 if let Some(value) = fields.next() {
-                    let target: u8 = value.parse()?;
+                    let target: f64 = value.parse()?;
                     y_map.insert(sample_name.to_string(), target);
                 }
             }
@@ -96,7 +96,7 @@ impl Data {
         self.y = self
             .samples
             .iter()
-            .map(|sample_name| *y_map.get(sample_name).unwrap_or(&0))
+            .map(|sample_name| *y_map.get(sample_name).unwrap_or(&0.0))
             .collect();
 
         self.feature_len = self.features.len();
@@ -105,83 +105,199 @@ impl Data {
         Ok(())
     }
 
-    /*pub fn compute_feature_stats(&self) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
-        // Number of features
-        let num_features = self.features.len();
-        
-        // Number of classes (assumed to be 0, 1, 2)
-        let num_classes = 3;
-
-        // Initialize accumulators
-        let mut sums = vec![vec![0.0; num_features]; num_classes];
-        let mut counts = vec![vec![0; num_features]; num_classes];
-        let mut non_null_counts = vec![vec![0; num_features]; num_classes];
-
-        // Iterate over rows in X and their corresponding class in y
-        for (row, &class) in self.X.iter().zip(self.y.iter()) {
-            assert!(class < num_classes as u8, "Invalid class label in y");
-
-            for (j, &value) in row.iter().enumerate() {
-                if value != 0.0 {
-                    sums[class as usize][j] += value;
-                    counts[class as usize][j] += 1;
+    /// for a given feature (chosen as the #j line of X ) answer 0 if the feature is more significantly associated with class 0, 1 with class 1, 2 otherwise 
+    /// using student T e.g. for normally ditributed features
+    fn compare_classes_studentt(&self, j: usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
+        // Separate values into two classes
+        let class_0: Vec<f64> = (0..self.sample_len).filter(|i| {self.X.contains_key(&(*i,j))})
+            .filter(|i| {self.y[*i] == 0.0})
+            .map(|i| {self.X[&(i,j)]}).collect();
+    
+        let class_1: Vec<f64> = (0..self.sample_len).filter(|i| {self.X.contains_key(&(*i,j))})
+            .filter(|i| {self.y[*i] == 1.0})
+            .map(|i| {self.X[&(i,j)]}).collect();
+    
+        // Calculate means
+        let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
+        let mean_1 = class_1.iter().copied().sum::<f64>() / class_1.len() as f64;
+    
+        if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
+    
+        // Calculate t-statistic (simple, equal variance assumption)
+        let n0 = class_0.len() as f64;
+        let n1 = class_1.len() as f64;
+        let var0 = class_0.iter().map(|x| (x - mean_0).powi(2)).sum::<f64>() / (n0 - 1.0);
+        let var1 = class_1.iter().map(|x| (x - mean_1).powi(2)).sum::<f64>() / (n1 - 1.0);
+        let prev0 = class_0.iter().filter(|&&x| x != 0.0).count() as f64 / n0;
+        let prev1 = class_1.iter().filter(|&&x| x != 0.0).count() as f64 / n1;
+        let pooled_std = ((var0 / n0) + (var1 / n1)).sqrt();
+        if pooled_std > 0.0 {
+            let t_stat = (mean_0 - mean_1) / pooled_std;
+    
+            // Compute p-value
+            let degrees_of_freedom = (n0 + n1 - 2.0).round();
+            let t_dist = StudentsT::new(0.0, 1.0, degrees_of_freedom).unwrap();
+            //println!("t_stat {} n0 {} n1 {} var0 {} var1 {} prev0 {} prev1 {}",t_stat,n0,n1,var0,var1,prev0,prev1);
+            let cumulative = t_dist.cdf(t_stat.abs()); // CDF up to |t_stat|
+            let upper_tail = 1.0 - cumulative;         // Upper-tail area
+            let p_value = 2.0 * upper_tail;            // Two-tailed test
+    
+            // Interpretation
+            if (p_value < max_p_value) && (prev0 > min_prevalence || prev1 > min_prevalence) {
+                if mean_0 > mean_1 {
+                    0
+                } else {
+                    1
                 }
-                non_null_counts[class as usize][j] += 1;
+            } else {
+                2
             }
         }
+        else {2}
+    }
+    
 
-        // Calculate averages and prevalences
-        let averages: Vec<Vec<f64>> = (0..num_classes)
-            .map(|class| {
-                (0..num_features)
-                    .map(|j| {
-                        if counts[class][j] > 0 {
-                            sums[class][j] / counts[class][j] as f64
-                        } else {
-                            0.0
-                        }
-                    })
-                    .collect()
-            })
+    /// Same as above but using Wilcoxon this time: for a given feature (chosen as the #j line of X ) answer 0 if the feature is more significantly associated with class 0, 1 with class 1, 2 otherwise 
+    /// using Wilcoxon e.g. for sparse/log normal features
+    pub fn compare_classes_wilcoxon(&self, j:usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
+        // Separate values into two classes
+        let mut class_0: Vec<f64> = Vec::new();
+        let mut class_1: Vec<f64> = Vec::new();
+    
+        for i in 0..self.sample_len {
+            if self.y[i] == 0.0 && self.X.contains_key(&(i,j)) {
+                class_0.push(self.X[&(i,j)]);
+            } else if self.y[i] == 1.0 && self.X.contains_key(&(i,j)) {
+                class_1.push(self.X[&(i,j)]);
+            }
+        }
+    
+        // Check if both classes have enough data points for statistical testing
+        if class_0.is_empty() || class_1.is_empty() {
+            return 2; // Unable to compare due to insufficient data
+        }
+    
+        // Calculate means
+        let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
+        let mean_1 = class_1.iter().copied().sum::<f64>() / class_1.len() as f64;
+    
+        //println!("Means: {} vs {}",mean_0,mean_1);
+        if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
+    
+        // Compute prevalence for each class
+        let n0 = class_0.len() as f64;
+        let n1 = class_1.len() as f64;
+        let prev0 = n0 / (n0 + n1);
+        let prev1 = n1 / (n0 + n1);
+    
+        // Skip comparison if prevalence is below the minimum threshold
+        if prev0 < min_prevalence && prev1 < min_prevalence {
+            return 2;
+        }
+    
+        // Combine both classes with their labels
+        let mut combined: Vec<(f64, u8)> = class_0
+            .iter()
+            .map(|&value| (value, 0))
+            .chain(class_1.iter().map(|&value| (value, 1)))
             .collect();
+    
+        // Sort combined values by value, breaking ties arbitrarily
+        combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    
+        // Assign ranks
+        let mut ranks = vec![0.0; combined.len()];
+        let mut i = 0;
+        while i < combined.len() {
+            let start = i;
+            while i + 1 < combined.len() && combined[i].0 == combined[i + 1].0 {
+                i += 1;
+            }
+            let rank = (start + i + 1) as f64 / 2.0;
+            for j in start..=i {
+                ranks[j] = rank;
+            }
+            i += 1;
+        }
+    
+        // Compute rank sums
+        let rank_sum_0: f64 = combined
+            .iter()
+            .zip(ranks.iter())
+            .filter(|((_, class), _)| *class == 0)
+            .map(|(_, &rank)| rank)
+            .sum();
+    
+        // Compute U statistic
+        let u_stat = rank_sum_0 - (n0 * (n0 + 1.0)) / 2.0;
+    
+        // Compute p-value using normal approximation
+        let mean_u = n0 * n1 / 2.0;
+        let std_u = ((n0 * n1 * (n0 + n1 + 1.0)) / 12.0).sqrt();
+        let z = (u_stat - mean_u) / std_u;
+    
+        let normal_dist = Normal::new(0.0, 1.0).unwrap();
+        let p_value = 2.0 * (1.0 - normal_dist.cdf(z.abs())); // Two-tailed p-value
+    
+        // Interpretation
+        if p_value < max_p_value {
+            if rank_sum_0 > (n0 * n1 / 2.0) {
+                0
+            } else {
+                1
+            }
+        } else {
+            2
+        }
+    }
+    
 
-        let prevalences: Vec<Vec<f64>> = (0..num_classes)
-            .map(|class| {
-                (0..num_features)
-                    .map(|j| non_null_counts[class][j] as f64 / y.len() as f64)
-                    .collect()
-            })
-            .collect();
-
-        (averages, prevalences)
-    }*/
-
+    /// Fill feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
     pub fn select_features(&mut self, param:&Param) {
         self.feature_selection = Vec::new();
         self.feature_class_sign = HashMap::new();
 
-        let method=if param.data.pvalue_method=="studentt" { compare_classes_studentt } 
-            else { compare_classes_wilcoxon };
-
-        for (i,row) in self.X.iter().enumerate() {
-            match method(row, &(self.y), param.data.feature_maximal_pvalue, 
-                        param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
-                0 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 0);},
-                1 => {self.feature_selection.push(i); self.feature_class_sign.insert(i, 1);},
-                _ => {}
+        if param.data.pvalue_method=="studentt" { 
+            for j in 0..self.feature_len {
+                match self.compare_classes_studentt(j,param.data.feature_maximal_pvalue,
+                    param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
+                    0 => {self.feature_selection.push(j); self.feature_class_sign.insert(j, 0);},
+                    1 => {self.feature_selection.push(j); self.feature_class_sign.insert(j, 1);},
+                    _ => {}
+                }
             }
-        }
+        } 
+        else { 
+            for j in 0..self.feature_len {
+                match self.compare_classes_wilcoxon(j,param.data.feature_maximal_pvalue,
+                    param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
+                    0 => {self.feature_selection.push(j); self.feature_class_sign.insert(j, 0);},
+                    1 => {self.feature_selection.push(j); self.feature_class_sign.insert(j, 1);},
+                    _ => {}
+                }
+            }
+        };
+
+        
+        
     }
 
+    /// filter Data for some samples (represented by a Vector of indices)
     pub fn subset(&self, indices: Vec<usize>) -> Data {
+        let mut X: HashMap<(usize,usize),f64> = HashMap::new();
+        for i in indices.iter() {
+            for j in 0..self.feature_len {
+                if self.X.contains_key(&(*i,j)) {
+                    X.insert((*i,j), self.X[&(*i,j)]);
+                }
+            }
+        }
+
         Data {
-            X: self.X.iter().map(|row| { 
-                indices.iter().map(|i| {row[*i]}).collect()
-                }).collect(),
+            X: X,
             y: indices.iter().map(|i| {self.y[*i]}).collect(),
             features: self.features.clone(),
             samples: indices.iter().map(|i| {self.samples[*i].clone()}).collect(),
-            univariate_order: Vec::new(),
             feature_class_sign: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: self.feature_len,
@@ -195,7 +311,6 @@ impl Data {
             y: self.y.clone(),
             features: self.features.clone(),
             samples: self.samples.clone(),
-            univariate_order: Vec::new(),
             feature_class_sign: self.feature_class_sign.clone(),
             feature_selection: self.feature_selection.clone(),
             feature_len: self.feature_len,
@@ -203,13 +318,12 @@ impl Data {
         }
     }
 
-    pub fn clone_with_new_x(&self, X:Vec<Vec<f64>>) -> Data {
+    pub fn clone_with_new_x(&self, X:HashMap<(usize, usize), f64>) -> Data {
         Data {
             X: X,
             y: self.y.clone(),
             features: self.features.clone(),
             samples: self.samples.clone(),
-            univariate_order: Vec::new(),
             feature_class_sign: self.feature_class_sign.clone(),
             feature_selection: self.feature_selection.clone(),
             feature_len: self.feature_len,
@@ -220,8 +334,12 @@ impl Data {
     pub fn add(&mut self, other: &Data) {
         self.samples.extend_from_slice(&other.samples);
         self.y.extend_from_slice(&other.y);
-        for (i,row) in self.X.iter_mut().enumerate() {
-            row.extend_from_slice(&other.X[i]);
+        for j in 0..self.feature_len {
+            for i in 0..other.sample_len {
+                if other.X.contains_key(&(i,j)) {
+                    self.X.insert((i+self.sample_len,j), other.X[&(i,j)]);
+                }
+            }
         }
     }
 
@@ -239,11 +357,10 @@ impl fmt::Display for Data {
 
         writeln!(f, "X:                  {}",truncated_samples)?;
         // Limit to the first 20 rows
-        for (i, row) in self.X.iter().enumerate().take(20) {
-            let feature = &self.features[i]; // Use the feature name from self.features
-            let row_display: String = row
-                .iter()
-                .map(|value| format!("{:.2}", value))
+        for i in (0..self.sample_len).take(20) {
+            let feature = &self.features[i]; // Use the feature name from self.features 
+            let row_display: String = (0..self.feature_len)
+                .map(|j| {if self.X.contains_key(&(i,j)) {format!("{:.2}",self.X[&(i,j)])} else {"".to_string()}})
                 .collect::<Vec<_>>()
                 .join("\t");
 

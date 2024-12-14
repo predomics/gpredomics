@@ -19,15 +19,27 @@ fn basic_test() {
     println!("                          BASIC TEST\n-----------------------------------------------------");
     // define some data
     let mut my_data = Data::new();
-    my_data.X = vec! [ vec! [0.1,0.2,0.3], vec! [0.0, 0.0, 0.0], vec! [0.9,0.8,0.7] ];
+    //my_data.X = vec! [ vec! [0.1,0.2,0.3], vec! [0.0, 0.0, 0.0], vec! [0.9,0.8,0.7] ];
+    my_data.X.insert((0,0), 0.1);
+    my_data.X.insert((0,1), 0.2);
+    my_data.X.insert((0,2), 0.3);
+    my_data.X.insert((2,0), 0.9);
+    my_data.X.insert((2,1), 0.8);
+    my_data.X.insert((2,2), 0.7);    
+    my_data.feature_len = 3;
+    my_data.sample_len = 3;
+
+    
     my_data.samples = string_vec! ["a","b","c"];
     my_data.features = string_vec! ["msp1","msp2","msp3"];
-    my_data.y = vec! [0,1,1];
+    my_data.y = vec! [0.0,1.0,1.0];
     println!("{:?}", my_data);
 
     // create a model
     let mut my_individual = Individual::new();
-    my_individual.features = vec! [1,0,-1];
+    //my_individual.features = vec! [1.0,0.0,-1.0];
+    my_individual.features.insert(0, 1);
+    my_individual.features.insert(2, -1);
     println!("my individual: {:?}",my_individual.features);
     println!("my individual evaluation: {:?}",my_individual.evaluate(&my_data));
     // shoud display 1.0 (the AUC is 1.0)
@@ -135,6 +147,7 @@ fn gacv_run(param: &Param) {
 fn main() {
     let param= param::get("param.yaml".to_string()).unwrap();
     match param.general.algo.as_str() {
+        "basic" => basic_test(),
         "random" => random_run(&param),
         "ga" => ga_run(&param),
         "ga+cv" => gacv_run(&param),

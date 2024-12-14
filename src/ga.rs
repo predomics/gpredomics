@@ -97,8 +97,16 @@ fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut
                         .try_into()
                         .expect("Vec must have exactly 2 elements");
         let x=rng.gen_range(1..feature_len-1);
-        child.features = p1.features[..x].to_vec();
-        child.features.extend_from_slice(&p2.features[x..]);
+        for (i,val) in p1.features.iter() {
+            if i<&x {
+                child.features.insert(*i, *val);
+            }
+        }
+        for (i,val) in p2.features.iter() {
+            if i>=&x {
+                child.features.insert(*i, *val);
+            }
+        }
 
         child.count_k();
 
@@ -134,11 +142,11 @@ fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<usiz
 
 
             for i in feature_indices {
-                if individual.features[i]!=0 { individual.k-=1 }
-                individual.features[i] = match rng.gen::<f64>() {
-                    r if r < p1 => {individual.k+=1; 1},
-                    r if r < p2 => {individual.k+=1; -1},
-                    _ => 0,
+                if individual.features.contains_key(&i) { individual.k-=1; individual.features.remove(&i); }
+                match rng.gen::<f64>() {
+                    r if r < p1 => { individual.k+=1; individual.features.insert(i, 1); },
+                    r if r < p2 => { individual.k+=1; individual.features.insert(i, -1); },
+                    _ => {}
                 };
             }
         }
