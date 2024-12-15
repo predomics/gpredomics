@@ -379,14 +379,15 @@ impl Individual {
         importances
     }
 
-
 }
 
 impl fmt::Debug for Individual {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut desc = self.features.iter()
-                .map(|(i,feature)| {
-                    match *feature {
+        let mut sorted_keys: Vec<usize> = self.features.keys().cloned().collect();
+        sorted_keys.sort();
+        let mut desc = sorted_keys.iter()
+                .map(|i| {
+                    match self.features[i] {
                         1 => format!("[{}] ",i+1),
                         -1 => format!("-[{}] ",i+1),
                         other => format!("{}[{}] ",other,i+1)

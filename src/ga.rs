@@ -87,7 +87,7 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
 
 
 /// create children from parents
-fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut ChaCha8Rng) -> Population {
+pub fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut ChaCha8Rng) -> Population {
     let mut children=Population::new();
 
     for i in 0..(param.ga.population_size as usize-parents.individuals.len()) {
@@ -118,7 +118,7 @@ fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut
 }
 
 /// change a sign, remove a variable, add a new variable
-fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<usize>, rng: &mut ChaCha8Rng) {
+pub fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<usize>, rng: &mut ChaCha8Rng) {
     let p1 = param.ga.mutation_non_null_chance_pct/200.0;
     let p2= 2.0*p1;
     let feature_len = feature_selection.len();

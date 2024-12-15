@@ -15,11 +15,10 @@ use param::Param;
 use std::process;
 
 /// a very basic use
-fn basic_test() {
+fn basic_test(param: &Param) {
     println!("                          BASIC TEST\n-----------------------------------------------------");
     // define some data
     let mut my_data = Data::new();
-    //my_data.X = vec! [ vec! [0.1,0.2,0.3], vec! [0.0, 0.0, 0.0], vec! [0.9,0.8,0.7] ];
     my_data.X.insert((0,0), 0.1);
     my_data.X.insert((0,1), 0.2);
     my_data.X.insert((0,2), 0.3);
@@ -27,23 +26,38 @@ fn basic_test() {
     my_data.X.insert((2,1), 0.8);
     my_data.X.insert((2,2), 0.7);    
     my_data.feature_len = 3;
-    my_data.sample_len = 3;
-
-    
-    my_data.samples = string_vec! ["a","b","c"];
+    my_data.sample_len = 3;    my_data.samples = string_vec! ["a","b","c"];
     my_data.features = string_vec! ["msp1","msp2","msp3"];
     my_data.y = vec! [0.0,1.0,1.0];
+    my_data.feature_len = 3;
+    my_data.sample_len = 3;
     println!("{:?}", my_data);
 
     // create a model
     let mut my_individual = Individual::new();
-    //my_individual.features = vec! [1.0,0.0,-1.0];
     my_individual.features.insert(0, 1);
     my_individual.features.insert(2, -1);
     println!("my individual: {:?}",my_individual.features);
     println!("my individual evaluation: {:?}",my_individual.evaluate(&my_data));
     // shoud display 1.0 (the AUC is 1.0)
     println!("my individual AUC: {:?}",my_individual.compute_auc(&my_data));
+
+
+    let mut data2=Data::new();
+    data2.load_data(param.data.X.as_str(),param.data.y.as_str());
+    let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+    let parent1 = Individual::random(&data2, &mut rng);
+    let parent2 = Individual::random(&data2, &mut rng);
+    let mut parents=population::Population::new();
+    parents.individuals.push(parent1);
+    parents.individuals.push(parent2);
+    let mut children = ga::cross_over(&parents, &param, data2.feature_len, &mut rng);
+    for (i,individual) in parents.individuals.iter().enumerate() { println!("Parent #{}: {:?}",i,individual); }
+    for (i,individual) in children.individuals.iter().enumerate() { println!("Child #{}: {:?}",i,individual); }
+    let feature_selection:Vec<usize> = (0..data2.feature_len).collect();
+    ga::mutate(&mut children, param, &feature_selection, &mut rng);
+    for (i,individual) in children.individuals.iter().enumerate() { println!("Mutated Child #{}: {:?}",i,individual); }    
+
 }
 
 /// a more elaborate use with random models
@@ -147,7 +161,7 @@ fn gacv_run(param: &Param) {
 fn main() {
     let param= param::get("param.yaml".to_string()).unwrap();
     match param.general.algo.as_str() {
-        "basic" => basic_test(),
+        "basic" => basic_test(&param),
         "random" => random_run(&param),
         "ga" => ga_run(&param),
         "ga+cv" => gacv_run(&param),
