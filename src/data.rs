@@ -109,13 +109,13 @@ impl Data {
     /// using student T e.g. for normally ditributed features
     fn compare_classes_studentt(&self, j: usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
         // Separate values into two classes
-        let class_0: Vec<f64> = (0..self.sample_len).filter(|i| {self.X.contains_key(&(*i,j))})
+        let class_0: Vec<f64> = (0..self.sample_len)
             .filter(|i| {self.y[*i] == 0.0})
-            .map(|i| {self.X[&(i,j)]}).collect();
+            .map(|i| {*self.X.get(&(i,j)).unwrap_or(&0.0)}).collect();
     
-        let class_1: Vec<f64> = (0..self.sample_len).filter(|i| {self.X.contains_key(&(*i,j))})
+        let class_1: Vec<f64> = (0..self.sample_len)
             .filter(|i| {self.y[*i] == 1.0})
-            .map(|i| {self.X[&(i,j)]}).collect();
+            .map(|i| {*self.X.get(&(i,j)).unwrap_or(&0.0)}).collect();
     
         // Calculate means
         let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
