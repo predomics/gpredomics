@@ -56,15 +56,18 @@ pub fn split_into_balanced_random_chunks<T: std::clone::Clone>(vec: Vec<T>, p: u
 /// shuffle a feature
 pub fn shuffle_row(X: &mut HashMap<(usize, usize), f64>, sample_len: usize, feature: usize, rng: &mut ChaCha8Rng) {
     // Extract all the column indices and values for the given row
-    let mut feature_values: Vec<(usize, f64)> = (0..sample_len)
-        .filter_map(|i| X.get(&(i, feature)).map(|&val| (i, val)))
+    let mut feature_values: Vec<f64> = (0..sample_len)
+        .filter_map(|i| X.remove(&(i, feature)))
         .collect();
 
     // Shuffle the column indices
-    feature_values.shuffle(rng);
+    //feature_values.shuffle(rng);
+    let new_samples: Vec<usize> = (0..sample_len).collect::<Vec<usize>>()
+                        .choose_multiple(rng, feature_values.len()).copied().collect();
+
 
     // Update the matrix with shuffled values
-    for (_, &(i, value)) in feature_values.iter().enumerate() {
-        X.insert((i, feature), value);
+    for (value,new_sample) in feature_values.iter().zip(new_samples.iter()) {
+        X.insert((*new_sample, feature), *value);
     }
 }

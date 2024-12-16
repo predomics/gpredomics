@@ -345,7 +345,9 @@ impl Individual {
 
     /// return the index of features used in the individual
     fn features_index(&self) -> Vec<usize> {
-        self.features.keys().copied().collect::<Vec<usize>>()
+        let mut features = self.features.keys().copied().collect::<Vec<usize>>();
+        features.sort();
+        features
     }
 
     /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
