@@ -105,56 +105,6 @@ impl Data {
         Ok(())
     }
 
-    /*pub fn compute_feature_stats(&self) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
-        // Number of features
-        let num_features = self.features.len();
-        
-        // Number of classes (assumed to be 0, 1, 2)
-        let num_classes = 3;
-
-        // Initialize accumulators
-        let mut sums = vec![vec![0.0; num_features]; num_classes];
-        let mut counts = vec![vec![0; num_features]; num_classes];
-        let mut non_null_counts = vec![vec![0; num_features]; num_classes];
-
-        // Iterate over rows in X and their corresponding class in y
-        for (row, &class) in self.X.iter().zip(self.y.iter()) {
-            assert!(class < num_classes as u8, "Invalid class label in y");
-
-            for (j, &value) in row.iter().enumerate() {
-                if value != 0.0 {
-                    sums[class as usize][j] += value;
-                    counts[class as usize][j] += 1;
-                }
-                non_null_counts[class as usize][j] += 1;
-            }
-        }
-
-        // Calculate averages and prevalences
-        let averages: Vec<Vec<f64>> = (0..num_classes)
-            .map(|class| {
-                (0..num_features)
-                    .map(|j| {
-                        if counts[class][j] > 0 {
-                            sums[class][j] / counts[class][j] as f64
-                        } else {
-                            0.0
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-
-        let prevalences: Vec<Vec<f64>> = (0..num_classes)
-            .map(|class| {
-                (0..num_features)
-                    .map(|j| non_null_counts[class][j] as f64 / y.len() as f64)
-                    .collect()
-            })
-            .collect();
-
-        (averages, prevalences)
-    }*/
 
     pub fn select_features(&mut self, param:&Param) {
         self.feature_selection = Vec::new();
