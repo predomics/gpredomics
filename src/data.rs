@@ -48,7 +48,7 @@ impl Data {
         self.samples = trimmed_first_line.split('\t').skip(1).map(String::from).collect();
 
         // Read the remaining lines for feature names and data
-        for (j,line) in reader_X.lines().enumerate() {
+        for (feature,line) in reader_X.lines().enumerate() {
             let line = line?;
             let trimmed_line= line.strip_suffix('\n')
                 .or_else(|| line.strip_suffix("\r\n"))
@@ -61,10 +61,10 @@ impl Data {
             }
 
             // Remaining fields are the feature values
-            for (i,value) in fields.enumerate() {
+            for (sample,value) in fields.enumerate() {
                 if let Ok(num_val)=value.parse::<f64>() {
                     if num_val!=0.0 {
-                        self.X.insert((i,j),num_val);
+                        self.X.insert((sample,feature),num_val);
                     }
                 }
             }
@@ -104,7 +104,6 @@ impl Data {
         self.feature_len = self.features.len();
         self.sample_len = self.samples.len();
 
-        println!("Features: {}   Samples: {}",self.feature_len, self.sample_len);
 
         Ok(())
     }
@@ -295,25 +294,25 @@ impl Data {
     }
 
     /// filter Data for some samples (represented by a Vector of indices)
-    pub fn subset(&self, indices: Vec<usize>) -> Data {
+    pub fn subset(&self, samples: Vec<usize>) -> Data {
         let mut X: HashMap<(usize,usize),f64> = HashMap::new();
-        for i in indices.iter() {
-            for j in 0..self.feature_len {
-                if self.X.contains_key(&(*i,j)) {
-                    X.insert((*i,j), self.X[&(*i,j)]);
+        for (new_sample,sample) in samples.iter().enumerate() {
+            for feature in 0..self.feature_len {
+                if self.X.contains_key(&(*sample,feature)) {
+                    X.insert((new_sample,feature), self.X[&(*sample,feature)]);
                 }
             }
         }
 
         Data {
             X: X,
-            y: indices.iter().map(|i| {self.y[*i]}).collect(),
+            y: samples.iter().map(|i| {self.y[*i]}).collect(),
             features: self.features.clone(),
-            samples: indices.iter().map(|i| {self.samples[*i].clone()}).collect(),
+            samples: samples.iter().map(|i| {self.samples[*i].clone()}).collect(),
             feature_class_sign: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: self.feature_len,
-            sample_len: indices.len()
+            sample_len: samples.len()
         }
     }
 
@@ -353,6 +352,8 @@ impl Data {
                 }
             }
         }
+        self.samples.extend_from_slice(&other.samples);
+        self.sample_len += other.sample_len;
     }
 
 }
@@ -360,6 +361,9 @@ impl Data {
 /// Implement a custom Debug trait for Data
 impl fmt::Display for Data {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+        writeln!(f, "Features: {}   Samples: {}",self.feature_len, self.sample_len);
+
         let samples_string = self.samples.join("\t");
         let truncated_samples = if samples_string.len() > 100 {
             format!("{}...", &samples_string[..97])

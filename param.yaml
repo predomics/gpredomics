@@ -1,6 +1,6 @@
 general:
   seed: 42
-  algo: "ga"
+  algo: "ga+cv"
   thread_number: 2
 
 data:
