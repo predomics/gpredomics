@@ -20,7 +20,7 @@ impl CV {
         let mut indices_class0:Vec<usize> = Vec::new();
         let mut indices_class1:Vec<usize> = Vec::new();
         for (i,f) in data.y.iter().enumerate() {
-            if *f==0.0 { indices_class0.push(i) } else if *f==1.0 { indices_class1.push(i) }
+            if *f==0 { indices_class0.push(i) } else if *f==1 { indices_class1.push(i) }
         }
 
         let indices_class0_folds = utils::split_into_balanced_random_chunks(indices_class0, fold_number, rng);

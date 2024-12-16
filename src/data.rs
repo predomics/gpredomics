@@ -8,7 +8,7 @@ use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
 pub struct Data {
     pub X: HashMap<(usize,usize),f64>,         // Matrix for feature values
-    pub y: Vec<f64>,              // Vector for target values
+    pub y: Vec<u8>,              // Vector for target values
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
     pub samples: Vec<String>,
     pub feature_class_sign: HashMap<usize, u8>, // Sign for each feature
@@ -48,7 +48,7 @@ impl Data {
         self.samples = trimmed_first_line.split('\t').skip(1).map(String::from).collect();
 
         // Read the remaining lines for feature names and data
-        for (i,line) in reader_X.lines().enumerate() {
+        for (j,line) in reader_X.lines().enumerate() {
             let line = line?;
             let trimmed_line= line.strip_suffix('\n')
                 .or_else(|| line.strip_suffix("\r\n"))
@@ -61,9 +61,11 @@ impl Data {
             }
 
             // Remaining fields are the feature values
-            for (j,value) in fields.enumerate() {
+            for (i,value) in fields.enumerate() {
                 if let Ok(num_val)=value.parse::<f64>() {
-                    self.X.insert((i,j),num_val);
+                    if num_val!=0.0 {
+                        self.X.insert((i,j),num_val);
+                    }
                 }
             }
 
@@ -86,7 +88,7 @@ impl Data {
             if let Some(sample_name) = fields.next() {
                 // Second field is the target value
                 if let Some(value) = fields.next() {
-                    let target: f64 = value.parse()?;
+                    let target: u8 = value.parse()?;
                     y_map.insert(sample_name.to_string(), target);
                 }
             }
@@ -96,11 +98,13 @@ impl Data {
         self.y = self
             .samples
             .iter()
-            .map(|sample_name| *y_map.get(sample_name).unwrap_or(&0.0))
+            .map(|sample_name| *y_map.get(sample_name).unwrap_or(&0))
             .collect();
 
         self.feature_len = self.features.len();
         self.sample_len = self.samples.len();
+
+        println!("Features: {}   Samples: {}",self.feature_len, self.sample_len);
 
         Ok(())
     }
@@ -109,27 +113,40 @@ impl Data {
     /// using student T e.g. for normally ditributed features
     fn compare_classes_studentt(&self, j: usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
         // Separate values into two classes
+
+        let mut count_0: usize=0;
+        let mut count_1: usize=0;
+
         let class_0: Vec<f64> = (0..self.sample_len)
-            .filter(|i| {self.y[*i] == 0.0})
-            .map(|i| {*self.X.get(&(i,j)).unwrap_or(&0.0)}).collect();
+            .filter(|i| {self.y[*i] == 0})
+            .map(|i| {if self.X.contains_key(&(i,j)) {count_0+=1; self.X[&(i,j)]} else {0.0}}).collect();
     
         let class_1: Vec<f64> = (0..self.sample_len)
-            .filter(|i| {self.y[*i] == 1.0})
-            .map(|i| {*self.X.get(&(i,j)).unwrap_or(&0.0)}).collect();
+            .filter(|i| {self.y[*i] == 1})
+            .map(|i| {if self.X.contains_key(&(i,j)) {count_1+=1; self.X[&(i,j)]} else {0.0}}).collect();
     
+        let n0 = class_0.len() as f64;
+        let n1 = class_1.len() as f64;
+        //println!("prev0: {}-{}",n0,count_0);
+
+        let prev0 = count_0 as f64 / n0;
+        let prev1 = count_1 as f64 / n1;
+
+        if prev0<min_prevalence && prev1<min_prevalence { return 2 }
+
         // Calculate means
         let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
         let mean_1 = class_1.iter().copied().sum::<f64>() / class_1.len() as f64;
     
         if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
+
+
     
         // Calculate t-statistic (simple, equal variance assumption)
-        let n0 = class_0.len() as f64;
-        let n1 = class_1.len() as f64;
+
         let var0 = class_0.iter().map(|x| (x - mean_0).powi(2)).sum::<f64>() / (n0 - 1.0);
         let var1 = class_1.iter().map(|x| (x - mean_1).powi(2)).sum::<f64>() / (n1 - 1.0);
-        let prev0 = class_0.iter().filter(|&&x| x != 0.0).count() as f64 / n0;
-        let prev1 = class_1.iter().filter(|&&x| x != 0.0).count() as f64 / n1;
+
         let pooled_std = ((var0 / n0) + (var1 / n1)).sqrt();
         if pooled_std > 0.0 {
             let t_stat = (mean_0 - mean_1) / pooled_std;
@@ -140,10 +157,10 @@ impl Data {
             //println!("t_stat {} n0 {} n1 {} var0 {} var1 {} prev0 {} prev1 {}",t_stat,n0,n1,var0,var1,prev0,prev1);
             let cumulative = t_dist.cdf(t_stat.abs()); // CDF up to |t_stat|
             let upper_tail = 1.0 - cumulative;         // Upper-tail area
-            let p_value = 2.0 * upper_tail;            // Two-tailed test
+            let p_value = 2.0 * upper_tail;       // Two-tailed test
     
             // Interpretation
-            if (p_value < max_p_value) && (prev0 > min_prevalence || prev1 > min_prevalence) {
+            if (p_value < max_p_value) {
                 if mean_0 > mean_1 {
                     0
                 } else {
@@ -161,39 +178,34 @@ impl Data {
     /// using Wilcoxon e.g. for sparse/log normal features
     pub fn compare_classes_wilcoxon(&self, j:usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
         // Separate values into two classes
-        let mut class_0: Vec<f64> = Vec::new();
-        let mut class_1: Vec<f64> = Vec::new();
+        let mut count_0: usize=0;
+        let mut count_1: usize=0;
+
+        let class_0: Vec<f64> = (0..self.sample_len)
+            .filter(|i| {self.y[*i] == 0})
+            .map(|i| {if self.X.contains_key(&(i,j)) {count_0+=1; self.X[&(i,j)]} else {0.0}}).collect();
     
-        for i in 0..self.sample_len {
-            if self.y[i] == 0.0 && self.X.contains_key(&(i,j)) {
-                class_0.push(self.X[&(i,j)]);
-            } else if self.y[i] == 1.0 && self.X.contains_key(&(i,j)) {
-                class_1.push(self.X[&(i,j)]);
-            }
-        }
+        let class_1: Vec<f64> = (0..self.sample_len)
+            .filter(|i| {self.y[*i] == 1})
+            .map(|i| {if self.X.contains_key(&(i,j)) {count_1+=1; self.X[&(i,j)]} else {0.0}}).collect();
     
-        // Check if both classes have enough data points for statistical testing
-        if class_0.is_empty() || class_1.is_empty() {
-            return 2; // Unable to compare due to insufficient data
-        }
-    
+        let n0 = class_0.len() as f64;
+        let n1 = class_1.len() as f64;
+
+        if n0==0.0 || n1==0.0 { return 2 }
+
+        let prev0 = count_0 as f64 / n0;
+        let prev1 = count_1 as f64 / n1;
+
+        if prev0<min_prevalence && prev1<min_prevalence { return 2 }
+
         // Calculate means
         let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
         let mean_1 = class_1.iter().copied().sum::<f64>() / class_1.len() as f64;
     
-        //println!("Means: {} vs {}",mean_0,mean_1);
         if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
     
-        // Compute prevalence for each class
-        let n0 = class_0.len() as f64;
-        let n1 = class_1.len() as f64;
-        let prev0 = n0 / (n0 + n1);
-        let prev1 = n1 / (n0 + n1);
-    
-        // Skip comparison if prevalence is below the minimum threshold
-        if prev0 < min_prevalence && prev1 < min_prevalence {
-            return 2;
-        }
+
     
         // Combine both classes with their labels
         let mut combined: Vec<(f64, u8)> = class_0
@@ -357,10 +369,10 @@ impl fmt::Display for Data {
 
         writeln!(f, "X:                  {}",truncated_samples)?;
         // Limit to the first 20 rows
-        for i in (0..self.sample_len).take(20) {
-            let feature = &self.features[i]; // Use the feature name from self.features 
-            let row_display: String = (0..self.feature_len)
-                .map(|j| {if self.X.contains_key(&(i,j)) {format!("{:.2}",self.X[&(i,j)])} else {"".to_string()}})
+        for j in (0..self.feature_len).take(20) {
+            let feature = &self.features[j]; // Use the feature name from self.features 
+            let row_display: String = (0..self.sample_len)
+                .map(|i| {if self.X.contains_key(&(i,j)) {format!("{:.2}",self.X[&(i,j)])} else {"".to_string()}})
                 .collect::<Vec<_>>()
                 .join("\t");
 

@@ -28,7 +28,7 @@ fn basic_test(param: &Param) {
     my_data.feature_len = 3;
     my_data.sample_len = 3;    my_data.samples = string_vec! ["a","b","c"];
     my_data.features = string_vec! ["msp1","msp2","msp3"];
-    my_data.y = vec! [0.0,1.0,1.0];
+    my_data.y = vec! [0,1,1];
     my_data.feature_len = 3;
     my_data.sample_len = 3;
     println!("{:?}", my_data);

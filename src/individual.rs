@@ -97,13 +97,13 @@ impl Individual {
     }
 
     /// Compute AUC based on X and y rather than a complete Data object
-    pub fn compute_auc_from_features(&mut self, X: &HashMap<(usize,usize),f64>, sample_len: usize, y: &Vec<f64>) -> f64 {
+    pub fn compute_auc_from_features(&mut self, X: &HashMap<(usize,usize),f64>, sample_len: usize, y: &Vec<u8>) -> f64 {
         let value = self.evaluate_from_features(X, sample_len);
         self.compute_auc_from_value(value, y)
     }
 
     /// Compute AUC based on the target vector y
-    fn compute_auc_from_value(&mut self, value: Vec<f64>, y: &Vec<f64>) -> f64 {
+    fn compute_auc_from_value(&mut self, value: Vec<f64>, y: &Vec<u8>) -> f64 {
         let mut thresholds: Vec<(usize,&f64)> = value.iter().enumerate().collect::<Vec<(usize,&f64)>>();
 
         thresholds.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -118,8 +118,8 @@ impl Individual {
         let mut fn_count:usize=0;
 
         for y_val in y.iter() {
-            if *y_val == 0.0 {fp += 1}
-            else if *y_val == 1.0 {tp += 1}
+            if *y_val == 0 {fp += 1}
+            else if *y_val == 1 {tp += 1}
         }
         
         for (i,_) in thresholds {
@@ -139,8 +139,8 @@ impl Individual {
 
             roc_points.push((fpr, tpr));
             
-            if y[i] == 1.0 { tp-=1; fn_count+=1 }
-            else if y[i] == 0.0 { tn+=1; fp-=1 }
+            if y[i] == 1 { tp-=1; fn_count+=1 }
+            else if y[i] == 0 { tn+=1; fp-=1 }
         }
 
         let tpr = if (tp + fn_count) > 0 {
@@ -278,16 +278,16 @@ impl Individual {
     /// return (threshold, accuracy, sensitivity, specificity)
     pub fn compute_threshold_and_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
         let value = self.evaluate(d); // Predicted probabilities
-        let mut combined: Vec<(f64, f64)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
+        let mut combined: Vec<(f64, u8)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
         
         // Sort by predicted probabilities
         combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
         // Initialize confusion matrix
-        let mut tp = d.y.iter().filter(|&&label| label == 1.0).count();
+        let mut tp = d.y.iter().filter(|&&label| label == 1).count();
         let mut fn_count = 0;
         let mut tn = 0;
-        let mut fp = d.y.iter().filter(|&&label| label == 0.0).count();
+        let mut fp = d.y.iter().filter(|&&label| label == 0).count();
 
         let mut best_threshold = 0.0;
         let mut best_youden_index = f64::NEG_INFINITY;
@@ -298,11 +298,11 @@ impl Individual {
 
             // Update confusion matrix based on current threshold
             match label {
-                1.0 => {
+                1 => {
                     tp -= 1;
                     fn_count += 1;
                 }
-                0.0 => {
+                0 => {
                     fp -= 1;
                     tn += 1;
                 }
