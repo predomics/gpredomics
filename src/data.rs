@@ -173,6 +173,7 @@ impl Data {
         for (i,row) in self.X.iter_mut().enumerate() {
             row.extend_from_slice(&other.X[i]);
         }
+        self.sample_len+=other.sample_len;
     }
 
 }
