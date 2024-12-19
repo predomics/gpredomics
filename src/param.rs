@@ -45,8 +45,10 @@ pub struct GA {
     pub min_epochs: usize,                     // Do not stop before reaching this
     #[serde(default = "max_age_best_model_default")]    
     pub max_age_best_model: usize,                 // Stop if the best model has not change for this long
-    //pub kmin: u32,                           // Minimum value of k
-    //pub kmax: u32,                           // Maximum value of k
+    #[serde(default = "feature_kminkmax_default")]  
+    pub kmin: usize,                           // Minimum value of k
+    #[serde(default = "feature_kminkmax_default")]  
+    pub kmax: usize,                           // Maximum value of k
     pub kpenalty: f64,                       // A penalty of this per value of k is deleted from AUC in the fit function
     pub select_elite_pct: f64,               // Elite selection percentage
     pub select_random_pct: f64,              // Random selection percentage
@@ -55,6 +57,8 @@ pub struct GA {
     pub mutation_non_null_chance_pct: f64,    // Chance pct that a mutation gives an non null value
     #[serde(default = "feature_importance_permutations_default")]    
     pub feature_importance_permutations: usize,
+    #[serde(default = "feature_keep_all_generations_default")]   
+    pub keep_all_generations: bool
 }
 
 
@@ -78,3 +82,5 @@ fn feature_maximal_pvalue_default() -> f64 { 0.5 }
 fn feature_importance_permutations_default() -> usize { 10 }
 fn feature_minimal_feature_value_default() -> f64 { 0.0 }
 fn thread_number_default() -> usize { 1 }
+fn feature_kminkmax_default() -> usize { 0 }
+fn feature_keep_all_generations_default() -> bool { true }

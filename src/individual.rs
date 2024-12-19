@@ -13,7 +13,7 @@ pub struct Individual {
     //pub feature_names: Vec<string>, /// a vector of feature indices
     pub fit_method: String, // AUC, accuracy, etc.
     pub auc: f64, // accuracy of the model
-    pub k: u32, // nb of variables used
+    pub k: usize, // nb of variables used
     pub n: usize // generation or other counter important in the strategy 
 }
 
@@ -224,12 +224,12 @@ impl Individual {
     }
 
     /// 
-    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<usize>, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
+    pub fn random_select_k(reference_size: usize, kmin: usize, kmax:usize, feature_selection: &Vec<usize>, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
     
-        let k: usize=rng.gen_range(1..feature_selection.len());
+        let k: usize=rng.gen_range((if kmin>0 {kmin} else {1})..(if kmax>0 {kmax} else {feature_selection.len()}));
 
         // Randomly pick k values
         let random_values = feature_selection.choose_multiple(rng, k as usize);
@@ -258,7 +258,7 @@ impl Individual {
             features: features,
             fit_method: String::from("AUC"),
             auc: 0.0,
-            k: k as u32,
+            k: k,
             n: 0
         }
 
