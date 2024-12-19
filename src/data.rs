@@ -6,6 +6,8 @@ use std::fmt;
 use crate::param::Param;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
+use log::{info, warn, error};
+
 pub struct Data {
     pub X: HashMap<(usize,usize),f64>,         // Matrix for feature values
     pub y: Vec<u8>,              // Vector for target values
@@ -34,7 +36,7 @@ impl Data {
 
     /// Load data from `X.tsv` and `y.tsv` files.
     pub fn load_data(&mut self, X_path: &str, y_path: &str) -> Result<(), Box<dyn Error>> {
-        println!("Loading files {} and {}...", X_path, y_path);
+        info!("Loading files {} and {}...", X_path, y_path);
         // Open and read the X.tsv file
         let file_X = File::open(X_path)?;
         let mut reader_X = BufReader::new(file_X);
@@ -126,7 +128,6 @@ impl Data {
     
         let n0 = class_0.len() as f64;
         let n1 = class_1.len() as f64;
-        //println!("prev0: {}-{}",n0,count_0);
 
         let prev0 = count_0 as f64 / n0;
         let prev1 = count_1 as f64 / n1;
@@ -153,7 +154,6 @@ impl Data {
             // Compute p-value
             let degrees_of_freedom = (n0 + n1 - 2.0).round();
             let t_dist = StudentsT::new(0.0, 1.0, degrees_of_freedom).unwrap();
-            //println!("t_stat {} n0 {} n1 {} var0 {} var1 {} prev0 {} prev1 {}",t_stat,n0,n1,var0,var1,prev0,prev1);
             let cumulative = t_dist.cdf(t_stat.abs()); // CDF up to |t_stat|
             let upper_tail = 1.0 - cumulative;         // Upper-tail area
             let p_value = 2.0 * upper_tail;       // Two-tailed test

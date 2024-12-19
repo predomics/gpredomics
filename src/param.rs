@@ -17,6 +17,12 @@ pub struct General {
     pub algo: String,
     #[serde(default = "thread_number_default")]  
     pub thread_number: usize,
+    #[serde(default = "log_base_default")]  
+    pub log_base: String,
+    #[serde(default = "log_suffix_default")]  
+    pub log_suffix: String,
+    #[serde(default = "log_level_default")]  
+    pub log_level: String
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,3 +90,6 @@ fn feature_minimal_feature_value_default() -> f64 { 0.0 }
 fn thread_number_default() -> usize { 1 }
 fn feature_kminkmax_default() -> usize { 0 }
 fn feature_keep_all_generations_default() -> bool { true }
+fn log_base_default() -> String { "".to_string() }
+fn log_suffix_default() -> String { "log".to_string() }
+fn log_level_default() -> String { "info".to_string() }

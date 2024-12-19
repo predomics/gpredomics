@@ -6,7 +6,7 @@ use crate::individual::Individual;
 use crate::utils;
 use std::sync::{Arc, Mutex};
 use rand_chacha::ChaCha8Rng;
-
+use log::{info, warn, error};
 
 /// This class implement Cross Validation dataset, e.g. split the Data in N folds and create N subset of Data each with its test subset.
 pub struct CV {
@@ -73,16 +73,16 @@ impl CV {
                 .enumerate()
                 .for_each(|(i, (train, test))| {
                     // Train and evaluate model
-                    println!("|  Fold #{}  ", i + 1);
+                    info!("Completing fold...");
 
                     let mut best_model: Individual =
                         algo(train, param).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
                     let train_auc = best_model.auc;
                     let test_auc = best_model.compute_auc(test);
 
-                    println!(
-                        "|  Train AUC: {:.3}  |  Test AUC: {:.3}",
-                        train_auc, test_auc
+                    info!(
+                        "Fold #{}  |  Train AUC: {:.3}  |  Test AUC: {:.3}",
+                        i+1, train_auc, test_auc
                     );
 
                     // Store the results

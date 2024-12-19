@@ -256,7 +256,7 @@ impl Individual {
                 }
             }
         }
-        //println!("Model {:?}",features);
+
         Individual {
             features: features,
             fit_method: String::from("AUC"),

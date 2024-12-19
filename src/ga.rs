@@ -7,6 +7,7 @@ use rand::Rng;
 use rand::seq::index::sample;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
+use log::{debug,info, warn, error};
 
 pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     // generate a random population with a given size  (and evaluate it for selection)
@@ -16,17 +17,16 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     let mut auc_values: Vec<f64> = Vec::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
-    print!("Selecting features...");
+    info!("Selecting features...");
     data.select_features(param);
-    println!("{} features selected.",data.feature_selection.len());
+    info!("{} features selected.",data.feature_selection.len());
 
-    //println!("Generate initial population");
     pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
     pop.evaluate_with_k_penalty(data, param.ga.kpenalty);
     
     loop {
         epoch += 1;
-        //println!("Starting epoch {}",epoch);
+        debug!("Starting epoch {}",epoch);
 
 
         // we create a new generation
@@ -36,14 +36,17 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         // these individuals are flagged with the parent attribute
         // this populate half the new generation new_pop
         let sorted_pop = pop.sort();  
-        //println!("best AUC so far {} (k={})", &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k);
+        debug!("best AUC so far {:.3} (k={}, gen#{}) , average AUC {:.3}, k:{:.3}", 
+            &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k, &sorted_pop.individuals[0].n,
+            &sorted_pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
+            sorted_pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64
+    );
+
         auc_values.push(sorted_pop.fit[0]);
 
         if auc_values.len()>param.ga.min_epochs {
-            //let avg:f64=auc_values[auc_values.len()-10..].iter().sum::<f64>()/10.0;
-            //let divergence = auc_values[auc_values.len()-10..].iter().map(|x| (*x-avg).abs()).sum::<f64>();
             if epoch-sorted_pop.individuals[0].n+1>param.ga.max_age_best_model {
-                //println!("AUCs stay stable for the last 10 rounds (divergence {} is below {}), stopping",divergence,avg*param.ga.max_divergence);
+                info!("Best model has reached limit age...");
                 break
             }
         }
@@ -67,7 +70,6 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         pop = new_pop;
 
         if (epoch>=param.ga.max_epochs) {
-            //println!("The target number of epoch {} has been reached, stopping",epoch);
             break
         }
 
