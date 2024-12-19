@@ -16,12 +16,12 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
     let mut auc_values: Vec<f64> = Vec::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
-    //println!("Selecting features");
+    print!("Selecting features...");
     data.select_features(param);
-    print!("| Features: #{} ",data.feature_selection.len());
+    print!("{} features selected.",data.feature_selection.len());
 
     //println!("Generate initial population");
-    pop.generate(param.ga.population_size,data, &mut rng);
+    pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
     pop.evaluate_with_k_penalty(data, param.ga.kpenalty);
     
     loop {
@@ -58,7 +58,12 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         }
         new_pop.add(children);
 
-        populations.push(sorted_pop);
+        if param.ga.keep_all_generations {
+            populations.push(sorted_pop);
+        }
+        else {
+            populations = vec![sorted_pop];
+        }
         pop = new_pop;
 
         if (epoch>=param.ga.max_epochs) {

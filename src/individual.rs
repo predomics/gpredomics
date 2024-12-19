@@ -67,17 +67,15 @@ impl Individual {
     }
 
     pub fn evaluate(&self, d: &Data) -> Vec<f64> {
-        let mut value=Vec::new();
-        for i in 0..d.sample_len {
-            let mut current_value =0.0;
-            for (j,coef) in self.features.iter() {
-                if d.X.contains_key(&(i,*j)) {
-                    current_value += d.X[&(i,*j)] * *coef as f64;
-                }
+        let mut score=vec![0.0; d.sample_len];
+
+        for (feature_index,coef) in self.features.iter() {
+            for sample in 0..d.sample_len {
+                    score[sample] += d.X.get(&(sample,*feature_index)).unwrap_or(&0.0) * *coef as f64;
             }
-            value.push(current_value);
         }
-        value
+        
+        score
     }
 
     pub fn evaluate_from_features(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize) -> Vec<f64> {
@@ -232,12 +230,12 @@ impl Individual {
     }
 
     /// randomly generated individual amoung the selected features
-    pub fn random_select_k(reference_size: usize, feature_selection: &Vec<usize>, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
+    pub fn random_select_k(reference_size: usize, kmin: usize, kmax:usize, feature_selection: &Vec<usize>, feature_sign: &HashMap<usize,u8>, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
     
-        let k: usize=rng.gen_range(1..feature_selection.len());
+        let k: usize=rng.gen_range((if kmin>0 {kmin} else {1})..(if kmax>0 {kmax} else {feature_selection.len()}));
 
         // Randomly pick k values
         let random_values = feature_selection.choose_multiple(rng, k as usize);

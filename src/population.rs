@@ -73,15 +73,17 @@ impl Population {
     }
 
     /// populate the population with a set of random individuals
-    pub fn generate(&mut self, population_size: u32, data: &Data, rng: &mut ChaCha8Rng) {
+    /// populate the population with a set of random individuals
+    pub fn generate(&mut self, population_size: u32, kmin:usize, kmax:usize, data: &Data, rng: &mut ChaCha8Rng) {
         for i in 0..population_size {
             self.individuals.push(Individual::random_select_k(data.feature_len, 
+                                    kmin,
+                                    kmax,
                                     &data.feature_selection,
                                     &data.feature_class_sign,
                                 rng))
         }
     }
-
     /// add some individuals in the population (you may need to evaluate after, prefer add)
     pub fn extend(&mut self, individuals: Vec<Individual>) {
         for i in individuals { self.individuals.push(i) };
