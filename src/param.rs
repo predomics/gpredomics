@@ -8,6 +8,7 @@ pub struct Param {
     pub general: General,
     pub data: Data,                          // Nested struct for "data"
     pub ga: GA,
+    pub cv: CV
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -68,6 +69,14 @@ pub struct GA {
 }
 
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CV {
+    #[serde(default = "fold_number_default")]  
+    pub fold_number: usize,
+    #[serde(default = "overfit_penalty_default")] 
+    pub overfit_penalty: f64
+}
+
 pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     // Open and read the X.tsv file
     let param_file_reader = File::open(param_file)?;
@@ -77,6 +86,8 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
 
     Ok(config)
 }
+
+
 
 fn empty_string() -> String { "".to_string() }
 fn min_epochs_default() -> usize { 10 }
@@ -93,3 +104,5 @@ fn feature_keep_all_generations_default() -> bool { true }
 fn log_base_default() -> String { "".to_string() }
 fn log_suffix_default() -> String { "log".to_string() }
 fn log_level_default() -> String { "info".to_string() }
+fn fold_number_default() -> usize { 5 }
+fn overfit_penalty_default() -> f64 { 0.0 }

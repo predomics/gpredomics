@@ -7,6 +7,7 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::fmt;
 use std::iter::once;
+use log::{debug, info, warn, error};
 
 
 pub struct Individual {

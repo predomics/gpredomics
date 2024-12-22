@@ -4,6 +4,7 @@ use crate::data::Data;
 use crate::individual::Individual;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
+use log::{debug, info, warn, error};
 
 pub struct Population {
     pub individuals: Vec<Individual>,
@@ -38,7 +39,7 @@ impl Population {
         }
     }
 
-    pub fn evaluate(& mut self, data: &Data) -> & mut Self {
+    pub fn evaluate(&mut self, data: &Data) -> & mut Self {
         self.fit = self.individuals.iter_mut().map(|i|{
             i.evaluate(data); 
             i.compute_auc(data)
@@ -46,15 +47,24 @@ impl Population {
         self
     }
 
-    pub fn evaluate_with_k_penalty(& mut self, data: &Data, k_penalty: f64) -> & mut Self {
+    pub fn evaluate_with_k_penalty(&mut self, data: &Data, k_penalty: f64) -> & mut Self {
         self.fit = self.individuals.iter_mut().map(|i|{
-            //i.evaluate(data); 
-            let auc=i.compute_auc(data);
-            auc - i.k as f64 * k_penalty
+            let k=i.compute_auc(data) - i.k as f64 * k_penalty;
+            k
+
         }).collect();
         self
     }
     
+    pub fn evaluate_with_kno_penalty(& mut self, data: &Data, k_penalty: f64, test_data: &Data, overfit_penalty: f64) -> & mut Self {
+        self.fit = self.individuals.iter_mut().map(|i|{
+            //i.evaluate(data); 
+            let test_auc = i.compute_auc(test_data);
+            let auc=i.compute_auc(data);
+            auc - i.k as f64 * k_penalty - (auc-test_auc).abs() * overfit_penalty
+        }).collect();
+        self
+    }
 
     pub fn sort(mut self) -> Self {
 

@@ -9,7 +9,7 @@ use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use log::{debug,info, warn, error};
 
-pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
+pub fn ga(data: &mut Data, param: &Param) -> Vec<Population> {
     // generate a random population with a given size  (and evaluate it for selection)
     let mut pop = Population::new();
     let mut epoch:usize = 0;
@@ -23,6 +23,80 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
 
     pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
     pop.evaluate_with_k_penalty(data, param.ga.kpenalty);
+    
+    loop {
+        epoch += 1;
+        debug!("Starting epoch {}",epoch);
+
+
+        // we create a new generation
+        let mut new_pop = Population::new();
+
+        // select some parents (according to elitiste/random params)
+        // these individuals are flagged with the parent attribute
+        // this populate half the new generation new_pop
+        let sorted_pop = pop.sort();  
+        debug!("best AUC so far {:.3} (k={}, gen#{}) , average AUC {:.3}, k:{:.3}", 
+            &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k, &sorted_pop.individuals[0].n,
+            &sorted_pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
+            sorted_pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64
+        );
+
+        auc_values.push(sorted_pop.fit[0]);
+
+        if auc_values.len()>param.ga.min_epochs {
+            if epoch-sorted_pop.individuals[0].n+1>param.ga.max_age_best_model {
+                info!("Best model has reached limit age...");
+                break
+            }
+        }
+
+        new_pop.add(select_parents(&sorted_pop, param, &mut rng));
+
+        let mut children = cross_over(&new_pop,param,data.feature_len, &mut rng);
+
+        mutate(&mut children, param, &data.feature_selection, &mut rng);
+        
+        children.evaluate_with_k_penalty(data, param.ga.kpenalty);
+        
+        for i in children.individuals.iter_mut() {
+            i.n = epoch;
+        }
+        new_pop.add(children);
+
+        if param.ga.keep_all_generations {
+            populations.push(sorted_pop);
+        }
+        else {
+            populations = vec![sorted_pop];
+        }
+        pop = new_pop;
+
+        if epoch>=param.ga.max_epochs {
+            info!("Reach max epoch");
+            break
+        }
+    }
+
+    populations
+    
+}
+
+
+pub fn ga_no_overfit(data: &mut Data, test_data: & Data, param: &Param) -> Vec<Population> {
+    // generate a random population with a given size  (and evaluate it for selection)
+    let mut pop = Population::new();
+    let mut epoch:usize = 0;
+    let mut populations: Vec<Population> = Vec::new();
+    let mut auc_values: Vec<f64> = Vec::new();
+    let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+
+    info!("Selecting features...");
+    data.select_features(param);
+    info!("{} features selected.",data.feature_selection.len());
+
+    pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
+    pop.evaluate_with_kno_penalty(data, param.ga.kpenalty, test_data, param.cv.overfit_penalty);
     
     loop {
         epoch += 1;
@@ -55,7 +129,7 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
 
         let mut children = cross_over(&new_pop,param,data.feature_len, &mut rng);
         mutate(&mut children, param, &data.feature_selection, &mut rng);
-        children.evaluate_with_k_penalty(data, param.ga.kpenalty);
+        children.evaluate_with_kno_penalty(data, param.ga.kpenalty, test_data, param.cv.overfit_penalty);
         for i in children.individuals.iter_mut() {
             i.n = epoch;
         }
@@ -69,7 +143,8 @@ pub fn ga(mut data: &mut Data, param: &Param) -> Vec<Population> {
         }
         pop = new_pop;
 
-        if (epoch>=param.ga.max_epochs) {
+        if epoch>=param.ga.max_epochs {
+            debug!("Max epoch reached");
             break
         }
 
@@ -97,7 +172,7 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
 pub fn cross_over(parents: &Population, param: &Param, feature_len: usize, rng: &mut ChaCha8Rng) -> Population {
     let mut children=Population::new();
 
-    for i in 0..(param.ga.population_size as usize-parents.individuals.len()) {
+    for _i in 0..(param.ga.population_size as usize-parents.individuals.len()) {
         let mut child=Individual::new();        
         let [p1,p2] = parents.individuals.choose_multiple(rng, 2)
                         .collect::<Vec<&Individual>>()

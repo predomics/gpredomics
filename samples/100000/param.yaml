@@ -28,3 +28,6 @@ ga:
   mutation_non_null_chance_pct: 5
   feature_importance_permutations: 10
   keep_all_generations: false
+
+cv:
+

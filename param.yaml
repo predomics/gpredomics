@@ -1,7 +1,12 @@
 general:
   seed: 42
-  algo: "ga+cv"
-  thread_number: 2
+  algo: "ga_no_overfit"
+  thread_number: 1
+  log_level: debug
+
+cv:
+  fold_number: 10
+  overfit_penalty: 0.001
 
 data:
   X: "samples/Qin2014/Xtrain.tsv"
@@ -10,20 +15,21 @@ data:
   ytest: "samples/Qin2014/Ytest.tsv"
   pvalue_method: wilcoxon
   feature_minimal_prevalence_pct: 10 # per class, e.g. if any of the class reaches this level
-  feature_maximal_pvalue: 0.001 # feature with differences less significant than this will be removed
+  feature_maximal_pvalue: 0.01 # feature with differences less significant than this will be removed
   feature_minimal_feature_value: 0.0001
 
 ga:
   population_size: 1000
   max_epochs: 100
-  min_epochs: 50
+  min_epochs: 100
   max_age_best_model: 50
-  #kmin: 1
-  #kmax: 50 # do we keep it? 
-  kpenalty: 0.003
+  kmin: 1
+  kmax: 50 # do we keep it? 
+  kpenalty: 0.001
   select_elite_pct: 25
   select_random_pct: 25
   mutated_children_pct: 80
   mutated_features_pct: 10
   mutation_non_null_chance_pct: 5
   feature_importance_permutations: 100
+  keep_all_generation: false

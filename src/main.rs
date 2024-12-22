@@ -7,6 +7,7 @@ mod ga;
 mod cv;
 mod hyper;
 
+use cv::CV;
 use data::Data;
 use individual::Individual;
 use rand_chacha::ChaCha8Rng;
@@ -15,7 +16,7 @@ use param::Param;
 use std::process;
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
-use log::{info, warn, error};
+use log::{debug, info, warn, error};
 
 /// a very basic use
 fn basic_test(param: &Param) {
@@ -90,8 +91,52 @@ fn ga_run(param: &Param) {
     
     my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
     info!("{:?}", my_data); 
-    
+
+    debug!("Got here");
     let mut populations = ga::ga(&mut my_data,&param);
+    debug!("Got there");
+
+    let mut population=populations.pop().unwrap();
+
+    if param.data.Xtest.len()>0 {
+        let mut test_data=Data::new();
+        test_data.load_data(&param.data.Xtest, &param.data.ytest);
+        
+        debug!("Length of population {}",population.individuals.len());
+        for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
+            let auc=individual.auc;
+            let test_auc=individual.compute_auc(&test_data);
+            debug!("test aux ok");
+            let (threshold, accuracy, sensitivity, specificity) = individual.compute_threshold_and_metrics(&test_data);
+            debug!("compute threshold");
+            info!("Model #{} [k={}] [gen:{}]: train AUC {}  | test AUC {} | threshold {} | accuracy {} | sensitivity {} | specificity {} | {:?}",
+                        i+1,individual.k,individual.n,auc,test_auc,threshold,accuracy,sensitivity,specificity,individual);
+        }    
+    }
+    else {
+        for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
+            let auc=individual.auc;
+            info!("Model #{} [k={}] [gen:{}]: train AUC {}",i+1,individual.k,individual.n,auc);
+        }    
+    }
+
+
+}
+
+
+/// the Genetic Algorithm test with a generalization constraint
+fn ga_no_overfit(param: &Param) {
+    info!("                          GA NO OVERFIT TEST\n-----------------------------------------------------");
+    let mut my_data = Data::new();
+    
+    my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    info!("{:?}", my_data); 
+    
+    let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+    let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
+
+    let mut populations = ga::ga_no_overfit(&mut cv.datasets[0].clone(), 
+        &cv.folds[0].clone(), &param,);
 
     let mut population=populations.pop().unwrap();
 
@@ -186,7 +231,7 @@ fn main() {
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
     // Initialize the logger
-    if param.general.log_base.len()>0 {
+    let logger = if param.general.log_base.len()>0 {
         Logger::try_with_str(&param.general.log_level) // Set log level (e.g., "info")
             .unwrap()
             .log_to_file(
@@ -199,15 +244,15 @@ fn main() {
             .format_for_files(custom_format) // Custom format for the log file
             .format_for_stderr(custom_format) // Same format for the console
             .start()
-            .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e));
+            .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e))
     }
     else {
         Logger::try_with_str(&param.general.log_level) // Set the log level (e.g., "info")
             .unwrap()
             .write_mode(WriteMode::BufferAndFlush) // Use buffering for smoother output
             .start() // Start the logger
-            .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e));
-    }
+            .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e))
+    };
 
     info!("param.yaml");
     info!("{:?}", &param);
@@ -217,8 +262,11 @@ fn main() {
         "random" => random_run(&param),
         "ga" => ga_run(&param),
         "ga+cv" => gacv_run(&param),
+        "ga_no_overfit" => ga_no_overfit(&param),
         other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
     }
+    logger.flush();
+    println!("Ended nicely");
     //basic_test();
 }
 
