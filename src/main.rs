@@ -279,20 +279,22 @@ fn main() {
             "ga+cv" => gacv_run(&param, running),
             "ga_no_overfit" => ga_no_overfit(&param, running),
             other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
-        }    
+        } 
     });
 
     // Main thread now monitors the signal
-    for sig in signals.forever() {
-        match sig {
-            SIGTERM | SIGHUP => {
-                info!("Received signal: {}", sig);
-                running_clone.store(false, Ordering::Relaxed);
-                break;
+    let signal_thread = thread::spawn(move || {
+        for sig in signals.forever() {
+            match sig {
+                SIGTERM | SIGHUP => {
+                    info!("Received signal: {}", sig);
+                    running_clone.store(false, Ordering::Relaxed);
+                    break;
+                }
+                _ => {}
             }
-            _ => {}
         }
-    }
+    });
 
     sub_thread.join().expect("Computation thread panicked");
 
