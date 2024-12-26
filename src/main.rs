@@ -18,6 +18,14 @@ use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
 use log::{debug, info, warn, error};
 
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use signal_hook::consts::signal::*;
+use signal_hook::flag;
+use std::thread;
+use signal_hook::{iterator::Signals, consts::signal::*};
+
 /// a very basic use
 fn basic_test(param: &Param) {
     info!("                          BASIC TEST\n-----------------------------------------------------");
@@ -85,17 +93,14 @@ fn random_run(param: &Param) {
 
 
 /// the Genetic Algorithm test
-fn ga_run(param: &Param) {
+fn ga_run(param: &Param, running: Arc<AtomicBool>) {
     info!("                          GA TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();
     
     my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
     info!("{:?}", my_data); 
 
-    debug!("Got here");
-    let mut populations = ga::ga(&mut my_data,&param);
-    debug!("Got there");
-
+    let mut populations = ga::ga(&mut my_data,&param,running);
     let mut population=populations.pop().unwrap();
 
     if param.data.Xtest.len()>0 {
@@ -125,7 +130,7 @@ fn ga_run(param: &Param) {
 
 
 /// the Genetic Algorithm test with a generalization constraint
-fn ga_no_overfit(param: &Param) {
+fn ga_no_overfit(param: &Param, running: Arc<AtomicBool>) {
     info!("                          GA NO OVERFIT TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();
     
@@ -136,7 +141,7 @@ fn ga_no_overfit(param: &Param) {
     let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
 
     let mut populations = ga::ga_no_overfit(&mut cv.datasets[0].clone(), 
-        &cv.folds[0].clone(), &param,);
+        &cv.folds[0].clone(), &param, running);
 
     let mut population=populations.pop().unwrap();
 
@@ -164,7 +169,7 @@ fn ga_no_overfit(param: &Param) {
 
 
 /// the Genetic Algorithm test with Crossval (not useful but test CV)
-fn gacv_run(param: &Param) {
+fn gacv_run(param: &Param, running: Arc<AtomicBool>) {
     info!("                          GA CV TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
@@ -173,7 +178,7 @@ fn gacv_run(param: &Param) {
     info!("{:?}", my_data); 
 
     let mut crossval = cv::CV::new(&my_data, 10, &mut rng);
-    let results=crossval.pass(ga::ga, &param, param.general.thread_number);
+    let results=crossval.pass(ga::ga, &param, param.general.thread_number, running);
     
     if param.data.Xtest.len()>0 {
         let mut test_data=Data::new();
@@ -257,16 +262,40 @@ fn main() {
     info!("param.yaml");
     info!("{:?}", &param);
 
-    match param.general.algo.as_str() {
-        "basic" => basic_test(&param),
-        "random" => random_run(&param),
-        "ga" => ga_run(&param),
-        "ga+cv" => gacv_run(&param),
-        "ga_no_overfit" => ga_no_overfit(&param),
-        other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
+    let running = Arc::new(AtomicBool::new(true));
+    let running_clone = Arc::clone(&running);
+    let mut signals = Signals::new(&[SIGTERM, SIGHUP]).expect("Failed to set up signal handler");
+
+    // Register signal handler in this thread
+    flag::register(SIGHUP, Arc::clone(&running_clone)).expect("Failed to register SIGHUP handler");
+    info!("Signal handler thread started. Send `kill -1 {}` to stop the application.", std::process::id());
+    info!("Signal registration state is {}",running_clone.load(Ordering::Relaxed));
+
+    let sub_thread = thread::spawn(move || {
+        match param.general.algo.as_str() {
+            "basic" => basic_test(&param),
+            "random" => random_run(&param),
+            "ga" => ga_run(&param, running),
+            "ga+cv" => gacv_run(&param, running),
+            "ga_no_overfit" => ga_no_overfit(&param, running),
+            other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
+        }    
+    });
+
+    // Main thread now monitors the signal
+    for sig in signals.forever() {
+        match sig {
+            SIGTERM | SIGHUP => {
+                info!("Received signal: {}", sig);
+                running_clone.store(false, Ordering::Relaxed);
+                break;
+            }
+            _ => {}
+        }
     }
+
+    sub_thread.join().expect("Computation thread panicked");
+
     logger.flush();
-    println!("Ended nicely");
-    //basic_test();
 }
 

@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use rand_chacha::ChaCha8Rng;
 use log::{info, warn, error};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// This class implement Cross Validation dataset, e.g. split the Data in N folds and create N subset of Data each with its test subset.
 pub struct CV {
     pub folds: Vec<Data>,
@@ -53,9 +55,10 @@ impl CV {
 
     pub fn pass(
         &mut self,
-        algo: fn(&mut Data, &Param) -> Vec<Population>,
+        algo: fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population>,
         param: &Param,
         thread_number: usize,
+        running: Arc<AtomicBool>
     ) -> Vec<(Individual, f64, f64)> {
         // Configure the thread pool with the specified thread number
         let thread_pool = rayon::ThreadPoolBuilder::new()
@@ -76,7 +79,7 @@ impl CV {
                     info!("Completing fold...");
 
                     let mut best_model: Individual =
-                        algo(train, param).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
+                        algo(train, param, Arc::clone(&running)).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
                     let train_auc = best_model.auc;
                     let test_auc = best_model.compute_auc(test);
 

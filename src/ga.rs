@@ -9,7 +9,10 @@ use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use log::{debug,info, warn, error,trace};
 
-pub fn ga(data: &mut Data, param: &Param) -> Vec<Population> {
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+pub fn ga(data: &mut Data, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
     // generate a random population with a given size  (and evaluate it for selection)
     let mut pop = Population::new();
     let mut epoch:usize = 0;
@@ -76,6 +79,11 @@ pub fn ga(data: &mut Data, param: &Param) -> Vec<Population> {
             info!("Reach max epoch");
             break
         }
+
+        if !running.load(Ordering::Relaxed) {
+            info!("Signal received");
+            break
+        }
     }
 
     populations
@@ -83,7 +91,7 @@ pub fn ga(data: &mut Data, param: &Param) -> Vec<Population> {
 }
 
 
-pub fn ga_no_overfit(data: &mut Data, test_data: & Data, param: &Param) -> Vec<Population> {
+pub fn ga_no_overfit(data: &mut Data, test_data: & Data, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
     // generate a random population with a given size  (and evaluate it for selection)
     let mut pop = Population::new();
     let mut epoch:usize = 0;
@@ -147,6 +155,11 @@ pub fn ga_no_overfit(data: &mut Data, test_data: & Data, param: &Param) -> Vec<P
 
         if epoch>=param.ga.max_epochs {
             debug!("Max epoch reached");
+            break
+        }
+
+        if !running.load(Ordering::Relaxed) {
+            info!("Signal received");
             break
         }
 
