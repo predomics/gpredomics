@@ -22,3 +22,11 @@ debug = true                # Include debug symbols for detailed profiling
 opt-level = 2               # Reduce optimization for better granularity
 codegen-units = 1           # Avoid splitting compilation into multiple units
 lto = false   
+
+[lib]
+name = "gpredomics" # Name of your library crate
+path = "src/lib.rs"        # Path to your library file
+
+[[bin]]
+name = "gpredomics"  # Name of the binary
+path = "src/main.rs"       # Path to the binary's main file
