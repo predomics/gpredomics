@@ -7,7 +7,7 @@ use rand::Rng;
 use rand::seq::index::sample;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use log::{debug,info, warn, error};
+use log::{debug,info, warn, error,trace};
 
 pub fn ga(data: &mut Data, param: &Param) -> Vec<Population> {
     // generate a random population with a given size  (and evaluate it for selection)
@@ -94,6 +94,8 @@ pub fn ga_no_overfit(data: &mut Data, test_data: & Data, param: &Param) -> Vec<P
     info!("Selecting features...");
     data.select_features(param);
     info!("{} features selected.",data.feature_selection.len());
+    trace!("FEATURES:{:?}", data.feature_selection);
+
 
     pop.generate(param.ga.population_size,param.ga.kmin, param.ga.kmax, data, &mut rng);
     pop.evaluate_with_kno_penalty(data, param.ga.kpenalty, test_data, param.cv.overfit_penalty);
