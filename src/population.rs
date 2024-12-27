@@ -6,6 +6,7 @@ use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use log::{debug, info, warn, error};
 
+#[cfg_attr(feature = "extendr-support", extendr)]
 pub struct Population {
     pub individuals: Vec<Individual>,
     pub fit: Vec<f64>

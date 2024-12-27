@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
+#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Param {
     pub general: General,
@@ -11,6 +12,7 @@ pub struct Param {
     pub cv: CV
 }
 
+#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct General {
     pub seed: u64,
@@ -26,6 +28,7 @@ pub struct General {
     pub log_level: String
 }
 
+#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Data {
     pub X: String,                      // Path to X data
@@ -44,6 +47,7 @@ pub struct Data {
     pub feature_minimal_feature_value: f64, // Minimum prevalence
 }
 
+#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GA {
     pub population_size: u32,                // Population size
@@ -69,6 +73,7 @@ pub struct GA {
 }
 
 
+#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CV {
     #[serde(default = "fold_number_default")]  
@@ -77,8 +82,51 @@ pub struct CV {
     pub overfit_penalty: f64
 }
 
+
+impl Default for General {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for Data {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for CV {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for GA {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for Param {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+
+impl Param {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[cfg(feature = "extendr-support")]
+    pub fn summary(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+
+
 pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
-    // Open and read the X.tsv file
     let param_file_reader = File::open(param_file)?;
     let mut param_reader = BufReader::new(param_file_reader);
     

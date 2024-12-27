@@ -19,6 +19,7 @@ pub struct Individual {
     pub n: usize // generation or other counter important in the strategy 
 }
 
+#[cfg_attr(feature = "extendr-support", extendr)]
 impl Individual {
     /// Provides a help message describing the `Individual` struct and its fields.
     pub fn help() -> &'static str {
