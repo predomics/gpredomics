@@ -89,6 +89,7 @@ pub fn random_run(param: &Param) {
 
 
 /// the Genetic Algorithm test
+#[cfg_attr(feature = "extendr-support", extendr)]
 pub fn ga_run(param: &Param, running: Arc<AtomicBool>) {
     info!("                          GA TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();
