@@ -5,22 +5,21 @@ pub mod param;
 mod population;
 mod ga;
 mod cv;
-mod hyper;
 
-use cv::CV;
 use data::Data;
 use individual::Individual;
 use rand_chacha::ChaCha8Rng;
 use rand::prelude::*;
 use param::Param;
 
-use log::{debug, info, warn, error};
+use log::{debug, info, warn};
 
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-
+#[cfg_attr(feature = "extendr-support", macro_use)]
+extern crate extendr_api;
 
 /// a very basic use
 pub fn basic_test(param: &Param) {
@@ -82,14 +81,13 @@ pub fn random_run(param: &Param) {
         let mut my_individual = Individual::random(&my_data, &mut rng);
 
         let auc = my_individual.compute_auc(&my_data);
-        if (auc>auc_max) {auc_max=auc;best_individual=my_individual;}
+        if auc>auc_max {auc_max=auc;best_individual=my_individual;}
     }
     warn!("AUC max: {} model: {:?}",auc_max, best_individual.features);
 }
 
 
 /// the Genetic Algorithm test
-#[cfg_attr(feature = "extendr-support", extendr)]
 pub fn ga_run(param: &Param, running: Arc<AtomicBool>) {
     info!("                          GA TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();

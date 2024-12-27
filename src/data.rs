@@ -6,7 +6,7 @@ use std::fmt;
 use crate::param::Param;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
-use log::{info, warn, error};
+use log::info;
 
 pub struct Data {
     pub X: HashMap<(usize,usize),f64>,         // Matrix for feature values
@@ -159,7 +159,7 @@ impl Data {
             let p_value = 2.0 * upper_tail;       // Two-tailed test
     
             // Interpretation
-            if (p_value < max_p_value) {
+            if p_value < max_p_value {
                 if mean_0 > mean_1 {
                     0
                 } else {

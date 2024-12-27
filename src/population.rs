@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-
 use crate::data::Data;
 use crate::individual::Individual;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
-use log::{debug, info, warn, error};
+
+#[cfg(feature = "extendr-support")]
+use crate::extendr_api::extendr;
 
 #[cfg_attr(feature = "extendr-support", extendr)]
 pub struct Population {

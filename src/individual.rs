@@ -1,15 +1,15 @@
 use crate::utils::{generate_random_vector,shuffle_row};
 use crate::data::Data;
-use rand::{rngs::ThreadRng, seq::SliceRandom}; // Provides the `choose_multiple` method
-use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use rand::seq::SliceRandom; // Provides the `choose_multiple` method
+use std::collections::HashMap;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::fmt;
-use std::iter::once;
-use log::{debug, info, warn, error};
 
+#[cfg(feature = "extendr-support")]
+use crate::extendr_api::extendr;
 
+#[cfg_attr(feature = "extendr-support", extendr)]
 pub struct Individual {
     pub features: HashMap<usize,i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices
@@ -19,7 +19,6 @@ pub struct Individual {
     pub n: usize // generation or other counter important in the strategy 
 }
 
-#[cfg_attr(feature = "extendr-support", extendr)]
 impl Individual {
     /// Provides a help message describing the `Individual` struct and its fields.
     pub fn help() -> &'static str {

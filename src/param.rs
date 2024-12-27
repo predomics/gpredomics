@@ -1,7 +1,9 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+#[cfg(feature = "extendr-support")]
+use crate::extendr_api::extendr;
 
 #[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]

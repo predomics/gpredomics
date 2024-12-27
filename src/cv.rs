@@ -6,9 +6,9 @@ use crate::individual::Individual;
 use crate::utils;
 use std::sync::{Arc, Mutex};
 use rand_chacha::ChaCha8Rng;
-use log::{info, warn, error};
+use log::info;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 /// This class implement Cross Validation dataset, e.g. split the Data in N folds and create N subset of Data each with its test subset.
 pub struct CV {

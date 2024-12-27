@@ -7,7 +7,7 @@ use rand::Rng;
 use rand::seq::index::sample;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use log::{debug,info, warn, error,trace};
+use log::{debug,info,trace};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
