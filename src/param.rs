@@ -2,10 +2,7 @@ use std::fs::File;
 use std::io::BufReader;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-#[cfg(feature = "extendr-support")]
-use crate::extendr_api::extendr;
 
-#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Param {
     pub general: General,
@@ -14,7 +11,6 @@ pub struct Param {
     pub cv: CV
 }
 
-#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct General {
     pub seed: u64,
@@ -30,7 +26,6 @@ pub struct General {
     pub log_level: String
 }
 
-#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Data {
     pub X: String,                      // Path to X data
@@ -49,7 +44,6 @@ pub struct Data {
     pub feature_minimal_feature_value: f64, // Minimum prevalence
 }
 
-#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GA {
     pub population_size: u32,                // Population size
@@ -75,7 +69,6 @@ pub struct GA {
 }
 
 
-#[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CV {
     #[serde(default = "fold_number_default")]  
@@ -121,10 +114,6 @@ impl Param {
         Self::default()
     }
 
-    #[cfg(feature = "extendr-support")]
-    pub fn summary(&self) -> String {
-        format!("{:?}", self)
-    }
 }
 
 

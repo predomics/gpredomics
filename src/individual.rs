@@ -6,10 +6,7 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::fmt;
 
-#[cfg(feature = "extendr-support")]
-use crate::extendr_api::extendr;
 
-#[cfg_attr(feature = "extendr-support", extendr)]
 pub struct Individual {
     pub features: HashMap<usize,i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices

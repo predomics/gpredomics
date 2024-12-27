@@ -2,7 +2,7 @@ mod data;
 mod utils;
 mod individual;
 pub mod param;
-mod population;
+pub mod population;
 mod ga;
 mod cv;
 
@@ -18,8 +18,6 @@ use log::{debug, info, warn};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-#[cfg_attr(feature = "extendr-support", macro_use)]
-extern crate extendr_api;
 
 /// a very basic use
 pub fn basic_test(param: &Param) {
