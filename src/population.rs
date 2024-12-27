@@ -5,6 +5,8 @@ use rand_chacha::ChaCha8Rng;
 
 #[cfg(feature = "extendr-support")]
 use crate::extendr_api::extendr;
+#[cfg(feature = "extendr-support")]
+use extendr_api::prelude::*;
 
 #[cfg_attr(feature = "extendr-support", extendr)]
 pub struct Population {

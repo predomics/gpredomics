@@ -5,6 +5,8 @@ use std::error::Error;
 #[cfg(feature = "extendr-support")]
 use crate::extendr_api::extendr;
 
+#[cfg(feature = "extendr-support")]
+use extendr_api::prelude::*;
 #[cfg_attr(feature = "extendr-support", extendr)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Param {
@@ -115,19 +117,6 @@ impl Default for Param {
     }
 }
 
-
-impl Param {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[cfg(feature = "extendr-support")]
-    pub fn summary(&self) -> String {
-        format!("{:?}", self)
-    }
-}
-
-
 pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     let param_file_reader = File::open(param_file)?;
     let mut param_reader = BufReader::new(param_file_reader);
@@ -136,6 +125,19 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
 
     Ok(config)
 }
+
+
+#[cfg_attr(feature = "extendr-support", extendr)]
+impl Param {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn summary(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+
 
 
 

@@ -18,8 +18,12 @@ use log::{debug, info, warn};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-#[cfg_attr(feature = "extendr-support", macro_use)]
+#[cfg(feature = "extendr-support")]
+#[macro_use]
 extern crate extendr_api;
+
+#[cfg(feature = "extendr-support")]
+use extendr_api::prelude::*;
 
 /// a very basic use
 pub fn basic_test(param: &Param) {
@@ -211,4 +215,9 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) {
 
 }
 
-
+#[cfg(feature = "extendr-support")]
+extendr_module! {
+    mod gpredomics;
+    impl param::Param;       // If you want to expose param::Param
+    impl population::Population; 
+}
