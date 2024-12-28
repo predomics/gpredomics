@@ -1,4 +1,4 @@
-mod data;
+pub mod data;
 mod utils;
 mod individual;
 pub mod param;
@@ -8,6 +8,7 @@ mod cv;
 
 use data::Data;
 use individual::Individual;
+use population::Population;
 use rand_chacha::ChaCha8Rng;
 use rand::prelude::*;
 use param::Param;
@@ -86,7 +87,7 @@ pub fn random_run(param: &Param) {
 
 
 /// the Genetic Algorithm test
-pub fn ga_run(param: &Param, running: Arc<AtomicBool>) {
+pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
     info!("                          GA TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();
     
@@ -94,16 +95,18 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) {
     info!("{:?}", my_data); 
 
     let mut populations = ga::ga(&mut my_data,&param,running);
-    let mut population=populations.pop().unwrap();
+    let generations = populations.len();
+    let mut population= &mut populations[generations-1];
 
+    let mut test_data=Data::new();
     if param.data.Xtest.len()>0 {
-        let mut test_data=Data::new();
         test_data.load_data(&param.data.Xtest, &param.data.ytest);
         
         debug!("Length of population {}",population.individuals.len());
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
             let auc=individual.auc;
             let test_auc=individual.compute_auc(&test_data);
+            individual.auc = auc;
             debug!("test aux ok");
             let (threshold, accuracy, sensitivity, specificity) = individual.compute_threshold_and_metrics(&test_data);
             debug!("compute threshold");
@@ -118,6 +121,7 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) {
         }    
     }
 
+    (populations,my_data,test_data) 
 
 }
 

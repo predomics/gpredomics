@@ -71,7 +71,7 @@ fn main() {
         match param.general.algo.as_str() {
             "basic" => basic_test(&param),
             "random" => random_run(&param),
-            "ga" => ga_run(&param, running),
+            "ga" => { ga_run(&param, running); },
             "ga+cv" => gacv_run(&param, running),
             "ga_no_overfit" => ga_no_overfit(&param, running),
             other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
