@@ -1,6 +1,6 @@
 general:
   seed: 42
-  algo: "ga_no_overfit"
+  algo: "ga2_no_overfit"
   thread_number: 1
   log_level: debug
 
@@ -20,9 +20,9 @@ data:
 
 ga:
   population_size: 1000
-  max_epochs: 100
+  max_epochs: 500
   min_epochs: 100
-  max_age_best_model: 50
+  max_age_best_model: 20
   kmin: 1
   kmax: 50 # do we keep it? 
   kpenalty: 0.001
@@ -30,6 +30,6 @@ ga:
   select_random_pct: 25
   mutated_children_pct: 80
   mutated_features_pct: 10
-  mutation_non_null_chance_pct: 5
+  mutation_non_null_chance_pct: 20
   feature_importance_permutations: 100
   keep_all_generation: false

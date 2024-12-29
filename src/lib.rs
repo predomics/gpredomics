@@ -127,7 +127,7 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
 
 
 /// the Genetic Algorithm test with a generalization constraint
-pub fn ga_no_overfit(param: &Param, running: Arc<AtomicBool>) {
+pub fn ga_no_overfit(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
     info!("                          GA NO OVERFIT TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();
     
@@ -138,12 +138,12 @@ pub fn ga_no_overfit(param: &Param, running: Arc<AtomicBool>) {
     let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
 
     let mut populations = ga::ga_no_overfit(&mut cv.datasets[0].clone(), 
-        &cv.folds[0].clone(), &param, running);
+        &cv.folds[0].clone(), &param,  running);
 
     let mut population=populations.pop().unwrap();
 
+    let mut test_data=Data::new();
     if param.data.Xtest.len()>0 {
-        let mut test_data=Data::new();
         test_data.load_data(&param.data.Xtest, &param.data.ytest);
         
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
@@ -161,12 +161,13 @@ pub fn ga_no_overfit(param: &Param, running: Arc<AtomicBool>) {
         }    
     }
 
+    (populations,my_data,test_data) 
 
 }
 
 
 /// the Genetic Algorithm test with Crossval (not useful but test CV)
-pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) {
+pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
     info!("                          GA CV TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
@@ -175,10 +176,11 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) {
     info!("{:?}", my_data); 
 
     let mut crossval = cv::CV::new(&my_data, 10, &mut rng);
+
     let results=crossval.pass(ga::ga, &param, param.general.thread_number, running);
     
+    let mut test_data=Data::new();
     if param.data.Xtest.len()>0 {
-        let mut test_data=Data::new();
         test_data.load_data(&param.data.Xtest, &param.data.ytest);
         
         for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
@@ -210,6 +212,7 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) {
         }    
     }
 
+    (crossval,my_data,test_data) 
 
 }
 
