@@ -28,6 +28,7 @@ pub fn ga(data: &mut Data, param: &Param, running: Arc<AtomicBool>) -> Vec<Popul
     pop.evaluate_with_k_penalty(data, param.ga.kpenalty);
     
     let use_mutate2 = param.general.algo.contains("ga2");
+    if use_mutate2 { trace!("Using mutate2"); } else { trace!("Using mutate"); }
     loop {
         epoch += 1;
         debug!("Starting epoch {}",epoch);
@@ -113,6 +114,7 @@ pub fn ga_no_overfit(data: &mut Data, test_data: & Data, param: &Param, running:
     pop.evaluate_with_kno_penalty(data, param.ga.kpenalty, test_data, param.cv.overfit_penalty);
     
     let use_mutate2 = param.general.algo.contains("ga2");
+    if use_mutate2 { trace!("Using mutate2"); } else { trace!("Using mutate"); }
     loop {
         epoch += 1;
         debug!("Starting epoch {}",epoch);
