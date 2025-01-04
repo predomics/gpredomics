@@ -13,7 +13,7 @@ use rand_chacha::ChaCha8Rng;
 use rand::prelude::*;
 use param::Param;
 
-use log::{debug, info, warn};
+use log::{debug, info, warn, trace};
 
 
 use std::sync::atomic::AtomicBool;
@@ -132,7 +132,7 @@ pub fn ga_no_overfit(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population
     let mut my_data = Data::new();
     
     my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
-    info!("{:?}", my_data); 
+    info!("{:?}", &my_data); 
     
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
     let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
@@ -161,7 +161,7 @@ pub fn ga_no_overfit(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population
         }    
     }
 
-    (populations,my_data,test_data) 
+    (populations,cv.datasets.remove(0),test_data) 
 
 }
 

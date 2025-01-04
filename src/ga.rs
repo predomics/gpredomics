@@ -60,9 +60,9 @@ pub fn ga(data: &mut Data, param: &Param, running: Arc<AtomicBool>) -> Vec<Popul
         let mut children = cross_over(&new_pop,param,data.feature_len, &mut rng);
 
         if use_mutate2 
-            { mutate(&mut children, param, &data.feature_selection, &mut rng); }
-        else
             { mutate2(&mut children, param, &data.feature_selection, &mut rng); }
+        else
+            { mutate(&mut children, param, &data.feature_selection, &mut rng); }
         
         children.evaluate_with_k_penalty(data, param.ga.kpenalty);
         
@@ -144,9 +144,9 @@ pub fn ga_no_overfit(data: &mut Data, test_data: & Data, param: &Param, running:
 
         let mut children = cross_over(&new_pop,param,data.feature_len, &mut rng);
         if use_mutate2 
-            { mutate(&mut children, param, &data.feature_selection, &mut rng); }
-        else
             { mutate2(&mut children, param, &data.feature_selection, &mut rng); }
+        else
+            { mutate(&mut children, param, &data.feature_selection, &mut rng); }
         
         children.evaluate_with_kno_penalty(data, param.ga.kpenalty, test_data, param.cv.overfit_penalty);
         for i in children.individuals.iter_mut() {
@@ -291,10 +291,10 @@ pub fn mutate2(children: &mut Population, param: &Param, feature_selection: &Vec
                 match rng.gen::<f64>() {
                     r if r < p1 => { individual.k+=1; individual.features.insert(i, 1); },
                     r if r < p2 => { individual.k+=1; individual.features.insert(i, -1); },
-                    r if r < p3 => { individual.features.insert(i,if value.abs()<64 {2*value} else {value});
-                                                individual.k+=1; },
-                    r if r < p4 => { individual.features.insert(i, if value.abs()==1 {value} else {value/2});
-                                                individual.k+=1; },
+                    r if r < p3 => { if value!=0 { individual.features.insert(i,if value.abs()<64 {2*value} else {value});
+                                                individual.k+=1; } },
+                    r if r < p4 => { if value!=0 { individual.features.insert(i, if value.abs()==1 {value} else {value/2});
+                                                individual.k+=1; } },
                         _ => {}
                 };
             }
