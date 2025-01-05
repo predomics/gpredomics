@@ -127,11 +127,13 @@ pub fn ga_no_overfit(data: &mut Data, test_data: & Data, param: &Param, running:
         // these individuals are flagged with the parent attribute
         // this populate half the new generation new_pop
         let sorted_pop = pop.sort();  
-        debug!("best AUC so far {:.3} (k={}, gen#{}) , average AUC {:.3}, k:{:.3}", 
-            &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k, &sorted_pop.individuals[0].n,
+        debug!("best AUC so far {:.3} (fit={:.3} k={}, gen#{}) , average AUC {:.3}, average fit {:.3}, k:{:.3}", 
+            &sorted_pop.individuals[0].auc, &sorted_pop.fit[0], 
+            &sorted_pop.individuals[0].k, &sorted_pop.individuals[0].n,
             &sorted_pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
+            &sorted_pop.fit.iter().sum::<f64>()/param.ga.population_size as f64,
             sorted_pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64
-    );
+        );
 
         auc_values.push(sorted_pop.fit[0]);
 
