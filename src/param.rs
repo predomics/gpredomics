@@ -3,7 +3,7 @@ use std::io::BufReader;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Param {
     pub general: General,
     pub data: Data,                          // Nested struct for "data"
@@ -11,7 +11,7 @@ pub struct Param {
     pub cv: CV
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct General {
     pub seed: u64,
     #[serde(default = "algorithm_default")]  
@@ -26,7 +26,7 @@ pub struct General {
     pub log_level: String
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Data {
     pub X: String,                      // Path to X data
     pub y: String,
@@ -44,7 +44,7 @@ pub struct Data {
     pub feature_minimal_feature_value: f64, // Minimum prevalence
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GA {
     pub population_size: u32,                // Population size
     pub max_epochs: usize,                         // Number of epochs/generations
@@ -69,7 +69,7 @@ pub struct GA {
 }
 
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CV {
     #[serde(default = "fold_number_default")]  
     pub fold_number: usize,
@@ -113,7 +113,6 @@ impl Param {
     pub fn new() -> Self {
         Self::default()
     }
-
 }
 
 
