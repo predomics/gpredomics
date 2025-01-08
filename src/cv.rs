@@ -53,13 +53,14 @@ impl CV {
         }
     }
 
-    pub fn pass(
+    pub fn pass<F>(
         &mut self,
-        algo: fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population>,
+        algo: F,
         param: &Param,
         thread_number: usize,
         running: Arc<AtomicBool>
-    ) -> Vec<(Individual, f64, f64)> {
+    ) -> Vec<(Individual, f64, f64)>
+    where F: Fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population> + std::marker::Send + std::marker::Sync, {
         // Configure the thread pool with the specified thread number
         let thread_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(thread_number)

@@ -94,7 +94,19 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
     info!("{:?}", my_data); 
 
-    let mut populations = ga::ga(&mut my_data,&param,running);
+    let mutate = if param.general.algo.contains("ga2") { ga::mutate2 } else { ga::mutate };
+
+    let mut populations = if param.general.algo.contains("no_overfit") 
+        {
+            ga::ga(&mut my_data,&param,running, mutate, 
+                |p: &mut Population,d: &Data| { p.evaluate_with_k_penalty(d, param.ga.kpenalty); } )
+        } else {
+            let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+            let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
+
+            ga::ga(&mut cv.datasets[0].clone(),&param,running, mutate, 
+                |p: &mut Population,d: &Data| { p.evaluate_with_kno_penalty(d, param.ga.kpenalty, &cv.folds[0].clone(), param.cv.overfit_penalty); } )
+        };
     let generations = populations.len();
     let mut population= &mut populations[generations-1];
 
@@ -126,46 +138,6 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
 }
 
 
-/// the Genetic Algorithm test with a generalization constraint
-pub fn ga_no_overfit(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
-    info!("                          GA NO OVERFIT TEST\n-----------------------------------------------------");
-    let mut my_data = Data::new();
-    
-    my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
-    info!("{:?}", &my_data); 
-    
-    let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-    let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
-
-    let mut populations = ga::ga_no_overfit(&mut cv.datasets[0].clone(), 
-        &cv.folds[0].clone(), &param,  running);
-
-    let mut population=populations.pop().unwrap();
-
-    let mut test_data=Data::new();
-    if param.data.Xtest.len()>0 {
-        test_data.load_data(&param.data.Xtest, &param.data.ytest);
-        
-        for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
-            let auc=individual.auc;
-            let test_auc=individual.compute_auc(&test_data);
-            let (threshold, accuracy, sensitivity, specificity) = individual.compute_threshold_and_metrics(&test_data);
-            info!("Model #{} [k={}] [gen:{}]: train AUC {}  | test AUC {} | threshold {} | accuracy {} | sensitivity {} | specificity {} | {:?}",
-                        i+1,individual.k,individual.n,auc,test_auc,threshold,accuracy,sensitivity,specificity,individual);
-        }    
-    }
-    else {
-        for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
-            let auc=individual.auc;
-            info!("Model #{} [k={}] [gen:{}]: train AUC {}",i+1,individual.k,individual.n,auc);
-        }    
-    }
-
-    (populations,cv.datasets.remove(0),test_data) 
-
-}
-
-
 /// the Genetic Algorithm test with Crossval (not useful but test CV)
 pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
     info!("                          GA CV TEST\n-----------------------------------------------------");
@@ -177,7 +149,10 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
 
     let mut crossval = cv::CV::new(&my_data, 10, &mut rng);
 
-    let results=crossval.pass(ga::ga, &param, param.general.thread_number, running);
+    let results=crossval.pass(|d: &mut Data,p: &Param,r: Arc<AtomicBool>| 
+        { ga::ga(d,p,r,
+            ga::mutate,
+            |p: &mut Population,d: &Data| { p.evaluate_with_k_penalty(d, param.ga.kpenalty.clone()); }) }, &param, param.general.thread_number, running);
     
     let mut test_data=Data::new();
     if param.data.Xtest.len()>0 {
