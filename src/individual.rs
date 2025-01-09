@@ -7,13 +7,14 @@ use rand_chacha::ChaCha8Rng;
 use std::fmt;
 
 
+#[derive(Clone)]
 pub struct Individual {
     pub features: HashMap<usize,i8>, /// a vector of feature indices with their corresponding signs
     //pub feature_names: Vec<string>, /// a vector of feature indices
     pub fit_method: String, // AUC, accuracy, etc.
     pub auc: f64, // accuracy of the model
     pub k: usize, // nb of variables used
-    pub n: usize // generation or other counter important in the strategy 
+    pub epoch: usize // generation or other counter important in the strategy 
 }
 
 impl Individual {
@@ -50,17 +51,7 @@ impl Individual {
             fit_method: String::from("AUC"),
             auc: 0.0,
             k: 0,
-            n: 0
-        }
-    }
-
-    pub fn clone(&self) -> Individual {
-        Individual {
-            features: self.features.clone(),
-            fit_method: self.fit_method.clone(),
-            auc: self.auc,
-            k: self.k,
-            n: self.n
+            epoch: 0
         }
     }
 
@@ -223,7 +214,7 @@ impl Individual {
             fit_method: String::from("AUC"),
             auc: 0.0,
             k: k,
-            n: 0
+            epoch: 0
         }
     }
 
@@ -260,7 +251,7 @@ impl Individual {
             fit_method: String::from("AUC"),
             auc: 0.0,
             k: k,
-            n: 0
+            epoch: 0
         }
 
     }

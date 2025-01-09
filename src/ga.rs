@@ -46,16 +46,20 @@ where
         // these individuals are flagged with the parent attribute
         // this populate half the new generation new_pop
         let sorted_pop = pop.sort();  
-        debug!("best AUC so far {:.3} (k={}, gen#{}) , average AUC {:.3}, k:{:.3}", 
-            &sorted_pop.individuals[0].auc, &sorted_pop.individuals[0].k, &sorted_pop.individuals[0].n,
+        debug!("best model so far AUC:{:.3} (fit:{:.3}, k={}, gen#{}) , average AUC {:.3}, fit {:.3}, k:{:.1}", 
+            &sorted_pop.individuals[0].auc,
+            &sorted_pop.fit[0], 
+            &sorted_pop.individuals[0].k, 
+            &sorted_pop.individuals[0].epoch,
             &sorted_pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
+            &sorted_pop.fit.iter().sum::<f64>()/param.ga.population_size as f64,
             sorted_pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64
         );
 
         auc_values.push(sorted_pop.fit[0]);
 
         if auc_values.len()>param.ga.min_epochs {
-            if epoch-sorted_pop.individuals[0].n+1>param.ga.max_age_best_model {
+            if epoch-sorted_pop.individuals[0].epoch+1>param.ga.max_age_best_model {
                 info!("Best model has reached limit age...");
                 break
             }
@@ -70,7 +74,7 @@ where
         children.evaluate_with_k_penalty(data, param.ga.kpenalty);
         
         for i in children.individuals.iter_mut() {
-            i.n = epoch;
+            i.epoch = epoch;
         }
         new_pop.add(children);
 

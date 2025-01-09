@@ -123,13 +123,13 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
             let (threshold, accuracy, sensitivity, specificity) = individual.compute_threshold_and_metrics(&test_data);
             debug!("compute threshold");
             info!("Model #{} [k={}] [gen:{}]: train AUC {}  | test AUC {} | threshold {} | accuracy {} | sensitivity {} | specificity {} | {:?}",
-                        i+1,individual.k,individual.n,auc,test_auc,threshold,accuracy,sensitivity,specificity,individual);
+                        i+1,individual.k,individual.epoch,auc,test_auc,threshold,accuracy,sensitivity,specificity,individual);
         }    
     }
     else {
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
             let auc=individual.auc;
-            info!("Model #{} [k={}] [gen:{}]: train AUC {}",i+1,individual.k,individual.n,auc);
+            info!("Model #{} [k={}] [gen:{}]: train AUC {}",i+1,individual.k,individual.epoch,auc);
         }    
     }
 
@@ -162,7 +162,7 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
             let holdout_auc=best_model.compute_auc(&test_data);
             let (threshold, accuracy, sensitivity, specificity) = best_model.compute_threshold_and_metrics(&test_data);
             info!("Model #{} [gen:{}] [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
-                        i+1,best_model.n,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
+                        i+1,best_model.epoch,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
             info!("Features importance on train+test... ");
             info!("{}",
                 best_model.compute_oob_feature_importance(&my_data, param.ga.feature_importance_permutations,&mut rng)
@@ -183,7 +183,7 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
     }
     else {
         for (i,(best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-            warn!("Model #{} [gen:{}] [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.n,best_model.k,train_auc,test_auc,best_model);
+            warn!("Model #{} [gen:{}] [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.epoch,best_model.k,train_auc,test_auc,best_model);
         }    
     }
 

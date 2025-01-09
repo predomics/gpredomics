@@ -8,6 +8,7 @@ use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
 use log::info;
 
+#[derive(Clone)]
 pub struct Data {
     pub X: HashMap<(usize,usize),f64>,         // Matrix for feature values
     pub y: Vec<u8>,              // Vector for target values
@@ -316,18 +317,6 @@ impl Data {
         }
     }
 
-    pub fn clone(&self) -> Data {
-        Data {
-            X: self.X.clone(),
-            y: self.y.clone(),
-            features: self.features.clone(),
-            samples: self.samples.clone(),
-            feature_class_sign: self.feature_class_sign.clone(),
-            feature_selection: self.feature_selection.clone(),
-            feature_len: self.feature_len,
-            sample_len: self.sample_len
-        }
-    }
 
     pub fn clone_with_new_x(&self, X:HashMap<(usize, usize), f64>) -> Data {
         Data {
