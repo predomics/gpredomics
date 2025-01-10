@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
-use rand::seq::SliceRandom; 
-
+use rand::seq::SliceRandom;
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -16,10 +15,8 @@ macro_rules! string_vec {
 pub fn generate_random_vector(reference_size: usize, rng: &mut ChaCha8Rng) -> Vec<i8> {
     // chose k variables amount feature_selection
     // set a random coeficient for these k variables
-
-
     // Generate a vector of random values: 1, 0, or -1
-    (0..reference_size).map(|i| { rng.gen_range(-1..1) }).collect()
+    (0..reference_size).map(|_| { rng.gen_range(-1..2) }).collect()
 }
 
 
@@ -53,7 +50,7 @@ pub fn split_into_balanced_random_chunks<T: std::clone::Clone>(vec: Vec<T>, p: u
 /// shuffle a feature
 pub fn shuffle_row(X: &mut HashMap<(usize, usize), f64>, sample_len: usize, feature: usize, rng: &mut ChaCha8Rng) {
     // Extract all the column indices and values for the given row
-    let mut feature_values: Vec<f64> = (0..sample_len)
+    let feature_values: Vec<f64> = (0..sample_len)
         .filter_map(|i| X.remove(&(i, feature)))
         .collect();
 

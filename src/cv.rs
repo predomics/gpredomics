@@ -82,7 +82,7 @@ impl CV {
                     let mut best_model: Individual =
                         algo(train, param, Arc::clone(&running)).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
                     let train_auc = best_model.auc;
-                    let test_auc = best_model.compute_auc(test);
+                    let test_auc = best_model.compute_auc(test, param.general.data_type_epsilon);
 
                     info!(
                         "Fold #{}  |  Train AUC: {:.3}  |  Test AUC: {:.3}",

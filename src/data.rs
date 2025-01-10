@@ -253,7 +253,7 @@ impl Data {
     
         // Interpretation
         if p_value < max_p_value {
-            if rank_sum_0 > (n0 * n1 / 2.0) {
+            if mean_0 > mean_1 {
                 0
             } else {
                 1
@@ -351,7 +351,7 @@ impl Data {
 impl fmt::Display for Data {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 
-        writeln!(f, "Features: {}   Samples: {}",self.feature_len, self.sample_len);
+        let _ = writeln!(f, "Features: {}   Samples: {}",self.feature_len, self.sample_len);
 
         let samples_string = self.samples.join("\t");
         let truncated_samples = if samples_string.len() > 100 {

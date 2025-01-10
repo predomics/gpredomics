@@ -8,7 +8,7 @@ pub struct Param {
     pub general: General,
     pub data: Data,                          // Nested struct for "data"
     pub ga: GA,
-    pub cv: CV
+    pub cv: CV,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -16,6 +16,12 @@ pub struct General {
     pub seed: u64,
     #[serde(default = "algorithm_default")]  
     pub algo: String,
+    #[serde(default = "language_default")]  
+    pub language: String,
+    #[serde(default = "data_type_default")]  
+    pub data_type: String,    
+    #[serde(default = "data_type_epsilon_default")]  
+    pub data_type_epsilon: f64,
     #[serde(default = "thread_number_default")]  
     pub thread_number: usize,
     #[serde(default = "log_base_default")]  
@@ -23,7 +29,17 @@ pub struct General {
     #[serde(default = "log_suffix_default")]  
     pub log_suffix: String,
     #[serde(default = "log_level_default")]  
-    pub log_level: String
+    pub log_level: String,
+    #[serde(default = "fit_default")]
+    pub fit: String,
+    #[serde(default = "penalty_default")] 
+    pub k_penalty: f64,                       // A penalty of this per value of k is deleted from AUC in the fit function
+    #[serde(default = "penalty_default")] 
+    pub overfit_penalty: f64,
+    #[serde(default = "penalty_default")] 
+    pub fnr_penalty: f64,
+    #[serde(default = "penalty_default")] 
+    pub fpr_penalty: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -56,7 +72,6 @@ pub struct GA {
     pub kmin: usize,                           // Minimum value of k
     #[serde(default = "feature_kminkmax_default")]  
     pub kmax: usize,                           // Maximum value of k
-    pub kpenalty: f64,                       // A penalty of this per value of k is deleted from AUC in the fit function
     pub select_elite_pct: f64,               // Elite selection percentage
     pub select_random_pct: f64,              // Random selection percentage
     pub mutated_children_pct: f64,        // Mutated individuals percentage
@@ -65,7 +80,8 @@ pub struct GA {
     #[serde(default = "feature_importance_permutations_default")]    
     pub feature_importance_permutations: usize,
     #[serde(default = "feature_keep_all_generations_default")]   
-    pub keep_all_generations: bool
+    pub keep_all_generations: bool,
+
 }
 
 
@@ -73,8 +89,6 @@ pub struct GA {
 pub struct CV {
     #[serde(default = "fold_number_default")]  
     pub fold_number: usize,
-    #[serde(default = "overfit_penalty_default")] 
-    pub overfit_penalty: f64
 }
 
 
@@ -118,7 +132,7 @@ impl Param {
 
 pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     let param_file_reader = File::open(param_file)?;
-    let mut param_reader = BufReader::new(param_file_reader);
+    let param_reader = BufReader::new(param_file_reader);
     
     let config:Param = serde_yaml::from_reader(param_reader)?;
 
@@ -136,6 +150,9 @@ fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
 fn feature_maximal_pvalue_default() -> f64 { 0.5 }
 fn feature_importance_permutations_default() -> usize { 10 }
 fn feature_minimal_feature_value_default() -> f64 { 0.0 }
+fn language_default() -> String { "binary".to_string() }
+fn data_type_default() -> String { "raw".to_string() }
+fn data_type_epsilon_default() -> f64 { 1e-5 }
 fn thread_number_default() -> usize { 1 }
 fn feature_kminkmax_default() -> usize { 0 }
 fn feature_keep_all_generations_default() -> bool { true }
@@ -143,4 +160,5 @@ fn log_base_default() -> String { "".to_string() }
 fn log_suffix_default() -> String { "log".to_string() }
 fn log_level_default() -> String { "info".to_string() }
 fn fold_number_default() -> usize { 5 }
-fn overfit_penalty_default() -> f64 { 0.0 }
+fn penalty_default() -> f64 { 0.0 }
+fn fit_default() -> String { "auc".to_string() }

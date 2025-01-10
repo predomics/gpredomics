@@ -1,4 +1,4 @@
-use log::{debug, info, warn, error};
+use log::{info, error};
 use gpredomics::{param, basic_test, random_run, ga_run, gacv_run};
 use std::process;
 use flexi_logger::{Logger, WriteMode, FileSpec};
@@ -78,7 +78,7 @@ fn main() {
     });
 
     // Main thread now monitors the signal
-    let signal_thread = thread::spawn(move || {
+    let _signal_thread = thread::spawn(move || {
         for sig in signals.forever() {
             match sig {
                 SIGTERM | SIGHUP => {

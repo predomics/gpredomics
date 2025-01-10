@@ -2,10 +2,10 @@ use crate::data::Data;
 use crate::individual::Individual;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
+use std::mem;
 
 pub struct Population {
-    pub individuals: Vec<Individual>,
-    pub fit: Vec<f64>
+    pub individuals: Vec<Individual>
 }
 
 impl Population {
@@ -31,77 +31,87 @@ impl Population {
 
     pub fn new() -> Population {
         Population {
-            individuals: Vec::new(),
-            fit: Vec::new()
+            individuals: Vec::new()
         }
     }
 
-    pub fn evaluate(&mut self, data: &Data) -> & mut Self {
-        self.fit = self.individuals.iter_mut().map(|i|{
-            i.evaluate(data); 
-            i.compute_auc(data)
-        }).collect();
-        self
+    pub fn compute_hash(&mut self) {
+        for individual in &mut self.individuals {
+            individual.compute_hash();
+        }
     }
 
-    pub fn evaluate_with_k_penalty(&mut self, data: &Data, k_penalty: f64) -> & mut Self {
-        self.fit = self.individuals.iter_mut().map(|i|{
-            let k=i.compute_auc(data) - i.k as f64 * k_penalty;
-            k
+    pub fn remove_clone(&mut self) -> u32 {
+        let mut clone_number: u32 =0;
+        let mut unique_individuals: Vec<Individual> = Vec::new();
+        let mut hash_vector: Vec<u64> = Vec::new();
 
-        }).collect();
-        self
+        let individuals = mem::take(&mut self.individuals);
+        for individual in individuals.into_iter() { 
+            if hash_vector.contains(&individual.hash) {
+                clone_number +=1;
+            } else {
+                hash_vector.push(individual.hash);
+                unique_individuals.push(individual);
+            } 
+        }
+        self.individuals = unique_individuals;
+    
+        clone_number
     }
     
-    pub fn evaluate_with_kno_penalty(& mut self, data: &Data, k_penalty: f64, test_data: &Data, overfit_penalty: f64) -> & mut Self {
-        self.fit = self.individuals.iter_mut().map(|i|{
-            //i.evaluate(data); 
-            let test_auc = i.compute_auc(test_data);
-            let auc=i.compute_auc(data);
-            auc - i.k as f64 * k_penalty - (auc-test_auc).abs() * overfit_penalty
-        }).collect();
-        self
+
+    pub fn auc_fit(&mut self, data: &Data, min_value: f64, k_penalty: f64) {
+        for i in &mut self.individuals {
+            i.fit = i.compute_auc(data, min_value) - i.k as f64 * k_penalty;
+        }
+    }
+    
+    pub fn auc_nooverfit_fit(& mut self, data: &Data, min_value: f64, k_penalty: f64, test_data: &Data, overfit_penalty: f64) {
+        for i in &mut self.individuals {
+            let test_auc = i.compute_auc(test_data, min_value);
+            let auc= i.compute_auc(data, min_value);
+            i.fit = auc - i.k as f64 * k_penalty - (auc-test_auc).abs() * overfit_penalty;
+        }
+    }
+
+    pub fn objective_fit(&mut self, data: &Data, min_value: f64, fpr_penalty: f64, fnr_penalty: f64, k_penalty: f64) {
+        for i in &mut self.individuals {
+            i.fit = i.maximize_objective(data, min_value, fpr_penalty, fnr_penalty) - i.k as f64 * k_penalty;
+        }
+    }
+
+    pub fn objective_nooverfit_fit(& mut self, data: &Data, min_value: f64, fpr_penalty: f64, fnr_penalty: f64, 
+                                    k_penalty: f64, test_data: &Data, overfit_penalty: f64) {
+        for i in &mut self.individuals {
+            let test_objective = i.maximize_objective(test_data, min_value, fpr_penalty, fnr_penalty);
+            let objective= i.maximize_objective(data, min_value, fpr_penalty, fnr_penalty);
+            i.fit = objective - i.k as f64 * k_penalty - (objective-test_objective).abs() * overfit_penalty;
+        }
     }
 
     pub fn sort(mut self) -> Self {
-
-        let mut combined = self.fit.iter()
-            .zip(self.individuals.into_iter())
-            .collect::<Vec<_>>();
-
-
-        combined.sort_by(|f, i| i.0.partial_cmp(f.0).unwrap());
-
-        (self.fit, self.individuals)=combined
-            .into_iter()
-            .unzip();
-
+        self.individuals.sort_by(|i,j| j.fit.partial_cmp(&i.fit).unwrap());
         self
     }
 
     /// populate the population with a set of random individuals
     /// populate the population with a set of random individuals
-    pub fn generate(&mut self, population_size: u32, kmin:usize, kmax:usize, data: &Data, rng: &mut ChaCha8Rng) {
-        for i in 0..population_size {
-            self.individuals.push(Individual::random_select_k(data.feature_len, 
-                                    kmin,
+    pub fn generate(&mut self, population_size: u32, kmin:usize, kmax:usize, language: u8, data_type: u8, data: &Data, rng: &mut ChaCha8Rng) {
+        for _ in 0..population_size {
+            self.individuals.push(Individual::random_select_k(kmin,
                                     kmax,
                                     &data.feature_selection,
                                     &data.feature_class_sign,
+                                    language,
+                                    data_type,
                                 rng))
         }
-    }
-    /// add some individuals in the population (you may need to evaluate after, prefer add)
-    pub fn extend(&mut self, individuals: Vec<Individual>) {
-        for i in individuals { self.individuals.push(i) };
     }
 
     /// add some individuals in the population
     pub fn add(&mut self, population: Population) {
-        for (i,f) in population.individuals.into_iter().zip(population.fit.into_iter()) {
-             self.individuals.push(i);
-             self.fit.push(f);
-            };
+        self.individuals.extend(population.individuals);
     }
     
 
@@ -112,7 +122,6 @@ impl Population {
         (
             Population {
                 individuals: self.individuals.iter().take(n).map(|i|i.clone()).collect(),
-                fit: self.fit.iter().take(n).cloned().collect()
             },
             n
         )
@@ -120,24 +129,10 @@ impl Population {
 
     pub fn select_random_above_n(&self, pct: f64, n: usize, rng: &mut ChaCha8Rng) -> Population {
         let k = ( self.individuals.len() as f64 * pct / 100.0 ) as usize;
-
-        let combined = self.individuals.iter()
-            .zip(self.fit.iter())
-            .skip(n)
-            .collect::<Vec<(&Individual,&f64)>>();
-            
-            
-        let selected = combined.choose_multiple(rng, k);
-
-        let (individuals,fit):(Vec<Individual>,Vec<f64>) = selected.map(|(x,f)| ((**x).clone(),*f))
-            .unzip();
-
+        
         Population {
-            individuals: individuals,
-            fit: fit
+            individuals: self.individuals[n..].choose_multiple(rng, k).cloned().collect()
         }
-
-
 
     }
 }
