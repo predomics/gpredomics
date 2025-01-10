@@ -565,6 +565,25 @@ impl Individual {
         best_objective
     }
 
+    pub fn get_language(&self) -> &str {
+        match self.language {
+            BINARY_LANG => "Binary",
+            TERNARY_LANG => "Ternary",
+            RATIO_LANG => "Ratio",
+            POW2_LANG => "Pow2",
+            _ => "Unknown"
+        }
+    }
+
+    pub fn get_data_type(&self) -> &str {
+        match self.data_type {
+            RAW_TYPE => "Raw",
+            PREVALENCE_TYPE => "Prevalence",
+            LOG_TYPE => "Log",
+            _ => "Unknown"
+        }
+    }
+
 }
 
 impl fmt::Debug for Individual {
@@ -580,7 +599,7 @@ impl fmt::Debug for Individual {
                     }
                 }).collect::<Vec<String>>().join("");
         if desc.len()>0 { desc=desc[0..desc.len()-1].to_string() }
-        write!(f, "{}", desc)
+        write!(f, "{}:{} {}", self.get_language(), self.get_data_type(), desc)
     }
 }
 
