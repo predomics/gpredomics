@@ -102,7 +102,8 @@ where
         while children_to_create>0 {
             let mut some_children = cross_over(&new_pop,data.feature_len, children_to_create, &mut rng);
             mutate(&mut some_children, param, &data.feature_selection, &mut rng);
-            children_to_create = remove_stillborn(&mut children) as usize;
+            children_to_create = remove_stillborn(&mut some_children) as usize;
+            if children_to_create>0 { warn!("Some stillborn are presents: {}", children_to_create) }
 
             children.add(some_children);
         }
