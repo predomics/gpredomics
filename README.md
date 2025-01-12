@@ -1,14 +1,33 @@
 # gpredomics
 
-gpredomics is a rewrite of predomics in Rust, with the goal of using GPU, which is not the case right now. For the time being, it is a pure CPU program in _safe_ Rust, single thread. Only a very small subset of predomics is coded:
+gpredomics is a rewrite of predomics in Rust, with the goal of using GPU, which is not the case right now. For the time being, it is a pure CPU program in _safe_ Rust, single thread. Only a subset of predomics is coded:
 
-- only the Genetic Algorithm is coded, the equivalent of terga2 in Predomics terms,
-- a shortcut is taken as to evaluate only on AUC (a specific care has been taken so as to optimize the computation time of AUC),
-(a small test to compare some AUCs with scikit-learn show that values convergent - for some model, a small divergence (less than 0.5%) can appear)
+- only the Genetic Algorithm is coded, the equivalent of ga2 in Predomics terms,
+- the following languages are available bin(ary), ter(nary), ratio, pow2 (a language specific to gpredomics):
+
+  - bin uses only 0 or 1 as coefficients for features (take a feature or ignore it), and makes the sum of them as a score,
+  - ter uses 0,1 and -1 as coefficients (so features can now be negative also), and makes the sum of them as a score,
+  - ratio is like ter (0,1,-1) but the score is now the ratio of the sum of features associated with 1 divided by the sum of features associated with -1,
+  - pow2 is like ter but coefficients can now be powers of 2 (-64, -32, ... -4, -2, -1, 0 , 1, 2, 4, ... 64)
+
+- fit (`general.fit` in param.yaml) can be `auc`, `specificity` or `sensitivity` (a specific care has been taken so as to optimize the computation time of AUC),
+(a small test to compare some AUCs with scikit-learn show that values convergent - for some model, a small divergence (less than 0.5%) can appear). The base fit function can be nudged by several useful penalties:
+
+  - k_penalty: a penalty that is deduced from fit multiplied by the number of non nul coefficients,
+  - fnr_penalty: a penalty useful when fit is `specificity` to constraint  for some sensitivity as well,
+  - fpr_penalty: a penalty useful when fit is `sensitivity` to constraint  for some specificity as well,
+  - overfit_penalty: when this penalty is added, a part of the train data is removed, a fold as a test (the number of folds is in `cv.fold_number`), the real test being called then the holdout, and the base fit function is evaluated on test each time, the difference between train and test is deduced from the base fit function multiplied by this coefficient (thus it should be different from 1/cv.fold_number otherwise the penalty does nothing) 
+
 - feature importance is estimated by OOB algorithm using mean decreased AUC,
-- lots of features are not implemented.
+- several data_type are implemented (`general.data_type` and `general.data_type_minimum`): 
 
-At this stage (alpha), the program is simplistic and does minimal things, yet it is already useful in some cases.
+  - `raw` : features are taken as they are (default),
+  - `prevalence` : or presence/absence, features above data_type_minimum are 1 others are 0,
+  - `log` : features are now equal to their log (`feature.ln()` in Rust). Features below data_type_minimum are set to this value before log transformation.
+
+- lots of features are still not implemented.
+
+At this stage (beta), the program is remains simple, yet it is already versatile and useful. 
 
 ## compile
 
