@@ -1,7 +1,7 @@
 general:
   seed: 42
   algo: ga
-  thread_number: 1
+  thread_number: 4
   log_level: debug
   language: ter
   data_type: log

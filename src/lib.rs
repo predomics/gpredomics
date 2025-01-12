@@ -120,7 +120,7 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 info!("Fitting by AUC with k penalty {}",param.general.k_penalty);
                 ga::ga(&mut my_data,&param,running, 
                 |p: &mut Population,d: &Data| { 
-                    p.auc_fit(d, param.general.data_type_epsilon, param.general.k_penalty); 
+                    p.auc_fit(d, param.general.data_type_epsilon, param.general.k_penalty, param.general.thread_number); 
                 } )
             } else {
                 info!("Fitting by objective {} with k penalty {}",param.general.fit,param.general.k_penalty);
@@ -130,7 +130,8 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 has_auc = false;
                 ga::ga(&mut my_data,&param,running, 
                     |p: &mut Population,d: &Data| { 
-                        p.objective_fit(d, param.general.data_type_epsilon, fpr_penalty,fnr_penalty,param.general.k_penalty); 
+                        p.objective_fit(d, param.general.data_type_epsilon, fpr_penalty,fnr_penalty,param.general.k_penalty,
+                            param.general.thread_number); 
                     } )
             }
         } else {
@@ -142,7 +143,8 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 ga::ga(&mut cv.datasets[0].clone(),&param,running, 
                 |p: &mut Population,d: &Data| { 
                     p.auc_nooverfit_fit(d, param.general.data_type_epsilon,
-                         param.general.k_penalty, &cv.folds[0].clone(), param.general.overfit_penalty); } )
+                         param.general.k_penalty, &cv.folds[0].clone(), param.general.overfit_penalty,
+                         param.general.thread_number); } )
             } else {
                 info!("Fitting by objective {} with k penalty {} and overfit penalty {}",param.general.fit,param.general.k_penalty, param.general.overfit_penalty);
                 let fpr_penalty = if param.general.fit.to_lowercase().as_str()=="specificity" && param.general.fpr_penalty==0.0 {1.0} else {param.general.fpr_penalty}; 
@@ -152,7 +154,7 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 ga::ga(&mut cv.datasets[0].clone(),&param,running, 
                     |p: &mut Population,d: &Data| { 
                         p.objective_nooverfit_fit(d, param.general.data_type_epsilon, fpr_penalty,fnr_penalty,param.general.k_penalty,
-                            &cv.folds[0].clone(), param.general.overfit_penalty); 
+                            &cv.folds[0].clone(), param.general.overfit_penalty, param.general.thread_number); 
                     } )
             }
         };
@@ -214,7 +216,7 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
 
     let results=crossval.pass(|d: &mut Data,p: &Param,r: Arc<AtomicBool>| 
         { ga::ga(d,p,r,|p: &mut Population,d: &Data| { 
-            p.auc_fit(d, param.general.data_type_epsilon, param.general.k_penalty); 
+            p.auc_fit(d, param.general.data_type_epsilon, param.general.k_penalty, 1); 
         }) }, &param, param.general.thread_number, running);
     
     let mut test_data=Data::new();

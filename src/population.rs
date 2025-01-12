@@ -3,6 +3,8 @@ use crate::individual::Individual;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use std::mem;
+use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 
 pub struct Population {
     pub individuals: Vec<Individual>
@@ -61,33 +63,80 @@ impl Population {
     }
     
 
-    pub fn auc_fit(&mut self, data: &Data, min_value: f64, k_penalty: f64) {
-        for i in &mut self.individuals {
-            i.fit = i.compute_auc(data, min_value) - i.k as f64 * k_penalty;
-        }
+    pub fn auc_fit(&mut self, data: &Data, min_value: f64, k_penalty: f64, thread_number: usize) {
+        // Create a custom thread pool with 4 threads
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(thread_number)
+            .build()
+            .unwrap();
+
+        // Use the custom thread pool for parallel processing
+        pool.install(|| {
+            self.individuals
+                .par_iter_mut()
+                .for_each(|i| {
+                    i.fit = i.compute_auc(data, min_value) - i.k as f64 * k_penalty;
+                });
+        });
     }
     
-    pub fn auc_nooverfit_fit(& mut self, data: &Data, min_value: f64, k_penalty: f64, test_data: &Data, overfit_penalty: f64) {
-        for i in &mut self.individuals {
-            let test_auc = i.compute_auc(test_data, min_value);
-            let auc= i.compute_auc(data, min_value);
-            i.fit = auc - i.k as f64 * k_penalty - (auc-test_auc).abs() * overfit_penalty;
-        }
+    pub fn auc_nooverfit_fit(& mut self, data: &Data, min_value: f64, k_penalty: f64, test_data: &Data, overfit_penalty: f64,
+            thread_number: usize) {
+        // Create a custom thread pool with 4 threads
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(thread_number)
+            .build()
+            .unwrap();
+
+        // Use the custom thread pool for parallel processing
+        pool.install(|| {
+            self.individuals
+                .par_iter_mut()
+                .for_each(|i| {
+                    let test_auc = i.compute_auc(test_data, min_value);
+                    let auc= i.compute_auc(data, min_value);
+                    i.fit = auc - i.k as f64 * k_penalty - (auc-test_auc).abs() * overfit_penalty;
+                });
+        });
     }
 
-    pub fn objective_fit(&mut self, data: &Data, min_value: f64, fpr_penalty: f64, fnr_penalty: f64, k_penalty: f64) {
-        for i in &mut self.individuals {
-            i.fit = i.maximize_objective(data, min_value, fpr_penalty, fnr_penalty) - i.k as f64 * k_penalty;
-        }
+    pub fn objective_fit(&mut self, data: &Data, min_value: f64, fpr_penalty: f64, fnr_penalty: f64, k_penalty: f64,
+                            thread_number: usize) 
+    {
+                // Create a custom thread pool with 4 threads
+                let pool = ThreadPoolBuilder::new()
+                .num_threads(thread_number)
+                .build()
+                .unwrap();
+    
+            // Use the custom thread pool for parallel processing
+            pool.install(|| {
+                self.individuals
+                    .par_iter_mut()
+                    .for_each(|i| {
+                        i.fit = i.maximize_objective(data, min_value, fpr_penalty, fnr_penalty) - i.k as f64 * k_penalty;
+                    });
+            });
     }
 
     pub fn objective_nooverfit_fit(& mut self, data: &Data, min_value: f64, fpr_penalty: f64, fnr_penalty: f64, 
-                                    k_penalty: f64, test_data: &Data, overfit_penalty: f64) {
-        for i in &mut self.individuals {
-            let test_objective = i.maximize_objective(test_data, min_value, fpr_penalty, fnr_penalty);
-            let objective= i.maximize_objective(data, min_value, fpr_penalty, fnr_penalty);
-            i.fit = objective - i.k as f64 * k_penalty - (objective-test_objective).abs() * overfit_penalty;
-        }
+                                    k_penalty: f64, test_data: &Data, overfit_penalty: f64, thread_number: usize) {
+        // Create a custom thread pool with 4 threads
+        let pool = ThreadPoolBuilder::new()
+        .num_threads(thread_number)
+        .build()
+        .unwrap();
+
+        // Use the custom thread pool for parallel processing
+        pool.install(|| {
+            self.individuals
+                .par_iter_mut()
+                .for_each(|i| {
+                    let test_objective = i.maximize_objective(test_data, min_value, fpr_penalty, fnr_penalty);
+                    let objective= i.maximize_objective(data, min_value, fpr_penalty, fnr_penalty);
+                    i.fit = objective - i.k as f64 * k_penalty - (objective-test_objective).abs() * overfit_penalty;
+                });
+        });
     }
 
     pub fn sort(mut self) -> Self {

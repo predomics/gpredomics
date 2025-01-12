@@ -9,8 +9,6 @@ use std::cmp::min;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-
-
 #[derive(Clone)]
 pub struct Individual {
     pub features: HashMap<usize,i8>, /// a vector of feature indices with their corresponding signs
@@ -602,6 +600,10 @@ impl fmt::Debug for Individual {
         write!(f, "{}:{} {}", self.get_language(), self.get_data_type(), desc)
     }
 }
+
+// Safe implementation of Send and Sync
+unsafe impl Send for Individual {}
+unsafe impl Sync for Individual {}
 
 /// When a parent has a child of a different language, do we need to convert the gene values ?
 pub fn needs_conversion(parent_language: u8, child_language: u8) -> bool {
