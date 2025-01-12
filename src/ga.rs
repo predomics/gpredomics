@@ -10,6 +10,7 @@ use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use log::{debug,info,warn,error};
 use std::cmp::min;
+use std::collections::HashMap;
 use std::mem;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,25 +32,34 @@ where
     debug!("FEATURES {:?}",data.feature_class_sign);
 
     // generate initial population
-    let mut target_size = param.ga.population_size;
-    while target_size>0 {
-        let mut sub_pop = Population::new();
-        debug!("generating:");
-        sub_pop.generate(target_size, param.ga.kmin, 
-            if param.ga.kmax>0 { min(data.feature_selection.len(), param.ga.kmax) } else { data.feature_selection.len() }, 
-            individual::language(&param.general.language),
-            individual::data_type(&param.general.data_type),
-             data, &mut rng);
-        debug!("generated...");
-        
-        target_size = remove_stillborn(&mut sub_pop);
-        if target_size>0 { warn!("Some still born are present {}",target_size);
-            if target_size==param.ga.population_size { 
-                error!("Params only create inviable individuals!");
-                panic!("Params only create inviable individuals!") } 
-        }
 
-        pop.add(sub_pop);
+    let languages: Vec<u8> = param.general.language.split(",").map(individual::language).collect();
+    let data_types: Vec<u8> = param.general.data_type.split(",").map(individual::data_type).collect();
+    let sub_population_size = param.ga.population_size / (languages.len() * data_types.len()) as u32 + 1;
+    for data_type in &data_types {
+        for language in &languages {
+            let mut target_size = sub_population_size;
+            while target_size>0 {
+                let mut sub_pop = Population::new();
+                debug!("generating...");
+            
+                sub_pop.generate(target_size, param.ga.kmin, 
+                    if param.ga.kmax>0 { min(data.feature_selection.len(), param.ga.kmax) } else { data.feature_selection.len() }, 
+                    *language,
+                    *data_type,
+                    data, &mut rng);
+                debug!("generated for {} {}...",sub_pop.individuals[0].get_language(),sub_pop.individuals[0].get_data_type());
+            
+                target_size = remove_stillborn(&mut sub_pop);
+                if target_size>0 { warn!("Some still born are present {}",target_size);
+                    if target_size==param.ga.population_size { 
+                        error!("Params only create inviable individuals!");
+                        panic!("Params only create inviable individuals!") } 
+                }
+        
+                pop.add(sub_pop);
+            }
+        }
     }
 
     info!("pop size {}, kmin {}, kmax {}",pop.individuals.len(),pop.individuals.iter().map(|i| {i.k}).min().unwrap_or(0),pop.individuals.iter().map(|i| {i.k}).max().unwrap_or(0));
@@ -145,9 +155,24 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
     // order pop by fit and select params.ga_select_elite_pct
     let (mut parents, n) = pop.select_first_pct(param.ga.select_elite_pct);
 
-    // add a random part of the others
-    parents.add(pop.select_random_above_n(param.ga.select_random_pct, n, rng));
+    let mut individual_by_types : HashMap<(u8,u8),Vec<&Individual>> = HashMap::new();
+    for individual in pop.individuals[n..].iter() {
+        let i_type = (individual.language, individual.data_type);
+        if !individual_by_types.contains_key(&i_type) {
+            individual_by_types.insert(i_type, vec![individual]);
+        } else {
+            individual_by_types.get_mut(&i_type).unwrap().push(individual);
+        }
+    }
 
+    // add a random part of the others
+    //parents.add(pop.select_random_above_n(param.ga.select_random_pct, n, rng));
+    let n2 = (pop.individuals.len() as f64 * param.ga.select_random_pct / 100.0 / individual_by_types.keys().len() as f64) as usize;
+
+    for i_type in individual_by_types.keys() {
+        debug!("Adding {}:{} Individuals {} ", individual_by_types[i_type][0].get_language(), individual_by_types[i_type][0].get_data_type(), n2);
+        parents.individuals.extend(individual_by_types[i_type].choose_multiple(rng, n2).map(|i| (*i).clone()));
+    }
     parents
 
 }
