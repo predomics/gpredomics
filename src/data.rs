@@ -14,7 +14,7 @@ pub struct Data {
     pub y: Vec<u8>,              // Vector for target values
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
     pub samples: Vec<String>,
-    pub feature_class_sign: HashMap<usize, u8>, // Sign for each feature
+    pub feature_class: HashMap<usize, u8>, // Sign for each feature
     pub feature_selection: Vec<usize>,
     pub feature_len: usize,
     pub sample_len: usize
@@ -28,7 +28,7 @@ impl Data {
             y: Vec::new(),
             features: Vec::new(),
             samples: Vec::new(),
-            feature_class_sign: HashMap::new(),
+            feature_class: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 0,
             sample_len: 0
@@ -267,14 +267,14 @@ impl Data {
     /// Fill feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
     pub fn select_features(&mut self, param:&Param) {
         self.feature_selection = Vec::new();
-        self.feature_class_sign = HashMap::new();
+        self.feature_class = HashMap::new();
 
         if param.data.pvalue_method=="studentt" { 
             for j in 0..self.feature_len {
                 match self.compare_classes_studentt(j,param.data.feature_maximal_pvalue,
                     param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
-                    0 => {self.feature_selection.push(j); self.feature_class_sign.insert(j, 0);},
-                    1 => {self.feature_selection.push(j); self.feature_class_sign.insert(j, 1);},
+                    0 => {self.feature_selection.push(j); self.feature_class.insert(j, 0);},
+                    1 => {self.feature_selection.push(j); self.feature_class.insert(j, 1);},
                     _ => {}
                 }
             }
@@ -283,8 +283,8 @@ impl Data {
             for j in 0..self.feature_len {
                 match self.compare_classes_wilcoxon(j,param.data.feature_maximal_pvalue,
                     param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
-                    0 => {self.feature_selection.push(j); self.feature_class_sign.insert(j, 0);},
-                    1 => {self.feature_selection.push(j); self.feature_class_sign.insert(j, 1);},
+                    0 => {self.feature_selection.push(j); self.feature_class.insert(j, 0);},
+                    1 => {self.feature_selection.push(j); self.feature_class.insert(j, 1);},
                     _ => {}
                 }
             }
@@ -310,7 +310,7 @@ impl Data {
             y: samples.iter().map(|i| {self.y[*i]}).collect(),
             features: self.features.clone(),
             samples: samples.iter().map(|i| {self.samples[*i].clone()}).collect(),
-            feature_class_sign: HashMap::new(),
+            feature_class: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: self.feature_len,
             sample_len: samples.len()
@@ -324,7 +324,7 @@ impl Data {
             y: self.y.clone(),
             features: self.features.clone(),
             samples: self.samples.clone(),
-            feature_class_sign: self.feature_class_sign.clone(),
+            feature_class: self.feature_class.clone(),
             feature_selection: self.feature_selection.clone(),
             feature_len: self.feature_len,
             sample_len: self.sample_len

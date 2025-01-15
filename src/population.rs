@@ -151,7 +151,7 @@ impl Population {
             self.individuals.push(Individual::random_select_k(kmin,
                                     kmax,
                                     &data.feature_selection,
-                                    &data.feature_class_sign,
+                                    &data.feature_class,
                                     language,
                                     data_type,
                                 rng))

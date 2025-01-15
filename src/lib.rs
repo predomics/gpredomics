@@ -2,7 +2,7 @@
 
 pub mod data;
 mod utils;
-mod individual;
+pub mod individual;
 pub mod param;
 pub mod population;
 mod ga;

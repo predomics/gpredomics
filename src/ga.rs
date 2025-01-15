@@ -29,7 +29,7 @@ where
     info!("Selecting features...");
     data.select_features(param);
     info!("{} features selected.",data.feature_selection.len());
-    debug!("FEATURES {:?}",data.feature_class_sign);
+    debug!("FEATURES {:?}",data.feature_class);
 
     // generate initial population
 
