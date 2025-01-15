@@ -63,7 +63,7 @@ impl Population {
     }
     
 
-    pub fn auc_fit(&mut self, data: &Data, min_value: f64, k_penalty: f64, thread_number: usize) {
+    pub fn auc_fit(&mut self, data: &Data, k_penalty: f64, thread_number: usize) {
         // Create a custom thread pool with 4 threads
         let pool = ThreadPoolBuilder::new()
             .num_threads(thread_number)
@@ -75,12 +75,12 @@ impl Population {
             self.individuals
                 .par_iter_mut()
                 .for_each(|i| {
-                    i.fit = i.compute_auc(data, min_value) - i.k as f64 * k_penalty;
+                    i.fit = i.compute_auc(data) - i.k as f64 * k_penalty;
                 });
         });
     }
     
-    pub fn auc_nooverfit_fit(& mut self, data: &Data, min_value: f64, k_penalty: f64, test_data: &Data, overfit_penalty: f64,
+    pub fn auc_nooverfit_fit(& mut self, data: &Data, k_penalty: f64, test_data: &Data, overfit_penalty: f64,
             thread_number: usize) {
         // Create a custom thread pool with 4 threads
         let pool = ThreadPoolBuilder::new()
@@ -93,14 +93,14 @@ impl Population {
             self.individuals
                 .par_iter_mut()
                 .for_each(|i| {
-                    let test_auc = i.compute_auc(test_data, min_value);
-                    let auc= i.compute_auc(data, min_value);
+                    let test_auc = i.compute_auc(test_data);
+                    let auc= i.compute_auc(data);
                     i.fit = auc - i.k as f64 * k_penalty - (auc-test_auc).abs() * overfit_penalty;
                 });
         });
     }
 
-    pub fn objective_fit(&mut self, data: &Data, min_value: f64, fpr_penalty: f64, fnr_penalty: f64, k_penalty: f64,
+    pub fn objective_fit(&mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64, k_penalty: f64,
                             thread_number: usize) 
     {
                 // Create a custom thread pool with 4 threads
@@ -114,12 +114,12 @@ impl Population {
                 self.individuals
                     .par_iter_mut()
                     .for_each(|i| {
-                        i.fit = i.maximize_objective(data, min_value, fpr_penalty, fnr_penalty) - i.k as f64 * k_penalty;
+                        i.fit = i.maximize_objective(data, fpr_penalty, fnr_penalty) - i.k as f64 * k_penalty;
                     });
             });
     }
 
-    pub fn objective_nooverfit_fit(& mut self, data: &Data, min_value: f64, fpr_penalty: f64, fnr_penalty: f64, 
+    pub fn objective_nooverfit_fit(& mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64, 
                                     k_penalty: f64, test_data: &Data, overfit_penalty: f64, thread_number: usize) {
         // Create a custom thread pool with 4 threads
         let pool = ThreadPoolBuilder::new()
@@ -132,8 +132,8 @@ impl Population {
             self.individuals
                 .par_iter_mut()
                 .for_each(|i| {
-                    let test_objective = i.maximize_objective(test_data, min_value, fpr_penalty, fnr_penalty);
-                    let objective= i.maximize_objective(data, min_value, fpr_penalty, fnr_penalty);
+                    let test_objective = i.maximize_objective(test_data, fpr_penalty, fnr_penalty);
+                    let objective= i.maximize_objective(data, fpr_penalty, fnr_penalty);
                     i.fit = objective - i.k as f64 * k_penalty - (objective-test_objective).abs() * overfit_penalty;
                 });
         });
@@ -146,7 +146,7 @@ impl Population {
 
     /// populate the population with a set of random individuals
     /// populate the population with a set of random individuals
-    pub fn generate(&mut self, population_size: u32, kmin:usize, kmax:usize, language: u8, data_type: u8, data: &Data, rng: &mut ChaCha8Rng) {
+    pub fn generate(&mut self, population_size: u32, kmin:usize, kmax:usize, language: u8, data_type: u8, data_type_minimum: f64, data: &Data, rng: &mut ChaCha8Rng) {
         for _ in 0..population_size {
             self.individuals.push(Individual::random_select_k(kmin,
                                     kmax,
@@ -154,6 +154,7 @@ impl Population {
                                     &data.feature_class,
                                     language,
                                     data_type,
+                                    data_type_minimum,
                                 rng))
         }
     }

@@ -22,7 +22,8 @@ pub struct Individual {
     pub epoch: usize, // generation or other counter important in the strategy 
     pub language: u8, // binary (0,1), ternary (-1,0,1), pow2 (-4,-2,-1,0,1,2,4), ratio (-1,-1,-1,81)
     pub data_type: u8, // abundance (raw), prevalence (0,1), log
-    pub hash: u64
+    pub hash: u64,
+    pub data_type_minimum: f64
 }
 
 pub const BINARY_LANG :u8 = 0;
@@ -32,6 +33,7 @@ pub const RATIO_LANG :u8 = 3;
 pub const RAW_TYPE :u8 = 0;
 pub const PREVALENCE_TYPE :u8 = 1;
 pub const LOG_TYPE :u8 = 2;
+pub const DEFAULT_MINIMUM :f64 = f64::MIN_POSITIVE;
 
 const DEFAULT_POW2_START :u8 = 4;
 
@@ -97,7 +99,8 @@ impl Individual {
             epoch: 0,
             language: BINARY_LANG,
             data_type: RAW_TYPE,
-            hash: 0
+            hash: 0,
+            data_type_minimum: DEFAULT_MINIMUM
         }
     }
 
@@ -117,23 +120,24 @@ impl Individual {
         let mut i=Individual::new();
         i.language = main_parent.language;
         i.data_type = main_parent.data_type;
+        i.data_type_minimum = main_parent.data_type_minimum;
         i
     }
 
-    pub fn evaluate(&self, d: &Data, min_value: f64) -> Vec<f64> {
-        self.evaluate_from_features(&d.X, d.sample_len, min_value)
+    pub fn evaluate(&self, d: &Data) -> Vec<f64> {
+        self.evaluate_from_features(&d.X, d.sample_len)
     }
 
-    pub fn evaluate_from_features(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize, min_value: f64) -> Vec<f64> {
+    pub fn evaluate_from_features(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize) -> Vec<f64> {
         match self.data_type {
-            RAW_TYPE => self.evaluate_raw(X, sample_len, min_value),
-            PREVALENCE_TYPE => self.evaluate_prevalence(X, sample_len, min_value),
-            LOG_TYPE => self.evaluate_log(X, sample_len, min_value),
+            RAW_TYPE => self.evaluate_raw(X, sample_len),
+            PREVALENCE_TYPE => self.evaluate_prevalence(X, sample_len),
+            LOG_TYPE => self.evaluate_log(X, sample_len),
             other => panic!("Unknown data-type {}",other)
         }
     }
 
-    fn evaluate_raw(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize, min_value: f64) -> Vec<f64> {
+    fn evaluate_raw(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize) -> Vec<f64> {
         let mut score=vec![0.0; sample_len];
 
         if self.language == RATIO_LANG {
@@ -145,7 +149,7 @@ impl Individual {
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/r[sample][1].max(min_value);
+                score[sample]=r[sample][0]/r[sample][1].max(self.data_type_minimum);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
@@ -159,7 +163,7 @@ impl Individual {
         score
     }
 
-    fn evaluate_prevalence(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize, min_value: f64) -> Vec<f64> {
+    fn evaluate_prevalence(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize) -> Vec<f64> {
         let mut score=vec![0.0; sample_len];
 
         if self.language == RATIO_LANG {
@@ -167,17 +171,17 @@ impl Individual {
             for (feature_index,coef) in self.features.iter() {
                 let part = if *coef>0 {0} else {1};
                 for sample in 0..sample_len {
-                    r[sample][part] += if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&min_value {1.0} else {0.0};
+                    r[sample][part] += if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&self.data_type_minimum {1.0} else {0.0};
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/r[sample][1].max(min_value);
+                score[sample]=r[sample][0]/r[sample][1].max(self.data_type_minimum);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
                 let x_coef = *coef as f64;
                 for sample in 0..sample_len {
-                        score[sample] += if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&min_value {1.0} else {0.0} * x_coef;
+                        score[sample] += if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&self.data_type_minimum {1.0} else {0.0} * x_coef;
                 }
             }
         }
@@ -185,7 +189,7 @@ impl Individual {
         score
     }
 
-    fn evaluate_log(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize, min_value: f64) -> Vec<f64> {
+    fn evaluate_log(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize) -> Vec<f64> {
         let mut score=vec![0.0; sample_len];
 
         if self.language == RATIO_LANG {
@@ -193,18 +197,18 @@ impl Individual {
             for (feature_index,coef) in self.features.iter() {
                 let part = if *coef>0 {0} else {1};
                 for sample in 0..sample_len {
-                    r[sample][part] += X.get(&(sample,*feature_index)).unwrap_or(&0.0).max(min_value).ln()
+                    r[sample][part] += X.get(&(sample,*feature_index)).unwrap_or(&0.0).max(self.data_type_minimum).ln()
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/r[sample][1].max(min_value);
+                score[sample]=r[sample][0]/r[sample][1].max(self.data_type_minimum);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
                 let x_coef = *coef as f64;
                 for sample in 0..sample_len {
                         score[sample] += X.get(&(sample,*feature_index)).unwrap_or(&0.0)
-                                .max(min_value).ln() * x_coef;
+                                .max(self.data_type_minimum).ln() * x_coef;
                 }
             }
         }
@@ -214,14 +218,14 @@ impl Individual {
 
 
     /// Compute AUC based on the target vector y
-    pub fn compute_auc(&mut self, d: &Data, min_value: f64) -> f64 {
-        let value = self.evaluate(d, min_value);
+    pub fn compute_auc(&mut self, d: &Data) -> f64 {
+        let value = self.evaluate(d);
         self.compute_auc_from_value(value, &d.y)
     }
 
     /// Compute AUC based on X and y rather than a complete Data object
-    pub fn compute_auc_from_features(&mut self, X: &HashMap<(usize,usize),f64>, sample_len: usize, min_value: f64, y: &Vec<u8>) -> f64 {
-        let value = self.evaluate_from_features(X, sample_len, min_value);
+    pub fn compute_auc_from_features(&mut self, X: &HashMap<(usize,usize),f64>, sample_len: usize, y: &Vec<u8>) -> f64 {
+        let value = self.evaluate_from_features(X, sample_len);
         self.compute_auc_from_value(value, y)
     }
 
@@ -297,13 +301,13 @@ impl Individual {
     } 
 
     /// Calculate the confusion matrix at a given threshold
-    pub fn calculate_confusion_matrix(&self,data: &Data, min_value: f64) -> (usize, usize, usize, usize) {
+    pub fn calculate_confusion_matrix(&self,data: &Data) -> (usize, usize, usize, usize) {
         let mut tp = 0; // True Positives
         let mut fp = 0; // False Positives
         let mut tn = 0; // True Negatives
         let mut fn_count = 0; // False Negatives
 
-        let value = self.evaluate(data, min_value);
+        let value = self.evaluate(data);
 
         for (i, &pred) in value.iter().enumerate() {
             match data.y[i] {
@@ -354,7 +358,7 @@ impl Individual {
 
     /// randomly generated individual amoung the selected features
     pub fn random_select_k(kmin: usize, kmax:usize, feature_selection: &Vec<usize>, feature_class: &HashMap<usize,u8>, 
-                            language: u8, data_type: u8, rng: &mut ChaCha8Rng) -> Individual {
+                            language: u8, data_type: u8, data_type_minimum: f64, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
@@ -387,6 +391,7 @@ impl Individual {
         i.k = k;
         i.language = language;
         i.data_type = data_type;
+        i.data_type_minimum = data_type_minimum;
         i
 
     }
@@ -398,8 +403,8 @@ impl Individual {
 
     /// a function that compute accuracy,precision and sensitivity, fixing the threshold using Youden index 
     /// return (threshold, accuracy, sensitivity, specificity)
-    pub fn compute_threshold_and_metrics(&self, d: &Data, min_value: f64) -> (f64, f64, f64, f64) {
-        let value = self.evaluate(d, min_value); // Predicted probabilities
+    pub fn compute_threshold_and_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
+        let value = self.evaluate(d); // Predicted probabilities
         let mut combined: Vec<(f64, u8)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
         
         // Sort by predicted probabilities
@@ -474,10 +479,10 @@ impl Individual {
 
     /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
     /// uses mean decreased AUC
-    pub fn compute_oob_feature_importance(&mut self, data: &Data, permutations: usize, min_value: f64, rng: &mut ChaCha8Rng) -> Vec<f64> {
+    pub fn compute_oob_feature_importance(&mut self, data: &Data, permutations: usize, rng: &mut ChaCha8Rng) -> Vec<f64> {
         let model_features = self.features_index();
         let mut importances = vec![0.0; model_features.len()]; // One importance value per feature
-        let baseline_auc = self.compute_auc(data, min_value); // Baseline AUC
+        let baseline_auc = self.compute_auc(data); // Baseline AUC
 
         for (i,feature_idx) in model_features.iter().enumerate() {
             let mut permuted_auc_sum = 0.0;
@@ -489,7 +494,7 @@ impl Individual {
                 shuffle_row(&mut X_permuted, data.sample_len, *feature_idx, rng);
 
                 // Recompute AUC with the permuted feature
-                let permuted_auc = self.compute_auc_from_features(&X_permuted, data.sample_len, min_value, &data.y);
+                let permuted_auc = self.compute_auc_from_features(&X_permuted, data.sample_len, &data.y);
                 permuted_auc_sum += permuted_auc;
             }
 
@@ -503,8 +508,8 @@ impl Individual {
         importances
     }
 
-    pub fn maximize_objective(&mut self, data: &Data, min_value: f64, fpr_penalty: f64, fnr_penalty: f64) -> f64 {
-        let scores = self.evaluate(data, min_value);
+    pub fn maximize_objective(&mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64) -> f64 {
+        let scores = self.evaluate(data);
     
         // Step 2: Extract unique thresholds from scores
         let mut thresholds: Vec<f64> = scores.clone();

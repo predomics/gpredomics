@@ -7,6 +7,8 @@ use crate::param::Param;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
 use log::info;
+use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 
 #[derive(Clone)]
 pub struct Data {
@@ -269,24 +271,48 @@ impl Data {
         self.feature_selection = Vec::new();
         self.feature_class = HashMap::new();
 
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(param.general.thread_number)
+            .build()
+            .unwrap();
+
+
         if param.data.pvalue_method=="studentt" { 
-            for j in 0..self.feature_len {
-                match self.compare_classes_studentt(j,param.data.feature_maximal_pvalue,
-                    param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
-                    0 => {self.feature_selection.push(j); self.feature_class.insert(j, 0);},
-                    1 => {self.feature_selection.push(j); self.feature_class.insert(j, 1);},
-                    _ => {}
-                }
+            let results: Vec<(usize, u8)> = pool.install(|| {
+                (0..self.feature_len)
+                    .into_par_iter()
+                    .map(|j| {
+                        let class = self.compare_classes_studentt(
+                            j,
+                            param.data.feature_maximal_pvalue,
+                            param.data.feature_minimal_prevalence_pct as f64/100.0,
+                            param.data.feature_minimal_feature_value,
+                        );
+                        (j, class)
+                    })
+                    .collect()
+            });
+            for (j, class) in results {
+                if class!=2 {self.feature_class.insert(j, class); self.feature_selection.push(j);}
             }
         } 
         else { 
-            for j in 0..self.feature_len {
-                match self.compare_classes_wilcoxon(j,param.data.feature_maximal_pvalue,
-                    param.data.feature_minimal_prevalence_pct as f64/100.0, param.data.feature_minimal_feature_value) {
-                    0 => {self.feature_selection.push(j); self.feature_class.insert(j, 0);},
-                    1 => {self.feature_selection.push(j); self.feature_class.insert(j, 1);},
-                    _ => {}
-                }
+            let results: Vec<(usize, u8)> = pool.install(|| {
+                (0..self.feature_len)
+                    .into_par_iter()
+                    .map(|j| {
+                        let class = self.compare_classes_wilcoxon(
+                            j,
+                            param.data.feature_maximal_pvalue,
+                            param.data.feature_minimal_prevalence_pct as f64/100.0,
+                            param.data.feature_minimal_feature_value,
+                        );
+                        (j, class)
+                    })
+                    .collect()
+            });
+            for (j, class) in results {
+                if class!=2 {self.feature_class.insert(j, class); self.feature_selection.push(j);}
             }
         };
 

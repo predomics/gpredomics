@@ -48,9 +48,9 @@ pub fn basic_test(param: &Param) {
     my_individual.compute_hash();
     info!("my individual: {:?}",my_individual.features);
     info!("my individual hash: {}",my_individual.hash);
-    info!("my individual evaluation: {:?}",my_individual.evaluate(&my_data, 0.0));
+    info!("my individual evaluation: {:?}",my_individual.evaluate(&my_data));
     // shoud display 1.0 (the AUC is 1.0)
-    info!("my individual AUC: {:?}",my_individual.compute_auc(&my_data, 0.0));
+    info!("my individual AUC: {:?}",my_individual.compute_auc(&my_data));
 
     let mut my_individual2 = Individual::new();
     my_individual2.features.insert(0, 1);
@@ -58,9 +58,9 @@ pub fn basic_test(param: &Param) {
     my_individual2.compute_hash();
     info!("my individual2 {:?}",my_individual2.features);
     info!("my individual2 hash: {}",my_individual2.hash);
-    info!("my individual2 evaluation: {:?}",my_individual2.evaluate(&my_data, 0.0));
+    info!("my individual2 evaluation: {:?}",my_individual2.evaluate(&my_data));
     // shoud display 1.0 (the AUC is 1.0)
-    info!("my individual2 AUC: {:?}",my_individual2.compute_auc(&my_data, 0.0));
+    info!("my individual2 AUC: {:?}",my_individual2.compute_auc(&my_data));
 
 
     let mut data2=Data::new();
@@ -98,7 +98,7 @@ pub fn random_run(param: &Param) {
     for _ in 0..1000 {
         let mut my_individual = Individual::random(&my_data, &mut rng);
 
-        let auc = my_individual.compute_auc(&my_data, 0.0);
+        let auc = my_individual.compute_auc(&my_data);
         if auc>auc_max {auc_max=auc;best_individual=my_individual;}
     }
     warn!("AUC max: {} model: {:?}",auc_max, best_individual.features);
@@ -120,7 +120,7 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 info!("Fitting by AUC with k penalty {}",param.general.k_penalty);
                 ga::ga(&mut my_data,&param,running, 
                 |p: &mut Population,d: &Data| { 
-                    p.auc_fit(d, param.general.data_type_epsilon, param.general.k_penalty, param.general.thread_number); 
+                    p.auc_fit(d, param.general.k_penalty, param.general.thread_number); 
                 } )
             } else {
                 info!("Fitting by objective {} with k penalty {}",param.general.fit,param.general.k_penalty);
@@ -130,7 +130,7 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 has_auc = false;
                 ga::ga(&mut my_data,&param,running, 
                     |p: &mut Population,d: &Data| { 
-                        p.objective_fit(d, param.general.data_type_epsilon, fpr_penalty,fnr_penalty,param.general.k_penalty,
+                        p.objective_fit(d, fpr_penalty,fnr_penalty,param.general.k_penalty,
                             param.general.thread_number); 
                     } )
             }
@@ -142,7 +142,7 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 info!("Fitting by AUC with k penalty {} and overfit penalty {}",param.general.k_penalty, param.general.overfit_penalty);
                 ga::ga(&mut cv.datasets[0].clone(),&param,running, 
                 |p: &mut Population,d: &Data| { 
-                    p.auc_nooverfit_fit(d, param.general.data_type_epsilon,
+                    p.auc_nooverfit_fit(d,
                          param.general.k_penalty, &cv.folds[0].clone(), param.general.overfit_penalty,
                          param.general.thread_number); } )
             } else {
@@ -153,7 +153,7 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 has_auc = false;
                 ga::ga(&mut cv.datasets[0].clone(),&param,running, 
                     |p: &mut Population,d: &Data| { 
-                        p.objective_nooverfit_fit(d, param.general.data_type_epsilon, fpr_penalty,fnr_penalty,param.general.k_penalty,
+                        p.objective_nooverfit_fit(d, fpr_penalty,fnr_penalty,param.general.k_penalty,
                             &cv.folds[0].clone(), param.general.overfit_penalty, param.general.thread_number); 
                     } )
             }
@@ -168,15 +168,15 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         debug!("Length of population {}",population.individuals.len());
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
             let mut auc=individual.auc;
-            let test_auc=individual.compute_auc(&test_data, param.general.data_type_epsilon);
+            let test_auc=individual.compute_auc(&test_data);
             if has_auc {
                 individual.auc = auc;
                 (individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = 
-                    individual.compute_threshold_and_metrics(&my_data, param.general.data_type_epsilon);
+                    individual.compute_threshold_and_metrics(&my_data);
             } else {
-                auc = individual.compute_auc(&my_data, param.general.data_type_epsilon);
+                auc = individual.compute_auc(&my_data);
             }
-            let (tp, fp, tn, fn_count) = individual.calculate_confusion_matrix(&test_data, param.general.data_type_epsilon);
+            let (tp, fp, tn, fn_count) = individual.calculate_confusion_matrix(&test_data);
             info!("Model #{} [k={}] [gen:{}] threshold {:.3} : AUC {:.3}/{:.3} |  accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} \n   < {:?} >",
                         i+1,individual.k,individual.epoch,individual.threshold,
                         test_auc,auc,
@@ -190,9 +190,9 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
             if has_auc {
                 (individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = 
-                    individual.compute_threshold_and_metrics(&test_data, param.general.data_type_epsilon);
+                    individual.compute_threshold_and_metrics(&test_data);
             } else {
-                individual.compute_auc(&my_data, param.general.data_type_epsilon);
+                individual.compute_auc(&my_data);
             }
             info!("Model #{} [k={}] [gen:{}]: train AUC {:.3}",i+1,individual.k,individual.epoch,individual.auc);
         }    
@@ -216,7 +216,7 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
 
     let results=crossval.pass(|d: &mut Data,p: &Param,r: Arc<AtomicBool>| 
         { ga::ga(d,p,r,|p: &mut Population,d: &Data| { 
-            p.auc_fit(d, param.general.data_type_epsilon, param.general.k_penalty, 1); 
+            p.auc_fit(d, param.general.k_penalty, 1); 
         }) }, &param, param.general.thread_number, running);
     
     let mut test_data=Data::new();
@@ -224,14 +224,14 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
         let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
         
         for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-            let holdout_auc=best_model.compute_auc(&test_data, param.general.data_type_epsilon);
+            let holdout_auc=best_model.compute_auc(&test_data);
             let (threshold, accuracy, sensitivity, specificity) = 
-                best_model.compute_threshold_and_metrics(&test_data, param.general.data_type_epsilon);
+                best_model.compute_threshold_and_metrics(&test_data);
             info!("Model #{} [gen:{}] [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
                         i+1,best_model.epoch,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
             info!("Features importance on train+test... ");
             info!("{}",
-                best_model.compute_oob_feature_importance(&my_data, param.ga.feature_importance_permutations,param.general.data_type_epsilon,&mut rng)
+                best_model.compute_oob_feature_importance(&my_data, param.ga.feature_importance_permutations,&mut rng)
                     .into_iter()
                     .map(|feature_importance| { format!("[{:.4}]",feature_importance) })
                     .collect::<Vec<String>>()
@@ -239,7 +239,7 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
             );
             info!("Features importance on holdout... ");
             info!("{}",
-                best_model.compute_oob_feature_importance(&test_data, param.ga.feature_importance_permutations,param.general.data_type_epsilon,&mut rng)
+                best_model.compute_oob_feature_importance(&test_data, param.ga.feature_importance_permutations,&mut rng)
                     .into_iter()
                     .map(|feature_importance| { format!("[{:.4}]",feature_importance) })
                     .collect::<Vec<String>>()

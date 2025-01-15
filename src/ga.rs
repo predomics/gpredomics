@@ -47,6 +47,7 @@ where
                     if param.ga.kmax>0 { min(data.feature_selection.len(), param.ga.kmax) } else { data.feature_selection.len() }, 
                     *language,
                     *data_type,
+                    param.general.data_type_epsilon,
                     data, &mut rng);
                 debug!("generated for {} {}...",sub_pop.individuals[0].get_language(),sub_pop.individuals[0].get_data_type());
             
