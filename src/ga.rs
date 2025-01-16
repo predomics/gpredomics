@@ -85,8 +85,10 @@ where
         
         pop = pop.sort(); 
         let best_model = &pop.individuals[0];
-        debug!("best model so far AUC:{:.3} (fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
+        debug!("best model so far AUC:{:.3} ({}:{} fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
             best_model.auc,
+            best_model.language,
+            best_model.data_type,
             best_model.fit, 
             best_model.k, 
             best_model.epoch,

@@ -57,7 +57,8 @@ There are three sections, general, data and ga.
 The following parameter are for the fit function:
 - fit: the base parameter, define the base fit function, `auc`, `specificity` or `sensitivity`, the base fit is then modified by different penalty set below,
 - k_penalty: the penalty applied per number of feature in the model (be careful with large number of feature, don't set this too high),
-- fr_penalty: false rate penalty: 
+- fr_penalty: false rate penalty: add a part of sensitivity when fitting on specificity or symetrically. When set to 1.0 it's roughly a fit on accuracy.
+- overfit_penalty: this one trigger the creation of an intermediate test set from the train set (a fold, taken after `cv.fold_number`). The difference of fit function on the test set vs the train set is then deduced from the initial fit function, multiplied by this parameter. This overfit penalty must be carefully balanced, typically fold_number is set to 10. Setting the overfit_penalty to 0.1 is like having included the fold in the train set (it has the weight equal to its size), so it does nothing, better to have 0 in that case (which is less costly). Setting the overfit_penalty to 0.3 or above will give the fold an high importance and is likely to trigger an overfit on the fold, which is likely worse than an overfit on the whole train. Good overfit penalty values should be slightly above 0.1 but not higher than 0.2. This sensitive penalty is likely not the first one to test, keep it to 0 at first.
 
 ### data
 
