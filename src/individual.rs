@@ -396,10 +396,37 @@ impl Individual {
 
     }
     
+    /// a function that compute accuracy,precision and sensitivity
+    /// return (threshold, accuracy, sensitivity, specificity)
+    pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64) {
+        let value = self.evaluate(d); // Predicted probabilities
+        let predicted_and_real_class: Vec<(u8, u8)> = value.iter().cloned()
+                .map(|x| {if x>=self.threshold {1} else {0}}).zip(d.y.iter().cloned()).collect();
+        
+        // Initialize confusion matrix
+        let mut tp = 0;
+        let mut fn_count = 0;
+        let mut tn = 0;
+        let mut fp = 0;
+        for predicted_and_real in predicted_and_real_class.into_iter() {
+            match predicted_and_real {
+                (_,2) => {},
+                (1,1) => tp+=1,
+                (1,0) => fp+=1,
+                (0,0) => tn+=1,
+                (0,1) => fn_count+=1,
+                other => panic!("A predicted vs real class of {:?} should not exist",other)
+            }
+        }
 
-    // write a function fit_model that takes in the data and computes all the following fields
+        let sensitivity = tp as f64 / (tp + fn_count) as f64;
+        let specificity = tn as f64 / (fp + tn) as f64;
+        let accuracy = (tp + tn) as f64 / (tp + tn + fp + fn_count) as f64;
 
-    // write a function evaluate_contingency_table that takes in the data and evaluates the contingency table of the model
+        
+        (accuracy,sensitivity,specificity)
+    }
+
 
     /// a function that compute accuracy,precision and sensitivity, fixing the threshold using Youden index 
     /// return (threshold, accuracy, sensitivity, specificity)
