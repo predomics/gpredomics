@@ -554,7 +554,7 @@ impl Individual {
                 0.0
             };
             // Compute the objective: specificity - fnr_penalty * FNR
-            let objective = fpr_penalty * specificity - fnr_penalty * (1.0 - sensitivity);
+            let objective = (fpr_penalty * specificity + fnr_penalty * sensitivity)/(fnr_penalty+fpr_penalty);
 
             // Update best metrics if objective improves
             if objective > best_objective {

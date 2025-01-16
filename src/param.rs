@@ -37,9 +37,7 @@ pub struct General {
     #[serde(default = "penalty_default")] 
     pub overfit_penalty: f64,
     #[serde(default = "penalty_default")] 
-    pub fnr_penalty: f64,
-    #[serde(default = "penalty_default")] 
-    pub fpr_penalty: f64,
+    pub fr_penalty: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

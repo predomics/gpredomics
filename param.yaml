@@ -1,41 +1,41 @@
+# unless specifically indicated all field accept a single value
 general:
-  seed: 41
-  algo: ga
-  thread_number: 8
-  log_level: debug
-  language: ter,bin,ratio,pow2
-  data_type: raw,prev,log
-  data_type_minimum: 1e-5 # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
-  fit: specificity
-  k_penalty: 0.01
-  overfit_penalty: 0.0 # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust)
-  fpr_penalty: 1.0
-  fnr_penalty: 0.5
+  seed: 41                                   # used in parent selection, child conception (cross over) and mutation, all of which is single thread
+  algo: ga                                   # use ga only for now
+  thread_number: 8                           # the number of thread used in feature selection and fit computation
+  log_level: debug                           # possible values are trace, debug, info, warning or error
+  language: ter,bin,ratio,pow2               # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
+  data_type: raw,prev,log                    # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
+  data_type_minimum: 1e-5                    # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
+  fit: specificity                           # possible values are auc,specificity,sensitivity, see README.md for details
+  k_penalty: 0.01                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
+  overfit_penalty: 0.0                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
+  fr_penalty: 0.5                            # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
 
 cv:
-  fold_number: 10
+  fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
 
 data:
-  X: "samples/Qin2014/Xtrain.tsv"
-  y: "samples/Qin2014/Ytrain.tsv"
-  Xtest: "samples/Qin2014/Xtest.tsv"
-  ytest: "samples/Qin2014/Ytest.tsv"
-  pvalue_method: wilcoxon
-  feature_minimal_prevalence_pct: 10 # per class, e.g. if any of the class reaches this level
-  feature_maximal_pvalue: 0.01 # feature with differences less significant than this will be removed
-  feature_minimal_feature_value: 0.0001
+  X: "samples/Qin2014/Xtrain.tsv"            # the features of the train data set 
+  y: "samples/Qin2014/Ytrain.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
+  Xtest: "samples/Qin2014/Xtest.tsv"         # the features of the test data set
+  ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
+  pvalue_method: wilcoxon                    # possible values are wilcoxon or studentt. wilcoxon is recommanded in most cases.
+  feature_minimal_prevalence_pct: 10         # per class, e.g. features are retained if any of the class reaches this level
+  feature_maximal_pvalue: 0.01               # features with differences less significant (p value above that threshold) than this will be removed
+  feature_minimal_feature_value: 0.0001      # features which mean is below that value are discarded
 
 ga:
-  population_size: 2000
-  max_epochs: 500
-  min_epochs: 200
-  max_age_best_model: 100
-  kmin: 1
-  kmax: 50 # do we keep it? 
-  select_elite_pct: 10
-  select_random_pct: 30
-  mutated_children_pct: 80
-  mutated_features_pct: 10
-  mutation_non_null_chance_pct: 20
-  feature_importance_permutations: 100
-  keep_all_generation: false
+  population_size: 2000                      # the target number of models per generation (NB the real number may be below because of clone removal) 
+  max_epochs: 500                            # the maximum number of generation before stopping (note that you can stop manually before sending a kill -1 to the process)
+  min_epochs: 200                            # the minimum number of generation to do
+  max_age_best_model: 100                    # stoping after min_epochs and before max_epochs will occur only if the best model reaches this age
+  kmin: 1                                    # the minimal number of variables used in the initial population
+  kmax: 50                                   # the maximum number of varialbes used in the initial population (setting to 0 will remove any maximum) 
+  select_elite_pct: 10                       # the % of best models of previous generation retained: the lower the figure the more elitist you are
+  select_random_pct: 30                      # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
+  mutated_children_pct: 80                   # the % of children submitted to mutation
+  mutated_features_pct: 10                   # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
+  mutation_non_null_chance_pct: 20           # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
+  feature_importance_permutations: 100       # not used in ga (used in experimental "don't use me" "ga+cv" algorithm)
+  keep_all_generation: false                 # keep this setting to false when using gpredomics as a binary (setting to true is interesting in gpredomicsR)

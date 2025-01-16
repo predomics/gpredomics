@@ -45,13 +45,19 @@ You will find two sample sets, in the `samples` folder, one on microbiome and ci
 
 ## some details about param.yaml
 
+Parameters are set in the `param.yaml` file, a short description of the meaning of the different lines is provided within the file.
 There are three sections, general, data and ga.
 
 ### general
 
 - seed: gpredomics is fully determinist, re-running a computation with the same seed bear the same results, this should be a number,
-- algo: either `random` (not useful, for tests only), `ga` the basic genetic algorithm, `ga+cv` the same algorithm but with a simple cross val scheme
-- thread_number: how many parallel threads can we uses.
+- algo: either `random` (not useful, for tests only), `ga` the basic genetic algorithm, `ga+cv` (experimental, uncomplete) the same algorithm but with a simple cross val scheme 
+- thread_number: the number of parallel threads used in feature selection and fit evaluation in `ga`, between different `ga` in `ga+cv`.
+
+The following parameter are for the fit function:
+- fit: the base parameter, define the base fit function, `auc`, `specificity` or `sensitivity`, the base fit is then modified by different penalty set below,
+- k_penalty: the penalty applied per number of feature in the model (be careful with large number of feature, don't set this too high),
+- fr_penalty: false rate penalty: 
 
 ### data
 
@@ -68,7 +74,6 @@ There are three sections, general, data and ga.
 - max_epochs: the target number of epoch (an epoch is a generation in the Genetic Algorithm)
 - min_epochs: the minimal number of epoch befor trying to see if AUC are converging
 - max_age_best_model: when a best model reaches this age after min_epochs epochs, the ga algorithm is stopped,
-- kpenalty: the penalty applied to the AUC per number of feature in the model,
 - select_elite_pct: the percentage of best N-1 individual selected as parents,
 - select_random_pct: the percentage of random N-1 individual selected as parents,
 - mutated_children_pct: the percentage of children mutated,
