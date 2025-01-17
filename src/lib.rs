@@ -7,6 +7,9 @@ pub mod param;
 pub mod population;
 mod ga;
 mod cv;
+pub mod gpu;
+
+pub use gpu::{KokkosCrsMatrix, CsrMatrix, example_spsp_gemm};
 
 use data::Data;
 use individual::Individual;
