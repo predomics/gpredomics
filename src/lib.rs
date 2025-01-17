@@ -7,6 +7,7 @@ pub mod param;
 pub mod population;
 mod ga;
 mod cv;
+mod cusparse;
 
 use data::Data;
 use individual::Individual;
