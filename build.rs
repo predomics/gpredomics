@@ -6,8 +6,12 @@ fn main() {
     // 1) Tell cargo to look for Kokkos include/lib if needed
     //    Suppose we installed Kokkos in /usr/local/kokkos as an example.
     //    Or, you might have environment variables for these.
-    let kokkos_include = "/usr/local/kokkos/include";
-    let kokkos_lib = "/usr/local/kokkos/lib";
+    //let kokkos_include = "/usr/local/kokkos/include";
+    //let kokkos_include = "/opt/local/include"; // the macports place
+    let kokkos_include = "/Users/delahondes/mamba/include"; // the micromamba place
+    //let kokkos_lib = "/usr/local/kokkos/lib";
+    //let kokkos_lib = "/opt/local/lib";  // the macports place
+    let kokkos_lib = "/Users/delahondes/mamba/lib"; // the micromamba place
 
     // 2) Compile our C++ code using `cc::Build`.
     let mut build = cc::Build::new();
@@ -15,6 +19,9 @@ fn main() {
         .cpp(true)                 // We're compiling C++.
         .file("c_src/kokkos_bridge.cpp")
         .flag("-std=c++17")       // Or c++14/20, depending on your Kokkos build
+        .flag("-Xpreprocessor")
+        .flag("-fopenmp")
+        .flag("-lomp")
         .include(kokkos_include)  // Let the compiler find <Kokkos_Core.hpp>, etc.
         .warnings(false);         // Optional: silence warnings
 

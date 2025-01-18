@@ -128,9 +128,27 @@ void* spgemm_kokkos(void* A_ptr, void* B_ptr)
     }
 
     // Kokkos spGEMM
-    using namespace KokkosSparse::Experimental;
-    SPGEMMHandle<int, int, float> spgemmHandle;
-    spgemmHandle.set_computation_mode(SPGEMM_KK_MEMORY);
+    //using namespace KokkosSparse::Experimental;
+    using namespace KokkosSparse;
+    
+    using execution_space = Kokkos::DefaultExecutionSpace;
+    using memory_space    = execution_space::memory_space;
+
+    SPGEMMHandle<
+        int,             // size_type
+        int,             // lno_t
+        float,           // scalar_t
+        execution_space, // ExecutionSpace
+        memory_space,    // TemporaryMemorySpace
+        memory_space     // PersistentMemorySpace
+    > spgemmHandle;
+
+    spgemmHandle.set_computation_mode(
+        SPGEMM_KK_MEMORY
+    );
+
+
+    //spgemmHandle.set_computation_mode(KokkosSparse::SPGEMM_KK_MEMORY); // TODO In Kokkos Kernel github it is said not do that
 
     // Symbolic
     spgemm_symbolic(

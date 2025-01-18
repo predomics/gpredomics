@@ -181,6 +181,49 @@ fn build_csr(
     (row_map, col_idx, vals)
 }
 
+
+/// Convert Vec<HashMap<usize,f64>> (a list of sparse column vectors) -> CSR arrays with float values.
+fn build_csr_from_vec_as_cols(
+    data: &Vec<HashMap<usize,f64>>,
+    vec_size: usize
+) -> (Vec<i32>, Vec<i32>, Vec<f32>) {
+    let nrows = vec_size;
+    let ncols = data.len();
+
+    let mut row_entries = vec![Vec::<(i32,f32)>::new(); nrows];
+    for (&c, &col) in data.iter().enumerate() {
+        for (&r, &val) in col.iter(){
+            if r < nrows && c < ncols {
+                row_entries[r].push((c as i32, val as f32));
+            }
+        }
+    }
+
+    // row_map
+    let mut row_map = vec![0i32; nrows+1];
+    for r in 0..nrows {
+        row_map[r+1] = row_map[r] + row_entries[r].len() as i32;
+    }
+    let nnz = row_map[nrows] as usize;
+
+    // col_idx, values
+    let mut col_idx = vec![0i32; nnz];
+    let mut vals    = vec![0f32; nnz];
+    for r in 0..nrows {
+        let start = row_map[r] as usize;
+        for (j, &(c_i, val_f)) in row_entries[r].iter().enumerate() {
+            col_idx[start + j] = c_i;
+            vals[start + j]    = val_f;
+        }
+    }
+
+    (row_map, col_idx, vals)
+}
+
+
+
+
+
 //------------------------------------------------------------------------------
 
 /// Example function demonstrating how to do a spSp GEMM and get results back.
