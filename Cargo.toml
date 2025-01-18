@@ -18,7 +18,8 @@ chrono = "0.4"
 signal-hook = "0.3"
 
 [build-dependencies]
-cc = "1.0"
+#cc = "1.0"
+cmake = "0.1"
 
 [profile.flamegraph]
 inherits = "release"        # Inherit most settings from the release profile

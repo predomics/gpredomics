@@ -1,5 +1,5 @@
 use log::{info, error};
-use gpredomics::{param, basic_test, random_run, ga_run, gacv_run};
+use gpredomics::{param, basic_test, random_run, ga_run, gacv_run, gpu};
 use std::process;
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;

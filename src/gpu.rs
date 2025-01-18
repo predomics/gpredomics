@@ -46,6 +46,7 @@ impl Drop for KokkosCrsMatrix {
 //------------------------------------------------------------------------------
 
 /// A plain Rust struct to hold the final CSR data on CPU.
+#[derive(Debug)]
 pub struct CsrMatrix {
     pub nrows: usize,
     pub ncols: usize,
@@ -191,7 +192,7 @@ fn build_csr_from_vec_as_cols(
     let ncols = data.len();
 
     let mut row_entries = vec![Vec::<(i32,f32)>::new(); nrows];
-    for (&c, &col) in data.iter().enumerate() {
+    for (c, col) in data.iter().cloned().enumerate() {
         for (&r, &val) in col.iter(){
             if r < nrows && c < ncols {
                 row_entries[r].push((c as i32, val as f32));

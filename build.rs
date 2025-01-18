@@ -18,11 +18,15 @@ fn main() {
     build
         .cpp(true)                 // We're compiling C++.
         .file("c_src/kokkos_bridge.cpp")
+        .compiler("kokkos_launch_compiler")
         .flag("-std=c++17")       // Or c++14/20, depending on your Kokkos build
-        .flag("-Xpreprocessor")
-        .flag("-fopenmp")
-        .flag("-lomp")
-        .include(kokkos_include)  // Let the compiler find <Kokkos_Core.hpp>, etc.
+        //.flag("-Xpreprocessor")
+        //.flag("-fopenmp")
+        //.flag("-lomp")
+        //.include(kokkos_include)  // Let the compiler find <Kokkos_Core.hpp>, etc.
+        //.flag(format!("-L{}", kokkos_lib).as_str()) // Add the library path to the compiler
+        //.flag("-lkokkoscore")      // Link against Kokkos core library
+        //.flag("-lkokkoscontainers") // If needed for containers
         .warnings(false);         // Optional: silence warnings
 
     // If you need special flags for Apple Clang or find you need to link e.g. -lc++:
@@ -36,7 +40,8 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", kokkos_lib);
     // Link to Kokkos libraries, e.g. "kokkoscore", "kokkoscontainers", etc.
     // The actual libs you need depend on how Kokkos was built.
-    println!("cargo:rustc-link-lib=static=kokkoscore");  
+    //println!("cargo:rustc-link-lib=static=kokkoscore");  //static
+    println!("cargo:rustc-link-lib=dylib=kokkoscore"); //dynamic
     // If your Kokkos build outputs libs named differently, adapt accordingly.
     
     // If Kokkos depends on extra libs, link them as well (like pthread).
