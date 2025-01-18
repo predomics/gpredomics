@@ -103,15 +103,22 @@ void* spgemm_kokkos(void* A_ptr, void* B_ptr)
     }
 
     using handle_t = MyKokkosMatrixHandle;
-    using crsMat_t = KokkosSparse::CrsMatrix<handle_t::scalar_t,
-                                             handle_t::lno_t,
-                                             Kokkos::Device<handle_t::execution_space,
-                                                            handle_t::memory_space>,
-                                             void,
-                                             handle_t::size_type>;
+    using namespace KokkosSparse;
 
-    auto A_handle = reinterpret_cast<handle_t*>(A_ptr);
-    auto B_handle = reinterpret_cast<handle_t*>(B_ptr);
+        
+    using execution_space = Kokkos::DefaultExecutionSpace;
+    using memory_space    = execution_space::memory_space;
+
+    using crsMat_t = CrsMatrix<
+        float, // scalar type
+        int,   // local index type
+        Kokkos::Device<execution_space, memory_space>,
+        void,  // memory trait (default)
+        int    // size_type
+    >;
+
+    auto A_handle = reinterpret_cast<MyKokkosMatrixHandle*>(A_ptr);
+    auto B_handle = reinterpret_cast<MyKokkosMatrixHandle*>(B_ptr);
     if(!A_handle || !B_handle) return nullptr;
 
     crsMat_t* A = A_handle->crsMat;
@@ -129,55 +136,80 @@ void* spgemm_kokkos(void* A_ptr, void* B_ptr)
 
     // Kokkos spGEMM
     //using namespace KokkosSparse::Experimental;
-    using namespace KokkosSparse;
-    
-    using execution_space = Kokkos::DefaultExecutionSpace;
-    using memory_space    = execution_space::memory_space;
 
-    SPGEMMHandle<
-        int,             // size_type
-        int,             // lno_t
-        float,           // scalar_t
-        execution_space, // ExecutionSpace
-        memory_space,    // TemporaryMemorySpace
-        memory_space     // PersistentMemorySpace
-    > spgemmHandle;
 
-    spgemmHandle.set_computation_mode(
-        SPGEMM_KK_MEMORY
-    );
+
+    // Create an SPGEMM handle
+    //SPGEMMHandle<
+    //    int, int, float, execution_space, memory_space, memory_space
+    //> spgemmHandle;
+
+    KokkosKernels::Experimental::KokkosKernelsHandle<
+        int,              // Size type
+        int,              // Local index type
+        float,            // Scalar type
+        execution_space,  // Execution space
+        memory_space,     // Temporary memory space
+        memory_space      // Persistent memory space
+    > kkHandle;
+
+    // Set up SPGEMM operation on the handle
+    kkHandle.create_spgemm_handle(KokkosSparse::SPGEMMAlgorithm::SPGEMM_DEFAULT);
+
+
+
+    //set_computation_mode() method was removed in newer Kokkos
+    //spgemmHandle.set_computation_mode(
+    //    SPGEMM_KK_MEMORY
+    //);
 
 
     //spgemmHandle.set_computation_mode(KokkosSparse::SPGEMM_KK_MEMORY); // TODO In Kokkos Kernel github it is said not do that
 
+    //Kokkos::View<int*,   execution_space> c_rowmap_view("C_rowmap", m+1);
+    // Create an empty matrix for C
+    // The API requires passing the **structure** of C, so create an empty graph
+    //typename crsMat_t::StaticCrsGraphType c_graph;
+    //typename crsMat_t::values_type c_values;
+
+    crsMat_t C; // Initialize an empty CrsMatrix for C
+
     // Symbolic
     spgemm_symbolic(
-        &spgemmHandle,
-        m, kA, n,
-        A->graph.row_map, A->graph.entries, false,
-        B->graph.row_map, B->graph.entries, false
+        kkHandle,
+        *A, false,
+        *B, false,
+        C
     );
-    size_t c_nnz = spgemmHandle.get_c_nnz();
+    //size_t c_nnz = spgemmHandle.get_c_nnz();
 
     // Allocate output
-    Kokkos::View<int*,   handle_t::execution_space>    C_rowmap("C_rowmap", m+1);
-    Kokkos::View<int*,   handle_t::execution_space>    C_entries("C_entries", c_nnz);
-    Kokkos::View<float*, handle_t::execution_space>    C_vals("C_vals", c_nnz);
+    //Kokkos::View<int*,   handle_t::execution_space>    C_rowmap("C_rowmap", m+1);
+    //Kokkos::View<int*,   handle_t::execution_space>    C_entries("C_entries", c_nnz);
+    //Kokkos::View<float*, handle_t::execution_space>    C_vals("C_vals", c_nnz);
+    //Kokkos::View<int*,   execution_space> c_entries_view("C_entries", c_nnz);
+    //Kokkos::View<float*, execution_space> c_vals_view   ("C_vals",    c_nnz);
+
+    // Get the number of nonzeros in C
+    size_t c_nnz = kkHandle.get_spgemm_handle()->get_c_nnz();
+
+    // Resize C's values array to match the computed nonzeros
+    C.values = typename crsMat_t::values_type("C_values", c_nnz);
+
 
     // Numeric
     spgemm_numeric(
-        &spgemmHandle,
-        m, kA, n,
-        A->graph.row_map, A->graph.entries, A->values, false,
-        B->graph.row_map, B->graph.entries, B->values, false,
-        C_rowmap, C_entries, C_vals
+        kkHandle,
+        *A, false,
+        *B, false,
+        C
     );
 
     // Build new matrix handle for C
-    auto C_mat = new crsMat_t("C_Matrix", m, n, c_nnz, C_vals, C_rowmap, C_entries);
+    //auto C_mat = new crsMat_t("C_Matrix", m, n, c_values);
 
     auto C_handle = new MyKokkosMatrixHandle();
-    C_handle->crsMat = C_mat;
+    C_handle->crsMat = new crsMat_t(C); // Copy C into the handle
     return (void*)C_handle;
 }
 
