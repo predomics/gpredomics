@@ -19,9 +19,9 @@ target_include_directories(kokkos_bridge PRIVATE ${Kokkos_INCLUDE_DIRS})
 #
 ## Add install targets
 install(TARGETS kokkos_bridge
-        ARCHIVE DESTINATION ${CMAKE_BINARY_DIR}/lib
-        LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/lib
-        RUNTIME DESTINATION ${CMAKE_BINARY_DIR}/bin)
+        ARCHIVE DESTINATION ${CMAKE_BINARY_DIR}/out/lib
+        LIBRARY DESTINATION ${CMAKE_BINARY_DIR}/out/lib
+        RUNTIME DESTINATION ${CMAKE_BINARY_DIR}/out/bin)
 install(DIRECTORY ${Kokkos_INCLUDE_DIRS} DESTINATION .)
 #add_library(kokkos_bridge STATIC kokko_bridge.cpp)
 #install(TARGETS kokkos_bridge DESTINATION .)
