@@ -2,6 +2,7 @@
 name = "gpredomics"
 version = "0.4.2"
 edition = "2021"
+build="build.rs"
 
 [dependencies]
 csv = "1.1"
