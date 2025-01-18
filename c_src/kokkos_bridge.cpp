@@ -134,16 +134,6 @@ void* spgemm_kokkos(void* A_ptr, void* B_ptr)
         return nullptr;
     }
 
-    // Kokkos spGEMM
-    //using namespace KokkosSparse::Experimental;
-
-
-
-    // Create an SPGEMM handle
-    //SPGEMMHandle<
-    //    int, int, float, execution_space, memory_space, memory_space
-    //> spgemmHandle;
-
     KokkosKernels::Experimental::KokkosKernelsHandle<
         int,              // Size type
         int,              // Local index type
@@ -156,22 +146,6 @@ void* spgemm_kokkos(void* A_ptr, void* B_ptr)
     // Set up SPGEMM operation on the handle
     kkHandle.create_spgemm_handle(KokkosSparse::SPGEMMAlgorithm::SPGEMM_DEFAULT);
 
-
-
-    //set_computation_mode() method was removed in newer Kokkos
-    //spgemmHandle.set_computation_mode(
-    //    SPGEMM_KK_MEMORY
-    //);
-
-
-    //spgemmHandle.set_computation_mode(KokkosSparse::SPGEMM_KK_MEMORY); // TODO In Kokkos Kernel github it is said not do that
-
-    //Kokkos::View<int*,   execution_space> c_rowmap_view("C_rowmap", m+1);
-    // Create an empty matrix for C
-    // The API requires passing the **structure** of C, so create an empty graph
-    //typename crsMat_t::StaticCrsGraphType c_graph;
-    //typename crsMat_t::values_type c_values;
-
     crsMat_t C; // Initialize an empty CrsMatrix for C
 
     // Symbolic
@@ -181,14 +155,6 @@ void* spgemm_kokkos(void* A_ptr, void* B_ptr)
         *B, false,
         C
     );
-    //size_t c_nnz = spgemmHandle.get_c_nnz();
-
-    // Allocate output
-    //Kokkos::View<int*,   handle_t::execution_space>    C_rowmap("C_rowmap", m+1);
-    //Kokkos::View<int*,   handle_t::execution_space>    C_entries("C_entries", c_nnz);
-    //Kokkos::View<float*, handle_t::execution_space>    C_vals("C_vals", c_nnz);
-    //Kokkos::View<int*,   execution_space> c_entries_view("C_entries", c_nnz);
-    //Kokkos::View<float*, execution_space> c_vals_view   ("C_vals",    c_nnz);
 
     // Get the number of nonzeros in C
     size_t c_nnz = kkHandle.get_spgemm_handle()->get_c_nnz();
@@ -204,9 +170,6 @@ void* spgemm_kokkos(void* A_ptr, void* B_ptr)
         *B, false,
         C
     );
-
-    // Build new matrix handle for C
-    //auto C_mat = new crsMat_t("C_Matrix", m, n, c_values);
 
     auto C_handle = new MyKokkosMatrixHandle();
     C_handle->crsMat = new crsMat_t(C); // Copy C into the handle
