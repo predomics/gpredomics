@@ -11,6 +11,7 @@ general:
   k_penalty: 0.01                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
   overfit_penalty: 0.0                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
   fr_penalty: 0.5                            # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
+  nb_best_model_to_test: 10                  # nb of models to test in the last generation (default to 10, 0 means all models)
 
 cv:
   fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
