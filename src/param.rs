@@ -38,6 +38,8 @@ pub struct General {
     pub overfit_penalty: f64,
     #[serde(default = "penalty_default")] 
     pub fr_penalty: f64,
+    #[serde(default = "nb_best_model_to_test_default")] 
+    pub nb_best_model_to_test: u32
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -160,3 +162,4 @@ fn log_level_default() -> String { "info".to_string() }
 fn fold_number_default() -> usize { 5 }
 fn penalty_default() -> f64 { 0.0 }
 fn fit_default() -> String { "auc".to_string() }
+fn nb_best_model_to_test_default() -> u32 { 10 }

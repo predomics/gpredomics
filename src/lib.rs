@@ -20,7 +20,8 @@ use log::{debug, info, warn, error};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-
+use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 
 /// a very basic use
 pub fn basic_test(param: &Param) {
@@ -173,25 +174,70 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
         
         debug!("Length of population {}",population.individuals.len());
-        for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
-            let mut auc=individual.auc;
-            let test_auc=individual.compute_auc(&test_data);
-            if has_auc {
-                individual.auc = auc;
-                (individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = 
-                    individual.compute_threshold_and_metrics(&my_data);
-            } else {
-                auc = individual.compute_auc(&my_data);
+
+        let nb_model_to_test = if param.general.nb_best_model_to_test>0 {param.general.nb_best_model_to_test as usize} else {population.individuals.len()};
+        debug!("Testing {} models",nb_model_to_test);
+
+        // Prepare the evaluation pool
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(param.general.thread_number)
+            .build()
+            .expect("Failed to build thread pool");
+
+        // Compute the final metrics
+        pool.install(|| {
+            let results: Vec<String> = population.individuals[..nb_model_to_test]
+                .par_iter_mut()
+                .enumerate()
+                .map(|(i, individual)| {
+                    let mut auc = individual.auc;
+                    let test_auc = individual.compute_auc(&test_data);
+
+                    if has_auc {
+                        individual.auc = auc;
+                        let (threshold, accuracy, sensitivity, specificity) =
+                            individual.compute_threshold_and_metrics(&my_data);
+                        individual.threshold = threshold;
+                        individual.accuracy = accuracy;
+                        individual.sensitivity = sensitivity;
+                        individual.specificity = specificity;
+                    } else {
+                        auc = individual.compute_auc(&my_data);
+                    }
+
+                    let (tp, fp, tn, fn_count) = individual.calculate_confusion_matrix(&test_data);
+                    format!(
+                        "Model #{} [k={}] [gen:{}] threshold {:.3} : AUC {:.3}/{:.3} |  accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} \n   < {:?} >",
+                        i + 1,
+                        individual.k,
+                        individual.epoch,
+                        individual.threshold,
+                        test_auc,
+                        auc,
+                        (tp + tn) as f64 / (fp + tp + fn_count + tn) as f64,
+                        individual.accuracy,
+                        if tp + fn_count > 0 {
+                            tp as f64 / (tp + fn_count) as f64
+                        } else {
+                            0.0
+                        },
+                        individual.sensitivity,
+                        if tn + fp > 0 {
+                            tn as f64 / (tn + fp) as f64
+                        } else {
+                            0.0
+                        },
+                        individual.specificity,
+                        individual
+                    )
+                })
+                .collect();
+
+            // Output results in order
+            for result in results {
+                info!("{}", result);
             }
-            let (tp, fp, tn, fn_count) = individual.calculate_confusion_matrix(&test_data);
-            info!("Model #{} [k={}] [gen:{}] threshold {:.3} : AUC {:.3}/{:.3} |  accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} \n   < {:?} >",
-                        i+1,individual.k,individual.epoch,individual.threshold,
-                        test_auc,auc,
-                        (tp+tn) as f64/(fp+tp+fn_count+tn) as f64,individual.accuracy,
-                        if tp+fn_count>0 {tp as f64/(tp+fn_count) as f64} else {0.0},individual.sensitivity,
-                        if tn+fp>0 {tn as f64/(tn+fp) as f64} else {0.0},individual.specificity,
-                        individual);
-        }    
+        });
     }
     else {
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
