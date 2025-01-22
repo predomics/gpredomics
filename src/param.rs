@@ -73,6 +73,8 @@ pub struct GA {
     #[serde(default = "feature_kminkmax_default")]  
     pub kmax: usize,                           // Maximum value of k
     pub select_elite_pct: f64,               // Elite selection percentage
+    #[serde(default = "feature_select_niche_pct_default")] 
+    pub select_niche_pct: f64,              // Same as elite but split between competing date type/model
     pub select_random_pct: f64,              // Random selection percentage
     pub mutated_children_pct: f64,        // Mutated individuals percentage
     pub mutated_features_pct: f64,           // Mutated features percentage
@@ -163,3 +165,4 @@ fn fold_number_default() -> usize { 5 }
 fn penalty_default() -> f64 { 0.0 }
 fn fit_default() -> String { "auc".to_string() }
 fn nb_best_model_to_test_default() -> u32 { 10 }
+fn feature_select_niche_pct_default() -> f64 { 0.0 }

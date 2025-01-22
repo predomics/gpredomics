@@ -9,9 +9,9 @@ general:
   data_type_minimum: 1e-5                    # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
   fit: specificity                           # possible values are auc,specificity,sensitivity, see README.md for details
   k_penalty: 0.01                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
-  overfit_penalty: 0.0                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
+  overfit_penalty: 0.15                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
   fr_penalty: 0.5                            # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
-  nb_best_model_to_test: 10                  # nb of models to test in the last generation (default to 10, 0 means all models)
+  nb_best_model_to_test: 30                  # nb of models to test in the last generation (default to 10, 0 means all models)
 
 cv:
   fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
@@ -29,12 +29,13 @@ data:
 ga:
   population_size: 2000                      # the target number of models per generation (NB the real number may be below because of clone removal) 
   max_epochs: 500                            # the maximum number of generation before stopping (note that you can stop manually before sending a kill -1 to the process)
-  min_epochs: 200                            # the minimum number of generation to do
+  min_epochs: 300                            # the minimum number of generation to do
   max_age_best_model: 100                    # stoping after min_epochs and before max_epochs will occur only if the best model reaches this age
   kmin: 1                                    # the minimal number of variables used in the initial population
   kmax: 50                                   # the maximum number of varialbes used in the initial population (setting to 0 will remove any maximum) 
-  select_elite_pct: 10                       # the % of best models of previous generation retained: the lower the figure the more elitist you are
-  select_random_pct: 30                      # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
+  select_elite_pct: 2                       # the % of best models of previous generation retained: the lower the figure the more elitist you are
+  select_niche_pct: 20                       # (optional default to 0) the % of best models of previous generation retained but split per language / data type (enable to maintain competition between language/data types)
+  select_random_pct: 2                      # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
   mutated_children_pct: 80                   # the % of children submitted to mutation
   mutated_features_pct: 10                   # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
   mutation_non_null_chance_pct: 20           # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)

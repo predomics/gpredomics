@@ -168,6 +168,22 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
         }
     }
 
+    // adding best models of each language / data type
+    if param.ga.select_niche_pct > 0.0 {
+        let types = individual_by_types.keys().cloned().collect::<Vec<(u8,u8)>>();
+        let target = (pop.individuals.len() as f64 * param.ga.select_niche_pct / 100.0 / types.len() as f64) as usize;
+        let mut type_count : HashMap<(u8,u8), usize> = types.iter().map(|x| { (*x,0) }).collect();
+        for i in &pop.individuals[n..] {
+            let i_type = (i.language,i.data_type);
+            let current_count = *type_count.get(&i_type).unwrap_or(&target);
+            if current_count<target {
+                type_count.insert(i_type, current_count+1);
+                parents.individuals.push(i.clone())
+            }
+        }
+    }
+
+
     // add a random part of the others
     //parents.add(pop.select_random_above_n(param.ga.select_random_pct, n, rng));
     let n2 = (pop.individuals.len() as f64 * param.ga.select_random_pct / 100.0 / individual_by_types.keys().len() as f64) as usize;
