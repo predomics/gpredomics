@@ -16,6 +16,7 @@ log = "0.4"
 flexi_logger = "0.27"
 chrono = "0.4"
 signal-hook = "0.3"
+tensorflow = "0.21"
 
 
 [profile.flamegraph]
@@ -33,3 +34,5 @@ path = "src/lib.rs"        # Path to your library file
 name = "gpredomics"  # Name of the binary
 path = "src/main.rs"       # Path to the binary's main file
 
+[env]
+PYTHON_BIN_PATH = "/User/delahondes/devel/gpredomics/buildenv/bin/python"
