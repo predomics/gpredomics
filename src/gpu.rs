@@ -3,30 +3,13 @@ use wgpu::util::DeviceExt;
 
 const MATRIX_SIZE: usize = 5000; // Size of the matrix (MATRIX_SIZE x MATRIX_SIZE)
 
-// Shader for matrix multiplication
-const SHADER: &str = r#"
-@group(0) @binding(0) var<storage, read> a: array<f32>;
-@group(0) @binding(1) var<storage, read> b: array<f32>;
-@group(0) @binding(2) var<storage, read_write> c: array<f32>;
 
-@compute @workgroup_size(16, 16, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let row = global_id.y;
-    let col = global_id.x;
-
-    if (row < ${MATRIX_SIZE_U32}u && col < ${MATRIX_SIZE_U32}u) {
-        var sum: f32 = 0.0;
-        for (var k: u32 = 0u; k < ${MATRIX_SIZE_U32}u; k = k + 1u) {
-            let a_val = a[row * ${MATRIX_SIZE_U32}u + k];
-            let b_val = b[k * ${MATRIX_SIZE_U32}u + col];
-            sum = sum + a_val * b_val;
-        }
-        c[row * ${MATRIX_SIZE_U32}u + col] = sum;
-    }
-}
-"#;
 
 pub fn main() {
+
+    let shader_source = include_str!("shader.wgsl");
+    
+
 
     println!("Starting gpu main");
     // Initialize wgpu
@@ -75,10 +58,14 @@ pub fn main() {
         });
 
         // Shader module
-        let shader_code = SHADER.replace("${MATRIX_SIZE_U32}", &MATRIX_SIZE.to_string());
+        //let shader_code = SHADER.replace("${MATRIX_SIZE_U32}", &MATRIX_SIZE.to_string());
+        //let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        //    label: Some("Matrix Multiplication Shader"),
+        //    source: wgpu::ShaderSource::Wgsl(shader_code.into()),
+        //});
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Matrix Multiplication Shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_code.into()),
+            label: Some("My Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
         // -- NEW CODE: Create a BindGroupLayout that matches the shader's bindings.
@@ -178,9 +165,9 @@ pub fn main() {
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.set_pipeline(&pipeline);
                 pass.dispatch_workgroups(
-                    (MATRIX_SIZE / 16) as u32, // number of workgroups in X
-                    (MATRIX_SIZE / 16) as u32, // number of workgroups in Y
-                    1,                         // number of workgroups in Z
+                    (MATRIX_SIZE as u32 + 16 - 1) / 16,
+                    (MATRIX_SIZE as u32 + 16 - 1) / 16,
+                    1
                 );
                 
             }
