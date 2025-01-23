@@ -1,7 +1,7 @@
 use std::time::Instant;
 use wgpu::util::DeviceExt;
 
-const MATRIX_SIZE: usize = 1024; // Size of the matrix (MATRIX_SIZE x MATRIX_SIZE)
+const MATRIX_SIZE: usize = 5000; // Size of the matrix (MATRIX_SIZE x MATRIX_SIZE)
 
 // Shader for matrix multiplication
 const SHADER: &str = r#"
@@ -62,6 +62,15 @@ pub fn main() {
             label: Some("C Buffer"),
             size: (MATRIX_SIZE * MATRIX_SIZE * std::mem::size_of::<f32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // -- Create a staging buffer used for reading results back to the CPU.
+        let c_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("C Staging Buffer"),
+            size: (MATRIX_SIZE * MATRIX_SIZE * std::mem::size_of::<f32>()) as u64,
+            // Must include MAP_READ so we can map it on the CPU side
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -155,7 +164,7 @@ pub fn main() {
         let iterations = 100;
         let start_time = Instant::now();
 
-        for _ in 0..iterations {
+        for i in 0..iterations {
             // Submit work to GPU
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Command Encoder"),
@@ -166,10 +175,52 @@ pub fn main() {
                     label: Some("Compute Pass"),
                     timestamp_writes: None,
                 });
+                pass.set_bind_group(0, &bind_group, &[]);
                 pass.set_pipeline(&pipeline);
+                pass.dispatch_workgroups(
+                    (MATRIX_SIZE / 16) as u32, // number of workgroups in X
+                    (MATRIX_SIZE / 16) as u32, // number of workgroups in Y
+                    1,                         // number of workgroups in Z
+                );
+                
             }
 
+            
+            // -- Now copy the result from c_buffer into the staging buffer:
+            encoder.copy_buffer_to_buffer(
+                &c_buffer,         // src
+                0,
+                &c_staging_buffer, // dst
+                0,
+                (MATRIX_SIZE * MATRIX_SIZE * std::mem::size_of::<f32>()) as u64,
+            );
+
             queue.submit(Some(encoder.finish()));
+
+            // -- Wait for the GPU to finish
+            // (pollster's block_on is usually enough, but we can do an explicit poll):
+            device.poll(wgpu::Maintain::Wait);
+
+            // -- Map staging buffer to CPU
+            let buffer_slice = c_staging_buffer.slice(..);
+            buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::Maintain::Wait);
+
+            // -- Access the data
+            let data = buffer_slice.get_mapped_range();
+            let result_slice: &[f32] = bytemuck::cast_slice(&data);
+
+            // If you want, copy into c_data
+            c_data.copy_from_slice(result_slice);
+
+            // Unmap so we can write next iteration
+            drop(data);
+            c_staging_buffer.unmap();
+
+            // For example, check the first element
+            if i == 0 {
+                println!("First iteration, c_data[0..4] = {:?}", &c_data[0..4]);
+            }
         }
 
         let elapsed = start_time.elapsed();
