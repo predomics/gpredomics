@@ -16,7 +16,9 @@ log = "0.4"
 flexi_logger = "0.27"
 chrono = "0.4"
 signal-hook = "0.3"
-
+wgpu = "24.0"
+pollster = "0.4"
+bytemuck = "1.21"
 
 [profile.flamegraph]
 inherits = "release"        # Inherit most settings from the release profile

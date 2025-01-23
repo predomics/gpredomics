@@ -1,7 +1,7 @@
 # unless specifically indicated all field accept a single value
 general:
   seed: 41                                   # used in parent selection, child conception (cross over) and mutation, all of which is single thread
-  algo: ga                                   # use ga only for now
+  algo: testgpu                                   # use ga only for now
   thread_number: 8                           # the number of thread used in feature selection and fit computation
   log_level: debug                           # possible values are trace, debug, info, warning or error
   language: ter,bin,ratio,pow2               # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
