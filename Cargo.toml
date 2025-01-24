@@ -18,7 +18,7 @@ chrono = "0.4"
 signal-hook = "0.3"
 wgpu = "24.0"
 pollster = "0.4"
-bytemuck = "1.21"
+bytemuck = { version = "1.21", features = ["derive"] }
 
 [profile.flamegraph]
 inherits = "release"        # Inherit most settings from the release profile

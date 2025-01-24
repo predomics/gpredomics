@@ -22,8 +22,8 @@ data:
   Xtest: "samples/Qin2014/Xtest.tsv"         # the features of the test data set
   ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
   pvalue_method: wilcoxon                    # possible values are wilcoxon or studentt. wilcoxon is recommanded in most cases.
-  feature_minimal_prevalence_pct: 10         # per class, e.g. features are retained if any of the class reaches this level
-  feature_maximal_pvalue: 0.01               # features with differences less significant (p value above that threshold) than this will be removed
+  feature_minimal_prevalence_pct: 0         # per class, e.g. features are retained if any of the class reaches this level
+  feature_maximal_pvalue: 0.5               # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_feature_value: 0.0001      # features which mean is below that value are discarded
 
 ga:

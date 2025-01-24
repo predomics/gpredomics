@@ -100,12 +100,49 @@ pub fn random_run(param: &Param) {
     for _ in 0..1000 {
         let mut my_individual = Individual::random(&my_data, &mut rng);
 
+
         let auc = my_individual.compute_auc(&my_data);
         if auc>auc_max {auc_max=auc;best_individual=my_individual;}
     }
     warn!("AUC max: {} model: {:?}",auc_max, best_individual.features);
 }
 
+
+/// a more elaborate use with random models
+pub fn gpu_random_run(param: &Param) {
+    info!("                          RANDOM TEST\n-----------------------------------------------------");
+    // use some data
+    let mut my_data = Data::new();
+    let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    info!("Selecting features...");
+    my_data.select_features(param);
+    let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+    //let mut auc_max = 0.0;
+    //let mut best_individual: Individual = Individual::new();
+    let nb_individuals: usize = 1000;
+    let individuals:Vec<Individual> = (0..nb_individuals).map(|i| {Individual::random(&my_data, &mut rng)})
+        .map(|i| {
+            // we filter random features for selected features, not efficient but we do not care
+            let mut new = Individual::new();
+            new.features = i.features.into_iter()
+                    .filter(|(i,_f)| {my_data.feature_selection.contains(i)})
+                    .collect();
+            new
+        })
+        .collect();
+
+    println!("First individual {:?}", individuals[0]);
+    println!("Last individual {:?} [{}]",  individuals[nb_individuals-1], nb_individuals-1);
+
+    gpu::gpu_eval(&my_data.X, 
+        &individuals.iter().map(|i| {i.features.clone()}).collect(), 
+        &my_data.feature_selection.iter().cloned().enumerate().map(|(i,feature)| {(feature,i)}).collect(), 
+        my_data.sample_len);
+
+    //let auc = my_individual.compute_auc(&my_data);
+    //warn!("AUC max: {} model: {:?}",auc_max, best_individual.features);
+}
 
 /// the Genetic Algorithm test
 pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {

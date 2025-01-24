@@ -1,5 +1,5 @@
 use log::{info, error};
-use gpredomics::{param, basic_test, random_run, ga_run, gacv_run, gpu};
+use gpredomics::{param, basic_test, random_run, ga_run, gacv_run, gpu_random_run};
 use std::process;
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
@@ -71,7 +71,7 @@ fn main() {
         match param.general.algo.as_str() {
             "basic" => basic_test(&param),
             "random" => random_run(&param),
-            "testgpu" => gpu::main(),
+            "testgpu" => gpu_random_run(&param),
             "ga"|"ga2"|"ga_no_overfit"|"ga2_no_overfit" => { ga_run(&param, running); },
             "ga+cv"|"ga2+cv" => { gacv_run(&param, running); },
             other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
