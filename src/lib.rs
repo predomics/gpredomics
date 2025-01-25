@@ -125,22 +125,25 @@ pub fn gpu_random_run(param: &Param) {
 
     let assay = gpu::GpuAssay::new(&my_data.X, &my_data.feature_selection, my_data.sample_len);
 
-    let individuals:Vec<Individual> = (0..nb_individuals).map(|i| {Individual::random(&my_data, &mut rng)})
+    let mut individuals:Vec<Individual> = (0..nb_individuals).map(|i| {Individual::random(&my_data, &mut rng)}).collect();
+    individuals = individuals.into_iter()
         .map(|i| {
             // we filter random features for selected features, not efficient but we do not care
             let mut new = Individual::new();
             new.features = i.features.into_iter()
                     .filter(|(i,_f)| {my_data.feature_selection.contains(i)})
                     .collect();
+            new.data_type = *vec![individual::RAW_TYPE, individual::LOG_TYPE, individual::PREVALENCE_TYPE].choose(&mut rng).unwrap();
+            new.language = *vec![individual::TERNARY_LANG, individual::RATIO_LANG].choose(&mut rng).unwrap();
             new
-        })
-        .collect();
+        }).collect();
+        
 
     for _ in 0..1000 {
         
         //println!("First individual {:?}", individuals[0]);
 
-        let scores = assay.compute_scores(&individuals.iter().map(|i| {i.features.clone()}).collect());
+        let scores = assay.compute_scores(&individuals, param.general.data_type_epsilon as f32);
 
         println!("First scores {:?}", &scores[0..4]);
         //println!("Last scores {:?}", &scores[scores.len()-4..scores.len()]);

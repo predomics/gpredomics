@@ -3,6 +3,7 @@ use wgpu::util::DeviceExt;
 use wgpu::{BindGroupEntry, BindingResource, CommandEncoderDescriptor, ComputePassDescriptor};
 use std::collections::HashMap;
 use bytemuck;
+use crate::individual::{Individual, RATIO_LANG,RAW_TYPE,LOG_TYPE,PREVALENCE_TYPE};
 
 /// Convert a HashMap<(row, col), f64> to CSR format for an R x C matrix. 
 ///
@@ -204,7 +205,7 @@ struct MatrixMultParams {
     R: u32,
     C: u32,
     N: u32,
-    _pad: u32
+    threshold: f32
     // possibly some padding
 }
 
@@ -366,9 +367,20 @@ impl GpuAssay {
                     },
                     count: None,
                 },
-                // 6 => SM
+                // 6 => valMM
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // 7 => SM
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -377,9 +389,9 @@ impl GpuAssay {
                     },
                     count: None,
                 },
-                // 7 => Params
+                // 8 => Params
                 wgpu::BindGroupLayoutEntry {
-                    binding: 7,
+                    binding: 8,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -439,10 +451,13 @@ impl GpuAssay {
 
     pub fn compute_scores(
         &self,
-        models: &Vec<HashMap<usize, i8>>
+        models: &Vec<Individual>,
+        threshold: f32
     ) -> Vec<f32> {
         let num_models = models.len();
-        let (col_ptrMM, row_idxMM, valMM) = vechash_to_csc(models, &self.feature_selection);
+        let (col_ptrMM, row_idxMM, valMM) = vechash_to_csc(
+            &models.iter().map(|i| {i.features.clone()}).collect(), 
+            &self.feature_selection);
 
         // 1) Create GPU buffers for MM
         let col_ptrMM_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -458,6 +473,20 @@ impl GpuAssay {
         let valMM_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("valMM_buf"),
             contents: bytemuck::cast_slice(&valMM),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let dataType_buf= self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("dataType_buf"),
+            contents: bytemuck::cast_slice(&models.iter().map(|i| {
+                match (i.data_type,i.language) {
+                    (RAW_TYPE, RATIO_LANG) => 3,
+                    (LOG_TYPE, RATIO_LANG) => 4,
+                    (PREVALENCE_TYPE, RATIO_LANG) => 5,
+                    (LOG_TYPE, _) => 1,
+                    (PREVALENCE_TYPE, _) => 2,
+                    _ => 0
+                }
+            }).collect::<Vec<u32>>()),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
@@ -476,7 +505,7 @@ impl GpuAssay {
             R: self.samples as u32,
             C: self.feature_count as u32,
             N: num_models as u32,
-            _pad: 0,
+            threshold,
         };
         let params_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Params Buf"),
@@ -496,10 +525,11 @@ impl GpuAssay {
                 BindGroupEntry { binding: 3, resource: BindingResource::Buffer(col_ptrMM_buf.as_entire_buffer_binding()) },
                 BindGroupEntry { binding: 4, resource: BindingResource::Buffer(row_idxMM_buf.as_entire_buffer_binding()) },
                 BindGroupEntry { binding: 5, resource: BindingResource::Buffer(valMM_buf.as_entire_buffer_binding()) },
+                BindGroupEntry { binding: 6, resource: BindingResource::Buffer(dataType_buf.as_entire_buffer_binding()) },
                 // SM
-                BindGroupEntry { binding: 6, resource: BindingResource::Buffer(sm_buf.as_entire_buffer_binding()) },
+                BindGroupEntry { binding: 7, resource: BindingResource::Buffer(sm_buf.as_entire_buffer_binding()) },
                 // Params
-                BindGroupEntry { binding: 7, resource: BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
+                BindGroupEntry { binding: 8, resource: BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
             ],
             label: Some("Compute Bind Group for MM"),
         });
