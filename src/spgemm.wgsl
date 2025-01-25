@@ -1,4 +1,4 @@
-// Multiply Xtrans (S x F) by MM (F x M) => SM (S x M).
+// Multiply X (S x F) by MM (F x M) => SM (S x M).
 
 struct SpGemmParams {
     S: u32,     // #samples

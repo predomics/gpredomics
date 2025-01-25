@@ -1,5 +1,6 @@
 use std::time::Instant;
 use wgpu::util::DeviceExt;
+use wgpu::{BindGroupEntry, BindingResource, CommandEncoderDescriptor, ComputePassDescriptor};
 use std::collections::HashMap;
 use bytemuck;
 
@@ -91,20 +92,20 @@ fn hashmap_to_csr(
         }
     }
 
-    println!("csr matrix");
-    for r in 0..rows {
-        let mut i: usize=row_ptr[r] as usize;
-        println!("{}: {}",r,
-            (0..row_ptr[r+1]-row_ptr[r]).map( |c| {
-            if c<col_idx[i] {
-                ".".to_string()
-            }
-            else {
-                i+=1;
-                val[i-1].to_string()
-            } 
-        }).collect::<Vec<String>>().join(" "));
-    }
+    //println!("csr matrix");
+    //for r in 0..rows {
+    //    let mut i: usize=row_ptr[r] as usize;
+    //    println!("{}: {}",r,
+    //        (0..row_ptr[r+1]-row_ptr[r]).map( |c| {
+    //        if c<col_idx[i] {
+    //            ".".to_string()
+    //        }
+    //        else {
+    //            i+=1;
+    //            val[i-1].to_string()
+    //        } 
+    //    }).collect::<Vec<String>>().join(" "));
+    //}
 
     //println!("row ptr {:?}\ncol idx {:?}\nval {:?}", row_ptr, col_idx, val);
     (row_ptr, col_idx, val)
@@ -207,87 +208,99 @@ struct MatrixMultParams {
     // possibly some padding
 }
 
-pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>, feature_selection: &HashMap<usize,usize>, samples: usize) {
 
-    let spgemm_source = include_str!("spgemm.wgsl");
-    let instance = wgpu::Instance::default();
-    let model_nb = models.len();
+pub struct GpuAssay {
+    // WGPU core
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
 
-    // preparing X (features) representation in CSR
-    let (row_ptrX, col_idxX, valX) = hashmap_to_csr(X, feature_selection, samples); 
+    // Pipeline and layout
+    pipeline: wgpu::ComputePipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
 
-    // preparing MM (model matrix) representation in CSC
-    let (col_ptrMM, row_idxMM, valMM ) = vechash_to_csc(models, feature_selection);
+    // Buffers for the X matrix (CSR)
+    row_ptrX_buf: wgpu::Buffer,
+    col_idxX_buf: wgpu::Buffer,
+    valX_buf: wgpu::Buffer,
 
-    
-    pollster::block_on(async {
-        println!("Starting gpu main");
-        // Initialize wgpu
+    // Dimensions
+    samples: usize,
+    feature_count: usize,
+    feature_selection: HashMap<usize,usize>,
 
+    // The WGSL code (could also be a static string or loaded from file)
+    shader_module: wgpu::ShaderModule,
+
+    // Reusable staging buffer for SM readback
+    // We'll create it with some maximum size if we know it, or create on the fly
+    max_sm_size: usize,
+    sm_staging_buf: wgpu::Buffer,
+}
+
+impl GpuAssay {
+
+    /// Synchronous constructor that internally does async wgpu setup
+    pub fn new(
+        x_map: &HashMap<(usize, usize), f64>,
+        feature_selection: &Vec<usize>,
+        samples: usize,
+    ) -> Self {
+        // Just call the async constructor in a pollster::block_on
+        pollster::block_on(Self::new_async(x_map, feature_selection, samples))
+    }
+
+
+    pub async fn new_async(
+        x_map: &HashMap<(usize, usize), f64>,
+        feature_selection: &Vec<usize>,
+        samples: usize
+    ) -> Self {
+        
+        // 1) Build wgpu
+        let instance = wgpu::Instance::default();
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default())
             .await
             .expect("Failed to find an adapter");
-
         let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default(), None)
             .await
             .expect("Failed to create device");
+        let feature_map: HashMap<usize,usize> = feature_selection.iter().enumerate().map(|(index,feature)| {(*feature,index)}).collect();
 
-        // X buffer for X in CSR
+        // 2) Create CSR for X
+        let (row_ptrX, col_idxX, valX) = hashmap_to_csr(x_map, &feature_map, samples);
+
+        // 3) Create the buffers for X
         let row_ptrX_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("row_ptrX"),
+            label: Some("row_ptrX Buf"),
             contents: bytemuck::cast_slice(&row_ptrX),
             usage: wgpu::BufferUsages::STORAGE,
         });
         let col_idxX_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("col_idxX"),
+            label: Some("col_idxX Buf"),
             contents: bytemuck::cast_slice(&col_idxX),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        let valX_buf     = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("valX"),
+        let valX_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("valX Buf"),
             contents: bytemuck::cast_slice(&valX),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        
-        // Score Matrix (SM) 
-        let SM_size = (samples*model_nb*std::mem::size_of::<f32>()) as u64;
-        let mut SM: Vec<f32> = vec![0.0; samples*model_nb];
 
-        let SM_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("SM Buffer"),
-            size: SM_size,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC,  // if you want to read it back
-            mapped_at_creation: false,
+        // 4) Create the Shader
+        let spgemm_source = include_str!("spgemm.wgsl");
+        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("SpGEMM shadder"),
+            source: wgpu::ShaderSource::Wgsl(spgemm_source.into()),
         });
 
-        // -- Create a staging buffer used for reading results back to the CPU.
-        let SM_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("SM Staging Buffer"),
-            size: SM_size,
-            // Must include MAP_READ so we can map it on the CPU side
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let params_data = MatrixMultParams { 
-                R: samples as u32,
-                C: feature_selection.len() as u32,
-                N: model_nb as u32,
-                _pad: 0
-            };
-        let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Params Buffer"),
-            contents: bytemuck::bytes_of(&params_data),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        
-        // 5) Build the pipeline layout, referencing 8 total bindings (A in CSR, B in CSC, C, uniform).
+        // 5) Create Bind Group Layout, Pipeline Layout, and Pipeline
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("SpGEMM Bind Group Layout"),
+            label: Some("SpGEMM BGL"),
             entries: &[
-                // Binding 0 => row_ptrA_buf (STORAGE, read-only)
+                // 0 => row_ptrX
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -298,7 +311,7 @@ pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>,
                     },
                     count: None,
                 },
-                // Binding 1 => col_idxA_buf
+                // 1 => col_idxX
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -309,7 +322,7 @@ pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>,
                     },
                     count: None,
                 },
-                // Binding 2 => valA_buf
+                // 2 => valX
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -320,7 +333,7 @@ pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>,
                     },
                     count: None,
                 },
-                // Binding 3 => col_ptrB_buf
+                // 3 => col_ptrMM
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -331,7 +344,7 @@ pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>,
                     },
                     count: None,
                 },
-                // Binding 4 => row_idxB_buf
+                // 4 => row_idxMM
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -342,7 +355,7 @@ pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>,
                     },
                     count: None,
                 },
-                // Binding 5 => valB_buf
+                // 5 => valMM
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -353,7 +366,7 @@ pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>,
                     },
                     count: None,
                 },
-                // Binding 6 => c_buf (read_write)
+                // 6 => SM
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -364,8 +377,7 @@ pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>,
                     },
                     count: None,
                 },
-                // Binding 7 => params_buf (uniform)
-                        // 7) params -> uniform buffer (MatrixMultParams struct)
+                // 7 => Params
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -375,239 +387,178 @@ pub fn gpu_eval(X: &HashMap<(usize,usize),f64>, models: &Vec<HashMap<usize,i8>>,
                         min_binding_size: None,
                     },
                     count: None,
-                }
+                },
             ],
         });
-
-        // Shader module
-        //let shader_code = SHADER.replace("${MATRIX_SIZE_U32}", &MATRIX_SIZE.to_string());
-        //let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        //    label: Some("Matrix Multiplication Shader"),
-        //    source: wgpu::ShaderSource::Wgsl(shader_code.into()),
-        //});
-        let spgemm_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("SpGEMM shadder"),
-            source: wgpu::ShaderSource::Wgsl(spgemm_source.into()),
-        });
-
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("SpGEMM Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
-        
+
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("SpGEMM Pipeline"),
             layout: Some(&pipeline_layout),
-            module: &spgemm_shader,
+            module: &shader_module,
             entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None
         });
 
-        // create buffer for MM
-        let col_ptrMM_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("row_ptrX"),
+        // 6) Create a staging buffer big enough for the maximum SM we expect.
+        // For demonstration, let's pick something big or simply 4 * samples * some max model count
+        // or rely on dynamic creation each time. We'll just do a guess:
+        let max_sm_size = samples * 10_000; // guess: up to 10k models
+        let sm_staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SM Staging Buf"),
+            size: (max_sm_size * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            pipeline,
+            bind_group_layout,
+            pipeline_layout,
+            row_ptrX_buf,
+            col_idxX_buf,
+            valX_buf,
+            samples,
+            feature_count: feature_selection.len(),
+            feature_selection: feature_map,
+            shader_module,
+            max_sm_size,
+            sm_staging_buf,
+            }
+    }
+
+    pub fn compute_scores(
+        &self,
+        models: &Vec<HashMap<usize, i8>>
+    ) -> Vec<f32> {
+        let num_models = models.len();
+        let (col_ptrMM, row_idxMM, valMM) = vechash_to_csc(models, &self.feature_selection);
+
+        // 1) Create GPU buffers for MM
+        let col_ptrMM_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("col_ptrMM_buf"),
             contents: bytemuck::cast_slice(&col_ptrMM),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        let row_idxMM_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("col_idxX"),
+        let row_idxMM_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("row_idxMM_buf"),
             contents: bytemuck::cast_slice(&row_idxMM),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        let valMM_buf     = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("valX"),
+        let valMM_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("valMM_buf"),
             contents: bytemuck::cast_slice(&valMM),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
+        // 2) Create an SM buffer of size (samples * num_models)
+        let sm_count = self.samples * num_models;
+        let sm_size_bytes = (sm_count * std::mem::size_of::<f32>()) as u64;
+        let sm_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SM Buffer"),
+            size: sm_size_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
 
-        // -- NEW CODE: Create a BindGroup that holds our a_buffer, b_buffer, and c_buffer.
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Compute Bind Group"),
-            layout: &bind_group_layout,
+        // 3) Create the uniform params buffer
+        let params_data = MatrixMultParams {
+            R: self.samples as u32,
+            C: self.feature_count as u32,
+            N: num_models as u32,
+            _pad: 0,
+        };
+        let params_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Params Buf"),
+            contents: bytemuck::bytes_of(&params_data),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // 4) Build the bind group for this run
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.bind_group_layout,
             entries: &[
-                // Binding 0 => row_ptrA_buf (STORAGE, read-only)
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(row_ptrX_buf.as_entire_buffer_binding()),
-                },
-                // Binding 1 => col_idxA_buf
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer(col_idxX_buf.as_entire_buffer_binding()),
-                },
-                // Binding 2 => valA_buf
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(valX_buf.as_entire_buffer_binding()),
-                },
-                // Binding 3 => col_ptrB_buf
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Buffer(col_ptrMM_buf.as_entire_buffer_binding()),
-                },
-                // Binding 4 => row_idxB_buf
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Buffer(row_idxMM_buf.as_entire_buffer_binding()),
-                },
-                // Binding 5 => valB_buf
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Buffer(valMM_buf.as_entire_buffer_binding()),
-                },
-                // Binding 6 => c_buf (read_write)
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Buffer(SM_buf.as_entire_buffer_binding()),
-                },
-                // Binding 7 => params_buf (uniform)
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
-                }
+                // X
+                BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.row_ptrX_buf.as_entire_buffer_binding()) },
+                BindGroupEntry { binding: 1, resource: BindingResource::Buffer(self.col_idxX_buf.as_entire_buffer_binding()) },
+                BindGroupEntry { binding: 2, resource: BindingResource::Buffer(self.valX_buf.as_entire_buffer_binding()) },
+                // MM
+                BindGroupEntry { binding: 3, resource: BindingResource::Buffer(col_ptrMM_buf.as_entire_buffer_binding()) },
+                BindGroupEntry { binding: 4, resource: BindingResource::Buffer(row_idxMM_buf.as_entire_buffer_binding()) },
+                BindGroupEntry { binding: 5, resource: BindingResource::Buffer(valMM_buf.as_entire_buffer_binding()) },
+                // SM
+                BindGroupEntry { binding: 6, resource: BindingResource::Buffer(sm_buf.as_entire_buffer_binding()) },
+                // Params
+                BindGroupEntry { binding: 7, resource: BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
             ],
+            label: Some("Compute Bind Group for MM"),
         });
 
-        // -- NEW CODE: Create a PipelineLayout that uses our bind group layout.
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+        // 5) Dispatch
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("ComputeScore Encoder"),
         });
 
-
-
-
-        // Benchmark
-        let iterations = 100;
-        let start_time = Instant::now();
-
-        for i in 0..iterations {
-            // Submit work to GPU
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Command Encoder"),
+        {
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("ComputeScore Pass"),
+                timestamp_writes: None,
             });
-
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Compute Pass"),
-                    timestamp_writes: None,
-                });
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.set_pipeline(&pipeline);
-                //pass.dispatch_workgroups(
-                //    (samples as u32 + 15) / 16,
-                //    (feature_selection.len() as u32 + 15) / 16,
-                //    1
-                //);
-                // We want a thread for each cell of SM => (S, M)
-                let group_x = (model_nb as u32 + 15) / 16; // S Sample are x (rows)
-                let group_y = (samples as u32 + 15) / 16; // M Model are y (columns)
-                pass.dispatch_workgroups(group_x, group_y, 1);
-            }
-
-            //let mut SM: Vec<Vec<f32>> = Vec::new();
-            
-            // -- Now copy the result from c_buffer into the staging buffer:
-            encoder.copy_buffer_to_buffer(
-                &SM_buf,         // src
-                0,
-                &SM_staging_buffer, // dst
-                0,
-                SM_size,
-            );
-
-            queue.submit(Some(encoder.finish()));
-
-            // -- Wait for the GPU to finish
-            // (pollster's block_on is usually enough, but we can do an explicit poll):
-            device.poll(wgpu::Maintain::Wait);
-
-            // -- Map staging buffer to CPU
-            let buffer_slice = SM_staging_buffer.slice(..);
-            buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-            device.poll(wgpu::Maintain::Wait);
-
-            // -- Access the data
-            let data = buffer_slice.get_mapped_range();
-            let result_slice: &[f32] = bytemuck::cast_slice(&data);
-
-            // If you want, copy into c_data
-            SM.copy_from_slice(result_slice);
-
-            // Unmap so we can write next iteration
-            drop(data);
-            SM_staging_buffer.unmap();
-
-            // For example, check the first element
-            if i == 0 {
-                println!("First iteration, score matrix");
-                for row in 0..samples {
-                    println!(
-                        "{}: {}", row, (0..model_nb).map(|c| {SM[row * model_nb + c].to_string()}).collect::<Vec<String>>().join(" ")
-                    );
-                }
-            }
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            // each cell => (samples, num_models)
+            let group_x = (num_models as u32 + 15) / 16;
+            let group_y = (self.samples as u32 + 15) / 16;
+            pass.dispatch_workgroups(group_x, group_y, 1);
         }
 
-        let elapsed = start_time.elapsed();
-        println!(
-            "Elapsed time for {} iterations: {:.2?}",
-            iterations, elapsed
+       // 6) Copy from sm_buf to staging
+        encoder.copy_buffer_to_buffer(
+            &sm_buf, 
+            0,
+            &self.sm_staging_buf, 
+            0,
+            sm_size_bytes
         );
-        println!("Average time per iteration: {:.4?} ms", elapsed.as_secs_f64() / iterations as f64 * 1000.0);
-    });
+
+        self.queue.submit(Some(encoder.finish()));
+
+        // Wait for the GPU to complete
+        self.device.poll(wgpu::Maintain::Wait);
+
+        // 7) Map + read
+        {
+            let slice = self.sm_staging_buf.slice(0..sm_size_bytes);
+
+            // Start map request in read mode
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+
+            // Block until complete
+            self.device.poll(wgpu::Maintain::Wait);
+
+            // Now read the data
+            let data = slice.get_mapped_range();
+            let scores: &[f32] = bytemuck::cast_slice(&data);
+
+            let mut result_vec = vec![0f32; sm_count];
+            result_vec.copy_from_slice(scores);
+
+            drop(data);
+            self.sm_staging_buf.unmap();
+
+            // 'result_vec' now has the final SM
+            return result_vec;
+        }
+
+    }
 }
-
-
-
-//#[cfg(test)]
-//mod tests {
-//    use super::*;
-//    use std::collections::HashMap;
-//
-//    #[test]
-//    fn test_hash_to_csr_rectangular() {
-//        // Example: a 3x5 matrix (R=3, C=5)
-//        // mat =
-//        // [ 0   0   7.0  0   0  ]
-//        // [ 4.2 0   0    0   2.2]
-//        // [ 0   0   0    0   1.0]
-//
-//        let R = 3;
-//        let C = 5;
-//        let mut mat_map = HashMap::new();
-//        mat_map.insert((0, 2), 7.0);
-//        mat_map.insert((1, 0), 4.2);
-//        mat_map.insert((1, 4), 2.2);
-//        mat_map.insert((2, 4), 1.0);
-//
-//        let (row_ptr, col_idx, val) = hash_to_csr(R, C, &mat_map);
-//
-//        // row_counts = [1, 2, 1]
-//        // => row_ptr = [0, 1, 3, 4] => total nnz = 4
-//
-//        assert_eq!(row_ptr, vec![0, 1, 3, 4]);
-//
-//        // col_idx / val:
-//        // row 0 => indices [0..1): col=2 => val=7.0
-//        // row 1 => indices [1..3): col=? => val=?  (two entries)
-//        // row 2 => indices [3..4): col=4 => val=1.0
-//        //
-//        // The exact order in row 1 depends on insertion order, but we'll do a basic check
-//        // for correctness.
-//        assert_eq!(col_idx.len(), 4);
-//        assert_eq!(val.len(), 4);
-//
-//        // row 0 => col_idx[0]=2 => val[0]=7.0
-//        assert_eq!(col_idx[0], 2);
-//        assert!((val[0] - 7.0).abs() < 1e-6);
-//
-//        // row 1 => col_idx[1..3] => {0, 4}, val => {4.2, 2.2}
-//        // row 2 => col_idx[3] => {4}, val => {1.0}
-//    }
-//}

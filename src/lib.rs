@@ -110,7 +110,7 @@ pub fn random_run(param: &Param) {
 
 /// a more elaborate use with random models
 pub fn gpu_random_run(param: &Param) {
-    info!("                          RANDOM TEST\n-----------------------------------------------------");
+    info!("                          GPU RANDOM TEST\n-----------------------------------------------------");
     // use some data
     let mut my_data = Data::new();
     let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
@@ -121,6 +121,10 @@ pub fn gpu_random_run(param: &Param) {
     //let mut auc_max = 0.0;
     //let mut best_individual: Individual = Individual::new();
     let nb_individuals: usize = 1000;
+
+
+    let assay = gpu::GpuAssay::new(&my_data.X, &my_data.feature_selection, my_data.sample_len);
+
     let individuals:Vec<Individual> = (0..nb_individuals).map(|i| {Individual::random(&my_data, &mut rng)})
         .map(|i| {
             // we filter random features for selected features, not efficient but we do not care
@@ -132,13 +136,16 @@ pub fn gpu_random_run(param: &Param) {
         })
         .collect();
 
-    println!("First individual {:?}", individuals[0]);
-    println!("Last individual {:?} [{}]",  individuals[nb_individuals-1], nb_individuals-1);
+    for _ in 0..1000 {
+        
+        //println!("First individual {:?}", individuals[0]);
 
-    gpu::gpu_eval(&my_data.X, 
-        &individuals.iter().map(|i| {i.features.clone()}).collect(), 
-        &my_data.feature_selection.iter().cloned().enumerate().map(|(i,feature)| {(feature,i)}).collect(), 
-        my_data.sample_len);
+        let scores = assay.compute_scores(&individuals.iter().map(|i| {i.features.clone()}).collect());
+
+        println!("First scores {:?}", &scores[0..4]);
+        //println!("Last scores {:?}", &scores[scores.len()-4..scores.len()]);
+
+    }
 
     //let auc = my_individual.compute_auc(&my_data);
     //warn!("AUC max: {} model: {:?}",auc_max, best_individual.features);
