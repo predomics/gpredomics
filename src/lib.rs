@@ -163,57 +163,66 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     info!("{:?}", my_data); 
     let mut has_auc = true;
 
-    let mut populations = if param.general.overfit_penalty == 0.0 
-        {   match param.general.fit.to_lowercase().as_str() {
-                "auc" => {
-                    info!("Fitting by AUC with k penalty {}",param.general.k_penalty);
-                    ga::ga(&mut my_data,&param,running, 
-                        |p: &mut Population,d: &Data| { 
-                        p.auc_fit(d, param.general.k_penalty, param.general.thread_number); 
-                    } )
-                },
-                "specificity"|"sensitivity" => {
-                    info!("Fitting by objective {} with k penalty {}",param.general.fit,param.general.k_penalty);
-                    let fpr_penalty = if param.general.fit.to_lowercase().as_str()=="specificity" {1.0} else {param.general.fr_penalty}; 
-                    let fnr_penalty = if param.general.fit.to_lowercase().as_str()=="sensitivity" {1.0} else {param.general.fr_penalty}; 
-                    info!("FPR penalty {}  |  FNR penalty {}",fpr_penalty,fnr_penalty);
-                    has_auc = false;
-                    ga::ga(&mut my_data,&param,running, 
-                        |p: &mut Population,d: &Data| { 
-                            p.objective_fit(d, fpr_penalty,fnr_penalty,param.general.k_penalty,
-                                param.general.thread_number); 
-                        } )
-                },
-                other => { error!("Unrecognised fit {}",other); panic!("Unrecognised fit {}",other)}
-            }
-        } else {
-            let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-            let cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
+    let mut test_data: Option<Data> = if param.general.overfit_penalty>0.0 {
+        let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+        let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
+        my_data = cv.datasets.remove(0);
+        Some(cv.folds.remove(0))
+    } else { None };
 
-            match param.general.fit.to_lowercase().as_str() {
-                "auc" => {
-                    info!("Fitting by AUC with k penalty {} and overfit penalty {}",param.general.k_penalty, param.general.overfit_penalty);
-                    ga::ga(&mut cv.datasets[0].clone(),&param,running, 
-                    |p: &mut Population,d: &Data| { 
-                        p.auc_nooverfit_fit(d,
-                            param.general.k_penalty, &cv.folds[0].clone(), param.general.overfit_penalty,
-                            param.general.thread_number); } )
-                },
-                "specificity"|"sensitivity" => {
-                    info!("Fitting by objective {} with k penalty {} and overfit penalty {}",param.general.fit,param.general.k_penalty, param.general.overfit_penalty);
-                    let fpr_penalty = if param.general.fit.to_lowercase().as_str()=="specificity" {1.0} else {param.general.fr_penalty}; 
-                    let fnr_penalty = if param.general.fit.to_lowercase().as_str()=="sensitivity" {1.0} else {param.general.fr_penalty}; 
-                    info!("FPR penalty {}  |  FNR penalty {}",fpr_penalty,fnr_penalty);
-                    has_auc = false;
-                    ga::ga(&mut cv.datasets[0].clone(),&param,running, 
-                        |p: &mut Population,d: &Data| { 
-                            p.objective_nooverfit_fit(d, fpr_penalty,fnr_penalty,param.general.k_penalty,
-                                &cv.folds[0].clone(), param.general.overfit_penalty, param.general.thread_number); 
-                        } )
-                },
-                other => { error!("Unrecognised fit {}",other); panic!("Unrecognised fit {}",other)}
-            }
-        };
+    let mut populations = ga::ga(&mut my_data, &mut test_data, &param, running);
+    
+    //if param.general.overfit_penalty == 0.0 
+    //    {   match param.general.fit.to_lowercase().as_str() {
+    //            "auc" => {
+    //                info!("Fitting by AUC with k penalty {}",param.general.k_penalty);
+    //                ga::ga(&mut my_data,&param,running, 
+    //                    |p: &mut Population,d: &Data| { 
+    //                    p.auc_fit(d, param.general.k_penalty, param.general.thread_number); 
+    //                } )
+    //            },
+    //            "specificity"|"sensitivity" => {
+    //                info!("Fitting by objective {} with k penalty {}",param.general.fit,param.general.k_penalty);
+    //                let fpr_penalty = if param.general.fit.to_lowercase().as_str()=="specificity" {1.0} else {param.general.fr_penalty}; 
+    //                let fnr_penalty = if param.general.fit.to_lowercase().as_str()=="sensitivity" {1.0} else {param.general.fr_penalty}; 
+    //                info!("FPR penalty {}  |  FNR penalty {}",fpr_penalty,fnr_penalty);
+    //                has_auc = false;
+    //                ga::ga(&mut my_data,&param,running, 
+    //                    |p: &mut Population,d: &Data| { 
+    //                        p.objective_fit(d, fpr_penalty,fnr_penalty,param.general.k_penalty,
+    //                            param.general.thread_number); 
+    //                    } )
+    //            },
+    //            other => { error!("Unrecognised fit {}",other); panic!("Unrecognised fit {}",other)}
+    //        }
+    //    } else {
+    //        let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+    //        let cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
+//
+    //        match param.general.fit.to_lowercase().as_str() {
+    //            "auc" => {
+    //                info!("Fitting by AUC with k penalty {} and overfit penalty {}",param.general.k_penalty, param.general.overfit_penalty);
+    //                ga::ga(&mut cv.datasets[0].clone(),&param,running, 
+    //                |p: &mut Population,d: &Data| { 
+    //                    p.auc_nooverfit_fit(d,
+    //                        param.general.k_penalty, &cv.folds[0].clone(), param.general.overfit_penalty,
+    //                        param.general.thread_number); } )
+    //            },
+    //            "specificity"|"sensitivity" => {
+    //                info!("Fitting by objective {} with k penalty {} and overfit penalty {}",param.general.fit,param.general.k_penalty, param.general.overfit_penalty);
+    //                let fpr_penalty = if param.general.fit.to_lowercase().as_str()=="specificity" {1.0} else {param.general.fr_penalty}; 
+    //                let fnr_penalty = if param.general.fit.to_lowercase().as_str()=="sensitivity" {1.0} else {param.general.fr_penalty}; 
+    //                info!("FPR penalty {}  |  FNR penalty {}",fpr_penalty,fnr_penalty);
+    //                has_auc = false;
+    //                ga::ga(&mut cv.datasets[0].clone(),&param,running, 
+    //                    |p: &mut Population,d: &Data| { 
+    //                        p.objective_nooverfit_fit(d, fpr_penalty,fnr_penalty,param.general.k_penalty,
+    //                            &cv.folds[0].clone(), param.general.overfit_penalty, param.general.thread_number); 
+    //                    } )
+    //            },
+    //            other => { error!("Unrecognised fit {}",other); panic!("Unrecognised fit {}",other)}
+    //        }
+    //    };
     let generations = populations.len();
     let population= &mut populations[generations-1];
 
@@ -315,10 +324,11 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
 
     let mut crossval = cv::CV::new(&my_data, 10, &mut rng);
 
+    let mut cv_param = param.clone();
+    cv_param.general.thread_number = 1;
+
     let results=crossval.pass(|d: &mut Data,p: &Param,r: Arc<AtomicBool>| 
-        { ga::ga(d,p,r,|p: &mut Population,d: &Data| { 
-            p.auc_fit(d, param.general.k_penalty, 1); 
-        }) }, &param, param.general.thread_number, running);
+        { ga::ga(d,&mut None,p,r) }, &cv_param, param.general.thread_number, running);
     
     let mut test_data=Data::new();
     if param.data.Xtest.len()>0 {

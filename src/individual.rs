@@ -149,7 +149,7 @@ impl Individual {
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/r[sample][1].max(self.data_type_minimum);
+                score[sample]=r[sample][0]/(r[sample][1]+1e-12);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
@@ -175,7 +175,7 @@ impl Individual {
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/r[sample][1].max(self.data_type_minimum);
+                score[sample]=r[sample][0]/(r[sample][1]+1e-12);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
@@ -197,18 +197,21 @@ impl Individual {
             for (feature_index,coef) in self.features.iter() {
                 let part = if *coef>0 {0} else {1};
                 for sample in 0..sample_len {
-                    r[sample][part] += X.get(&(sample,*feature_index)).unwrap_or(&0.0).max(self.data_type_minimum).ln()
+                    if let Some(val)=X.get(&(sample,*feature_index)) {
+                        r[sample][part] += (val/self.data_type_minimum).ln() * coef.abs() as f64;
+                    }
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/r[sample][1].max(self.data_type_minimum);
+                score[sample]=r[sample][0]/(r[sample][1]+1e-12);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
                 let x_coef = *coef as f64;
                 for sample in 0..sample_len {
-                        score[sample] += X.get(&(sample,*feature_index)).unwrap_or(&0.0)
-                                .max(self.data_type_minimum).ln() * x_coef;
+                    if let Some(val)=X.get(&(sample,*feature_index)) {
+                        score[sample] += (val/self.data_type_minimum).ln() * x_coef ;
+                    }
                 }
             }
         }
@@ -220,17 +223,17 @@ impl Individual {
     /// Compute AUC based on the target vector y
     pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
-        self.compute_auc_from_value(value, &d.y)
+        self.compute_auc_from_value(&value, &d.y)
     }
 
     /// Compute AUC based on X and y rather than a complete Data object
     pub fn compute_auc_from_features(&mut self, X: &HashMap<(usize,usize),f64>, sample_len: usize, y: &Vec<u8>) -> f64 {
         let value = self.evaluate_from_features(X, sample_len);
-        self.compute_auc_from_value(value, y)
+        self.compute_auc_from_value(&value, y)
     }
 
     /// Compute AUC based on the target vector y
-    fn compute_auc_from_value(&mut self, value: Vec<f64>, y: &Vec<u8>) -> f64 {
+    pub fn compute_auc_from_value(&mut self, value: &[f64], y: &Vec<u8>) -> f64 {
         let mut thresholds: Vec<(usize,&f64)> = value.iter().enumerate().collect::<Vec<(usize,&f64)>>();
 
         thresholds.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -538,8 +541,12 @@ impl Individual {
     pub fn maximize_objective(&mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64) -> f64 {
         let scores = self.evaluate(data);
     
+        self.maximize_objective_with_scores(&scores, data, fpr_penalty, fnr_penalty)
+    }
+
+    pub fn maximize_objective_with_scores(&mut self, scores: &[f64], data: &Data, fpr_penalty: f64, fnr_penalty: f64) -> f64 {
         // Step 2: Extract unique thresholds from scores
-        let mut thresholds: Vec<f64> = scores.clone();
+        let mut thresholds: Vec<f64> = scores.iter().cloned().collect();
         thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap());
         thresholds.dedup();
 

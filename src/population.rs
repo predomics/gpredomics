@@ -6,6 +6,8 @@ use std::mem;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 
+
+
 pub struct Population {
     pub individuals: Vec<Individual>
 }

@@ -11,6 +11,14 @@ pub struct Param {
     pub cv: CV,
 }
 
+#[derive(Debug,Serialize,Deserialize,Clone)]
+pub enum FitFunction {
+    AUC,
+    Specificity,
+    Sensitivity    
+}
+
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct General {
     pub seed: u64,
@@ -31,7 +39,7 @@ pub struct General {
     #[serde(default = "log_level_default")]  
     pub log_level: String,
     #[serde(default = "fit_default")]
-    pub fit: String,
+    pub fit: FitFunction,
     #[serde(default = "penalty_default")] 
     pub k_penalty: f64,                       // A penalty of this per value of k is deleted from AUC in the fit function
     #[serde(default = "penalty_default")] 
@@ -39,7 +47,9 @@ pub struct General {
     #[serde(default = "penalty_default")] 
     pub fr_penalty: f64,
     #[serde(default = "nb_best_model_to_test_default")] 
-    pub nb_best_model_to_test: u32
+    pub nb_best_model_to_test: u32,
+    #[serde(default = "false_default")] 
+    pub gpu: bool
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -163,6 +173,7 @@ fn log_suffix_default() -> String { "log".to_string() }
 fn log_level_default() -> String { "info".to_string() }
 fn fold_number_default() -> usize { 5 }
 fn penalty_default() -> f64 { 0.0 }
-fn fit_default() -> String { "auc".to_string() }
+fn fit_default() -> FitFunction { FitFunction::AUC }
 fn nb_best_model_to_test_default() -> u32 { 10 }
 fn feature_select_niche_pct_default() -> f64 { 0.0 }
+fn false_default() -> bool { false }

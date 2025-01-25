@@ -2,7 +2,8 @@ use crate::population::Population;
 use crate::data::Data;
 use crate::individual::{self, RATIO_LANG, TERNARY_LANG};
 use crate::individual::Individual;
-use crate::param::Param;
+use crate::param::{Param, FitFunction};
+use crate::gpu::GpuAssay;
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use rand::seq::index::sample;
@@ -16,9 +17,99 @@ use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-pub fn ga<F>(data: &mut Data, param: &Param, running: Arc<AtomicBool>, mut fit_fn: F) -> Vec<Population> 
-where
-    F: FnMut(&mut Population, &Data)
+fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, gpu_assay: &Option<GpuAssay>, test_assay: &Option<GpuAssay>, param: &Param) {
+    if let Some(assay)=gpu_assay {
+        if param.general.overfit_penalty > 0.0 {
+            let scores:Vec<f64> = assay.compute_scores(&pop.individuals, param.general.data_type_epsilon as f32)
+                .into_iter().map(|x| {x as f64}).collect();
+            match param.general.fit {
+                FitFunction::AUC => {
+                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
+                        i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
+                        i.fit = i.auc - i.k as f64 * param.general.k_penalty;
+                    }
+                },
+                FitFunction::Sensitivity => {
+                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
+                        let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0);
+                        i.fit = objective - i.k as f64 * param.general.k_penalty;
+                    }
+                },
+                FitFunction::Specificity => {
+                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
+                        let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty);
+                        i.fit = objective - i.k as f64 * param.general.k_penalty;
+                    }
+                }
+            }
+        } else {
+            let t_assay = test_assay.as_ref().unwrap();
+            let test_data = test_data.as_mut().unwrap();
+            let scores:Vec<f64> = assay.compute_scores(&pop.individuals, param.general.data_type_epsilon as f32)
+                .into_iter().map(|x| {x as f64}).collect();
+            let t_scores:Vec<f64> = t_assay.compute_scores(&pop.individuals, param.general.data_type_epsilon as f32)
+                .into_iter().map(|x| {x as f64}).collect();
+            match param.general.fit {
+                FitFunction::AUC => {
+                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
+                        let test_auc = i.compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
+                        i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
+                        i.fit = i.auc - i.k as f64 * param.general.k_penalty - (i.auc-test_auc).abs() * param.general.overfit_penalty;
+                    }
+                },
+                FitFunction::Sensitivity => {
+                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
+                        let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, param.general.fr_penalty, 1.0);
+                        let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0);
+                        i.fit = objective - i.k as f64 * param.general.k_penalty - (objective-test_objective).abs() * param.general.overfit_penalty;
+                    }
+                },
+                FitFunction::Specificity => {
+                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
+                        let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, 1.0,param.general.fr_penalty);
+                        let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty);
+                        i.fit = objective - i.k as f64 * param.general.k_penalty - (objective-test_objective).abs() * param.general.overfit_penalty;
+                    }
+                }
+            }
+        }
+    }
+    else {
+        if param.general.overfit_penalty > 0.0 {
+            match param.general.fit {
+                FitFunction::AUC => {
+                    pop.auc_fit(data, param.general.k_penalty, param.general.thread_number);
+                },
+                FitFunction::Sensitivity => {
+                    pop.objective_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
+                        param.general.thread_number);
+                },
+                FitFunction::Specificity => {
+                    pop.objective_fit(data, 1.0,param.general.fr_penalty,param.general.k_penalty,
+                        param.general.thread_number);
+                }
+            } 
+        } 
+        else {
+            let test_data = test_data.as_mut().unwrap();
+            match param.general.fit {
+                FitFunction::AUC => {
+                    pop.auc_nooverfit_fit(data, param.general.k_penalty, test_data, param.general.overfit_penalty, param.general.thread_number);
+                },
+                FitFunction::Sensitivity => {
+                    pop.objective_nooverfit_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
+                        test_data, param.general.overfit_penalty, param.general.thread_number);
+                },
+                FitFunction::Specificity => {
+                    pop.objective_nooverfit_fit(data, 1.0,param.general.fr_penalty,param.general.k_penalty,
+                        test_data, param.general.overfit_penalty, param.general.thread_number);
+                }
+            } 
+        }
+    }
+}
+
+pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> 
 {
     // generate a random population with a given size  (and evaluate it for selection)
     let mut pop = Population::new();
@@ -65,7 +156,15 @@ where
 
     info!("pop size {}, kmin {}, kmax {}",pop.individuals.len(),pop.individuals.iter().map(|i| {i.k}).min().unwrap_or(0),pop.individuals.iter().map(|i| {i.k}).max().unwrap_or(0));
 
-    fit_fn(&mut pop, data);
+    let gpu_assay = if param.general.gpu {
+        Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len))
+    } else { None };
+    let test_assay = if param.general.gpu && param.general.overfit_penalty>0.0 {
+        let test_data = test_data.as_mut().unwrap();
+        Some(GpuAssay::new(&test_data.X, &data.feature_selection, test_data.sample_len))
+    } else { None };
+
+    fit_fn(&mut pop, data, test_data, &gpu_assay, &test_assay, param);
 
     
     loop {
@@ -121,7 +220,7 @@ where
             children.add(some_children);
         }
         
-        fit_fn(&mut children, data);
+        fit_fn(&mut children, data, test_data, &gpu_assay, &test_assay, param);
         
         for i in children.individuals.iter_mut() {
             i.epoch = epoch;
