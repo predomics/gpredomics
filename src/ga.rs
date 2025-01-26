@@ -13,33 +13,52 @@ use log::{debug,info,warn,error};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::mem;
+use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, gpu_assay: &Option<GpuAssay>, test_assay: &Option<GpuAssay>, param: &Param) {
     if let Some(assay)=gpu_assay {
-        if param.general.overfit_penalty > 0.0 {
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(param.general.thread_number)
+            .build()
+            .unwrap();
+        if param.general.overfit_penalty == 0.0 {
             let scores:Vec<f64> = assay.compute_scores(&pop.individuals, param.general.data_type_epsilon as f32)
                 .into_iter().map(|x| {x as f64}).collect();
             match param.general.fit {
-                FitFunction::AUC => {
-                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
-                        i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
-                        i.fit = i.auc - i.k as f64 * param.general.k_penalty;
-                    }
+                FitFunction::auc => {
+                    pool.install(|| {
+                        pop.individuals
+                            .par_iter_mut()
+                            .enumerate()
+                            .for_each(|(n,i)| {
+                                i.fit = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y)
+                                     - i.k as f64 * param.general.k_penalty;
+                            });
+                    });
                 },
-                FitFunction::Sensitivity => {
-                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
-                        let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0);
-                        i.fit = objective - i.k as f64 * param.general.k_penalty;
-                    }
+                FitFunction::sensitivity => {
+                    pool.install(|| {
+                        pop.individuals
+                            .par_iter_mut()
+                            .enumerate()
+                            .for_each(|(n,i)| {
+                                i.fit = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0) - i.k as f64 * param.general.k_penalty;
+                            });
+                    });
                 },
-                FitFunction::Specificity => {
-                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
-                        let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty);
-                        i.fit = objective - i.k as f64 * param.general.k_penalty;
-                    }
+                FitFunction::specificity => {
+                    pool.install(|| {
+                        pop.individuals
+                            .par_iter_mut()
+                            .enumerate()
+                            .for_each(|(n,i)| {
+                                i.fit = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty) - i.k as f64 * param.general.k_penalty;
+                            });
+                    });
                 }
             }
         } else {
@@ -50,41 +69,58 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
             let t_scores:Vec<f64> = t_assay.compute_scores(&pop.individuals, param.general.data_type_epsilon as f32)
                 .into_iter().map(|x| {x as f64}).collect();
             match param.general.fit {
-                FitFunction::AUC => {
-                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
-                        let test_auc = i.compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
-                        i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
-                        i.fit = i.auc - i.k as f64 * param.general.k_penalty - (i.auc-test_auc).abs() * param.general.overfit_penalty;
-                    }
+                FitFunction::auc => {
+                    pool.install(|| {
+                        pop.individuals
+                            .par_iter_mut()
+                            .enumerate()
+                            .for_each(|(n,i)| {
+                                let test_auc = i.compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
+                                i.fit = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y)
+                                     - i.k as f64 * param.general.k_penalty - (i.auc-test_auc).abs() * param.general.overfit_penalty;
+                            });
+                    });
                 },
-                FitFunction::Sensitivity => {
-                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
-                        let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, param.general.fr_penalty, 1.0);
-                        let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0);
-                        i.fit = objective - i.k as f64 * param.general.k_penalty - (objective-test_objective).abs() * param.general.overfit_penalty;
-                    }
+                FitFunction::sensitivity => {
+                    pool.install(|| {
+                        pop.individuals
+                            .par_iter_mut()
+                            .enumerate()
+                            .for_each(|(n,i)| {
+                                let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, param.general.fr_penalty, 1.0);
+                                let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0); 
+                                 i.fit = objective - i.k as f64 * param.general.k_penalty
+                                    - (objective-test_objective).abs() * param.general.overfit_penalty;
+                            });
+                    });
                 },
-                FitFunction::Specificity => {
-                    for (n,i) in (&mut pop.individuals).into_iter().enumerate() {
-                        let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, 1.0,param.general.fr_penalty);
-                        let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty);
-                        i.fit = objective - i.k as f64 * param.general.k_penalty - (objective-test_objective).abs() * param.general.overfit_penalty;
-                    }
+                FitFunction::specificity => {
+                    pool.install(|| {
+                        pop.individuals
+                            .par_iter_mut()
+                            .enumerate()
+                            .for_each(|(n,i)| {
+                                let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, param.general.fr_penalty, 1.0);
+                                let objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty); 
+                                 i.fit = objective - i.k as f64 * param.general.k_penalty
+                                    - (objective-test_objective).abs() * param.general.overfit_penalty;
+                            });
+                    });
                 }
             }
         }
     }
     else {
-        if param.general.overfit_penalty > 0.0 {
+        if param.general.overfit_penalty == 0.0 {
             match param.general.fit {
-                FitFunction::AUC => {
+                FitFunction::auc => {
                     pop.auc_fit(data, param.general.k_penalty, param.general.thread_number);
                 },
-                FitFunction::Sensitivity => {
+                FitFunction::sensitivity => {
                     pop.objective_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
                         param.general.thread_number);
                 },
-                FitFunction::Specificity => {
+                FitFunction::specificity => {
                     pop.objective_fit(data, 1.0,param.general.fr_penalty,param.general.k_penalty,
                         param.general.thread_number);
                 }
@@ -93,14 +129,14 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
         else {
             let test_data = test_data.as_mut().unwrap();
             match param.general.fit {
-                FitFunction::AUC => {
+                FitFunction::auc => {
                     pop.auc_nooverfit_fit(data, param.general.k_penalty, test_data, param.general.overfit_penalty, param.general.thread_number);
                 },
-                FitFunction::Sensitivity => {
+                FitFunction::sensitivity => {
                     pop.objective_nooverfit_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
                         test_data, param.general.overfit_penalty, param.general.thread_number);
                 },
-                FitFunction::Specificity => {
+                FitFunction::specificity => {
                     pop.objective_nooverfit_fit(data, 1.0,param.general.fr_penalty,param.general.k_penalty,
                         test_data, param.general.overfit_penalty, param.general.thread_number);
                 }
@@ -200,12 +236,34 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
 
         //auc_values.push(best_model.fit);
 
-        if epoch>param.ga.min_epochs {
+        let mut need_to_break= false;
+        if epoch>=param.ga.min_epochs {
             if epoch-best_model.epoch+1>param.ga.max_age_best_model {
                 info!("Best model has reached limit age...");
-                break
+                need_to_break = true;
             }
         }
+
+        if epoch>=param.ga.max_epochs {
+            info!("Reach max epoch");
+            need_to_break = true;
+        }
+
+        if !running.load(Ordering::Relaxed) {
+            info!("Signal received");
+            need_to_break = true;
+        }
+
+        if need_to_break {
+            if populations.len()==0 {
+                populations = vec![pop];
+            }
+            break
+        }
+
+
+
+        // Creating new generation
 
         new_pop.add(select_parents(&pop, param, &mut rng));
 
@@ -235,15 +293,6 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
         }
         pop = new_pop;
 
-        if epoch>=param.ga.max_epochs {
-            info!("Reach max epoch");
-            break
-        }
-
-        if !running.load(Ordering::Relaxed) {
-            info!("Signal received");
-            break
-        }
     }
 
     populations

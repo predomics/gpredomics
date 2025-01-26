@@ -161,16 +161,19 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     
     let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
     info!("{:?}", my_data); 
-    let mut has_auc = true;
+    let has_auc = true;
 
-    let mut test_data: Option<Data> = if param.general.overfit_penalty>0.0 {
+    let (mut run_test_data, run_data): (Option<Data>,Option<Data>) = if param.general.overfit_penalty>0.0 {
         let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
         let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
-        my_data = cv.datasets.remove(0);
-        Some(cv.folds.remove(0))
-    } else { None };
+        (Some(cv.folds.remove(0)),Some(cv.datasets.remove(0)))
+    } else { (None,None) };
 
-    let mut populations = ga::ga(&mut my_data, &mut test_data, &param, running);
+    let mut populations = if let Some(mut this_data)=run_data {
+        ga::ga(&mut this_data, &mut run_test_data, &param, running)
+    } else {
+        ga::ga(&mut my_data, &mut run_test_data, &param, running)
+    };
     
     //if param.general.overfit_penalty == 0.0 
     //    {   match param.general.fit.to_lowercase().as_str() {

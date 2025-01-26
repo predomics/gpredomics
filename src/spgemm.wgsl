@@ -90,10 +90,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // 4) Store final result in SM (S x M)
+    // 4) Store final result in SM (S x M) (samples in rows)
     let dt = dataType[col];
+    //switch dt {
+    //    case default: { SM[(row * M) + col] = sum; }
+    //    case 3u, 4u, 5u: { SM[(row * M) + col] = sum / (sumNeg + 1e-12); }
+    //}
+    // In fact I need M x S (models in rows)
     switch dt {
-        case default: { SM[(row * M) + col] = sum; }
-        case 3u, 4u, 5u: { SM[(row * M) + col] = sum / (sumNeg + 1e-12); }
+        case default: { SM[row + (col * S)] = sum; }
+        case 3u, 4u, 5u: { SM[row + (col * S)] = sum / (sumNeg + 1e-12); }
     }
 }

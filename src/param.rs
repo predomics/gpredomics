@@ -13,9 +13,9 @@ pub struct Param {
 
 #[derive(Debug,Serialize,Deserialize,Clone)]
 pub enum FitFunction {
-    AUC,
-    Specificity,
-    Sensitivity    
+    auc,
+    specificity,
+    sensitivity    
 }
 
 
@@ -173,7 +173,7 @@ fn log_suffix_default() -> String { "log".to_string() }
 fn log_level_default() -> String { "info".to_string() }
 fn fold_number_default() -> usize { 5 }
 fn penalty_default() -> f64 { 0.0 }
-fn fit_default() -> FitFunction { FitFunction::AUC }
+fn fit_default() -> FitFunction { FitFunction::auc }
 fn nb_best_model_to_test_default() -> u32 { 10 }
 fn feature_select_niche_pct_default() -> f64 { 0.0 }
 fn false_default() -> bool { false }

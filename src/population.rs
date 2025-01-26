@@ -105,8 +105,8 @@ impl Population {
     pub fn objective_fit(&mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64, k_penalty: f64,
                             thread_number: usize) 
     {
-                // Create a custom thread pool with 4 threads
-                let pool = ThreadPoolBuilder::new()
+            // Create a custom thread pool with 4 threads
+            let pool = ThreadPoolBuilder::new()
                 .num_threads(thread_number)
                 .build()
                 .unwrap();

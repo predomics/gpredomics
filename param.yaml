@@ -1,17 +1,18 @@
 # unless specifically indicated all field accept a single value
 general:
   seed: 41                                   # used in parent selection, child conception (cross over) and mutation, all of which is single thread
-  algo: testgpu                                   # use ga only for now
+  algo: ga                                   # use ga only for now
   thread_number: 8                           # the number of thread used in feature selection and fit computation
   log_level: debug                           # possible values are trace, debug, info, warning or error
   language: ter,bin,ratio,pow2               # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
   data_type: raw,prev,log                    # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
   data_type_minimum: 1e-5                    # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
-  fit: specificity                           # possible values are auc,specificity,sensitivity, see README.md for details
-  k_penalty: 0.01                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
-  overfit_penalty: 0.15                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
-  fr_penalty: 0.5                            # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
+  fit: auc                           # possible values are auc,specificity,sensitivity, see README.md for details
+  k_penalty: 0.001                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
+  overfit_penalty: 0.0                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
+  fr_penalty: 0.0                            # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
   nb_best_model_to_test: 30                  # nb of models to test in the last generation (default to 10, 0 means all models)
+  gpu: true
 
 cv:
   fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
@@ -28,8 +29,8 @@ data:
 
 ga:
   population_size: 2000                      # the target number of models per generation (NB the real number may be below because of clone removal) 
-  max_epochs: 500                            # the maximum number of generation before stopping (note that you can stop manually before sending a kill -1 to the process)
-  min_epochs: 300                            # the minimum number of generation to do
+  max_epochs: 100                            # the maximum number of generation before stopping (note that you can stop manually before sending a kill -1 to the process)
+  min_epochs: 100                            # the minimum number of generation to do
   max_age_best_model: 100                    # stoping after min_epochs and before max_epochs will occur only if the best model reaches this age
   kmin: 1                                    # the minimal number of variables used in the initial population
   kmax: 50                                   # the maximum number of varialbes used in the initial population (setting to 0 will remove any maximum) 
