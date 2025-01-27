@@ -123,7 +123,7 @@ pub fn gpu_random_run(param: &Param) {
     let nb_individuals: usize = 1000;
 
 
-    let assay = gpu::GpuAssay::new(&my_data.X, &my_data.feature_selection, my_data.sample_len);
+    let assay = gpu::GpuAssay::new(&my_data.X, &my_data.feature_selection, my_data.sample_len, nb_individuals as usize);
 
     let mut individuals:Vec<Individual> = (0..nb_individuals).map(|i| {Individual::random(&my_data, &mut rng)}).collect();
     individuals = individuals.into_iter()

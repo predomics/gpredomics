@@ -162,7 +162,7 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
 
     let languages: Vec<u8> = param.general.language.split(",").map(individual::language).collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(individual::data_type).collect();
-    let sub_population_size = param.ga.population_size / (languages.len() * data_types.len()) as u32 + 1;
+    let sub_population_size = param.ga.population_size / (languages.len() * data_types.len()) as u32;
     for data_type in &data_types {
         for language in &languages {
             let mut target_size = sub_population_size;
@@ -179,7 +179,7 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
                 debug!("generated for {} {}...",sub_pop.individuals[0].get_language(),sub_pop.individuals[0].get_data_type());
             
                 target_size = remove_stillborn(&mut sub_pop);
-                if target_size>0 { warn!("Some still born are present {}",target_size);
+                if target_size>0 { warn!("Some still born are present {} (with healthy {})",target_size,sub_pop.individuals.len());
                     if target_size==param.ga.population_size { 
                         error!("Params only create inviable individuals!");
                         panic!("Params only create inviable individuals!") } 
@@ -193,11 +193,11 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
     info!("pop size {}, kmin {}, kmax {}",pop.individuals.len(),pop.individuals.iter().map(|i| {i.k}).min().unwrap_or(0),pop.individuals.iter().map(|i| {i.k}).max().unwrap_or(0));
 
     let gpu_assay = if param.general.gpu {
-        Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len))
+        Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, param.ga.population_size as usize))
     } else { None };
     let test_assay = if param.general.gpu && param.general.overfit_penalty>0.0 {
         let test_data = test_data.as_mut().unwrap();
-        Some(GpuAssay::new(&test_data.X, &data.feature_selection, test_data.sample_len))
+        Some(GpuAssay::new(&test_data.X, &data.feature_selection, test_data.sample_len, param.ga.population_size as usize))
     } else { None };
 
     fit_fn(&mut pop, data, test_data, &gpu_assay, &test_assay, param);

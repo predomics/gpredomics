@@ -8,7 +8,7 @@ general:
   data_type: raw,prev,log                    # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
   data_type_minimum: 1e-5                    # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
   fit: auc                           # possible values are auc,specificity,sensitivity, see README.md for details
-  k_penalty: 0.001                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
+  k_penalty: 0.00001                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
   overfit_penalty: 0.0                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
   fr_penalty: 0.0                            # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
   nb_best_model_to_test: 30                  # nb of models to test in the last generation (default to 10, 0 means all models)
@@ -28,7 +28,7 @@ data:
   feature_minimal_feature_value: 0.0001      # features which mean is below that value are discarded
 
 ga:
-  population_size: 2000                      # the target number of models per generation (NB the real number may be below because of clone removal) 
+  population_size: 5000                      # the target number of models per generation (NB the real number may be below because of clone removal) 
   max_epochs: 100                            # the maximum number of generation before stopping (note that you can stop manually before sending a kill -1 to the process)
   min_epochs: 100                            # the minimum number of generation to do
   max_age_best_model: 100                    # stoping after min_epochs and before max_epochs will occur only if the best model reaches this age

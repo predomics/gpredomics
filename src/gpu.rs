@@ -209,7 +209,6 @@ struct MatrixMultParams {
     // possibly some padding
 }
 
-
 pub struct GpuAssay {
     // WGPU core
     instance: wgpu::Instance,
@@ -221,7 +220,7 @@ pub struct GpuAssay {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
-
+ 
     // Buffers for the X matrix (CSR)
     row_ptrX_buf: wgpu::Buffer,
     col_idxX_buf: wgpu::Buffer,
@@ -234,11 +233,13 @@ pub struct GpuAssay {
 
     // The WGSL code (could also be a static string or loaded from file)
     shader_module: wgpu::ShaderModule,
-
+ 
     // Reusable staging buffer for SM readback
     // We'll create it with some maximum size if we know it, or create on the fly
     max_sm_size: usize,
     sm_staging_buf: wgpu::Buffer,
+    sm_buf: wgpu::Buffer,
+    sm_size_bytes: u64
 }
 
 impl GpuAssay {
@@ -248,16 +249,18 @@ impl GpuAssay {
         x_map: &HashMap<(usize, usize), f64>,
         feature_selection: &Vec<usize>,
         samples: usize,
+        max_model_nb: usize
     ) -> Self {
         // Just call the async constructor in a pollster::block_on
-        pollster::block_on(Self::new_async(x_map, feature_selection, samples))
+        pollster::block_on(Self::new_async(x_map, feature_selection, samples,max_model_nb))
     }
 
 
     pub async fn new_async(
         x_map: &HashMap<(usize, usize), f64>,
         feature_selection: &Vec<usize>,
-        samples: usize
+        samples: usize,
+        max_model_nb: usize
     ) -> Self {
         
         // 1) Build wgpu
@@ -420,14 +423,24 @@ impl GpuAssay {
 
         // 6) Create a staging buffer big enough for the maximum SM we expect.
         // For demonstration, let's pick something big or simply 4 * samples * some max model count
-        // or rely on dynamic creation each time. We'll just do a guess:
-        let max_sm_size = samples * 10_000; // guess: up to 10k models
+        // or rely on dynamic creation each time.
+        let max_sm_size = samples * max_model_nb;
         let sm_staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("SM Staging Buf"),
             size: (max_sm_size * std::mem::size_of::<f32>()) as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // 2) Create an SM buffer of size (samples * num_models)
+        let sm_count = samples * max_model_nb;
+        let sm_size_bytes = (sm_count * std::mem::size_of::<f32>()) as u64;
+        let sm_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SM Buffer"),
+            size: sm_size_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
 
         Self {
             instance,
@@ -446,6 +459,8 @@ impl GpuAssay {
             shader_module,
             max_sm_size,
             sm_staging_buf,
+            sm_buf,
+            sm_size_bytes
             }
     }
 
@@ -490,16 +505,6 @@ impl GpuAssay {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        // 2) Create an SM buffer of size (samples * num_models)
-        let sm_count = self.samples * num_models;
-        let sm_size_bytes = (sm_count * std::mem::size_of::<f32>()) as u64;
-        let sm_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("SM Buffer"),
-            size: sm_size_bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
         // 3) Create the uniform params buffer
         let params_data = MatrixMultParams {
             R: self.samples as u32,
@@ -527,7 +532,7 @@ impl GpuAssay {
                 BindGroupEntry { binding: 5, resource: BindingResource::Buffer(valMM_buf.as_entire_buffer_binding()) },
                 BindGroupEntry { binding: 6, resource: BindingResource::Buffer(dataType_buf.as_entire_buffer_binding()) },
                 // SM
-                BindGroupEntry { binding: 7, resource: BindingResource::Buffer(sm_buf.as_entire_buffer_binding()) },
+                BindGroupEntry { binding: 7, resource: BindingResource::Buffer(self.sm_buf.as_entire_buffer_binding()) },
                 // Params
                 BindGroupEntry { binding: 8, resource: BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
             ],
@@ -554,11 +559,11 @@ impl GpuAssay {
 
        // 6) Copy from sm_buf to staging
         encoder.copy_buffer_to_buffer(
-            &sm_buf, 
+            &self.sm_buf, 
             0,
             &self.sm_staging_buf, 
             0,
-            sm_size_bytes
+            self.sm_size_bytes
         );
 
         self.queue.submit(Some(encoder.finish()));
@@ -568,7 +573,9 @@ impl GpuAssay {
 
         // 7) Map + read
         {
-            let slice = self.sm_staging_buf.slice(0..sm_size_bytes);
+            let sm_count = self.samples * num_models;
+            let buffer_size: u64 = (sm_count * std::mem::size_of::<f32>()) as u64;
+            let slice = self.sm_staging_buf.slice(0..buffer_size);
 
             // Start map request in read mode
             slice.map_async(wgpu::MapMode::Read, |_| {});
