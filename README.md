@@ -1,6 +1,6 @@
 # gpredomics
 
-gpredomics is a rewrite of predomics in Rust, with the goal of using GPU, which is not the case right now. For the time being, it is a pure CPU program in _safe_ Rust, single thread. Only a subset of predomics is coded:
+gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version v0.5 (requires gpu=true in params.yaml, general section). Only a subset of predomics is coded:
 
 - only the Genetic Algorithm is coded, the equivalent of ga2 in Predomics terms,
 - the following languages are available bin(ary), ter(nary), ratio, pow2 (a language specific to gpredomics):
@@ -43,6 +43,28 @@ The binary will look for a `param.yaml` file in the current working directory. T
 
 You will find two sample sets, in the `samples` folder, one on microbiome and cirrhosis (Qin 2014, a.k.a. PRJEB6337), and one on microbiome and response to treatment in ICI (Immune Checkpoint Inhibitors) (Derosa 2022, a.k.a. PRJNA751792).
 
+## GPU
+
+The supported GPUs are:
+- Apple Silicons (Metal),
+- All GPU supported by Vulkan.
+
+### Apple Metal
+For Apple, Metal is supported out of the box, there is nothing specific to do (appart the `xcode-select --install` which you need anyway for Rust). 
+
+### Linux
+For Linux, you *must* install Vulkan:
+```sh
+sudo apt install vulkan-tools libvulkan1 
+```
+
+For Nvidia cards, you will need also a driver, so for instance:
+```sh
+sudo apt install libnvidia-gl-550-server nvidia-driver-550 nvidia-utils-550
+```
+
+Check with `vulkaninfo` that your card is correctly detected.
+
 ## some details about param.yaml
 
 Parameters are set in the `param.yaml` file, a short description of the meaning of the different lines is provided within the file.
@@ -53,6 +75,7 @@ There are three sections, general, data and ga.
 - seed: gpredomics is fully determinist, re-running a computation with the same seed bear the same results, this should be a number,
 - algo: either `random` (not useful, for tests only), `ga` the basic genetic algorithm, `ga+cv` (experimental, uncomplete) the same algorithm but with a simple cross val scheme 
 - thread_number: the number of parallel threads used in feature selection and fit evaluation in `ga`, between different `ga` in `ga+cv`.
+- gpu: should be true whenever possible (that is almost always)
 
 The following parameter are for the fit function:
 - fit: the base parameter, define the base fit function, `auc`, `specificity` or `sensitivity`, the base fit is then modified by different penalty set below,
