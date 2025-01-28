@@ -50,7 +50,24 @@ The supported GPUs are:
 - All GPU supported by Vulkan.
 
 ### Apple Metal
-For Apple, Metal is supported out of the box, there is nothing specific to do (appart the `xcode-select --install` which you need anyway for Rust). 
+For Apple, Metal is supported out of the box, however you need a recent version of LLVM, more recent at least than the default one. Here is the procedure:
+
+You're supposed to already have the developpers tools (installed with `xcode-select --install`, which you need anyway for Rust). 
+
+The recommanded procedure is to use Homebrew (at least for LLVM, and probably for rustup).
+
+```sh
+brew install rustup llvm
+# the following line is only required if you had already installed Rust with the https://rustup.sh site
+mv ~/.cargo ~/.cargo.backup # optionnally remove the line in the .zshrc that load the .cargo/env environment file
+export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+echo << EOF >> ~/.zshrc
+export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+EOF
+rustup default nightly
+rustup update
+```
+Then build normally with `cargo build --release`
 
 ### Linux
 For Linux, you *must* install Vulkan:
@@ -64,6 +81,11 @@ sudo apt install libnvidia-gl-550-server nvidia-driver-550 nvidia-utils-550
 ```
 
 Check with `vulkaninfo` that your card is correctly detected.
+
+NB under Linux, I always do a fully optimized build, but that is not mandatory, a simple `cargo build --release` is enough:
+```sh
+RUSTFLAGS="-C target-cpu=native -C opt-level=3" cargo build --release
+```
 
 ## some details about param.yaml
 
