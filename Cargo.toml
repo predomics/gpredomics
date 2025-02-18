@@ -19,6 +19,8 @@ signal-hook = "0.3"
 wgpu = "24.0"
 pollster = "0.4"
 bytemuck = { version = "1.21", features = ["derive"] }
+sha2 = "0.10"
+bincode = "1.3.3"
 
 [profile.flamegraph]
 inherits = "release"        # Inherit most settings from the release profile
