@@ -234,74 +234,41 @@ impl Individual {
 
     /// Compute AUC based on the target vector y
     pub fn compute_auc_from_value(&mut self, value: &[f64], y: &Vec<u8>) -> f64 {
-        let mut thresholds: Vec<(usize,&f64)> = value.iter().enumerate().collect::<Vec<(usize,&f64)>>();
-
-        thresholds.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let mut auc = 0.0;
-        let mut roc_points = Vec::new();
-
-
-        let mut tp:usize = 0;
-        let mut fp:usize = 0;
-        let mut tn:usize = 0;
-        let mut fn_count:usize=0;
-
-        for y_val in y.iter() {
-            if *y_val == 0 {fp += 1}
-            else if *y_val == 1 {tp += 1}
-        }
-        
-        for (i,_) in thresholds {
-            //let (tp, fp, tn, fn_count) = self.calculate_confusion_matrix(&value, &d.y, threshold);
-
-            let tpr = if (tp + fn_count) > 0 {
-                tp as f64 / (tp + fn_count) as f64
+        assert_eq!(value.len(), y.len());
+        let mut positive_scores = Vec::new();
+        let mut negative_scores = Vec::new();
+    
+        for (&score, &label) in value.iter().zip(y.iter()) {
+            if label == 1 {
+                positive_scores.push(score);
             } else {
-                0.0
-            };
-
-            let fpr = if (fp + tn) > 0 {
-                fp as f64 / (fp + tn) as f64
-            } else {
-                0.0
-            };
-
-            roc_points.push((fpr, tpr));
-            
-            if y[i] == 1 { tp-=1; fn_count+=1 }
-            else if y[i] == 0 { tn+=1; fp-=1 }
+                negative_scores.push(score);
+            }
         }
+    
+        let n_pos = positive_scores.len();
+        let n_neg = negative_scores.len();
 
-        let tpr = if (tp + fn_count) > 0 {
-            tp as f64 / (tp + fn_count) as f64
-        } else {
-            0.0
-        };
-
-        let fpr = if (fp + tn) > 0 {
-            fp as f64 / (fp + tn) as f64
-        } else {
-            0.0
-        };
-
-        roc_points.push((fpr, tpr));
-
-        // Sort points by FPR to ensure proper order for AUC calculation
-        roc_points.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap())
-        });
-
-        // Compute AUC using trapezoidal rule
-        for i in 1..roc_points.len() {
-            let (prev_fpr, prev_tpr) = roc_points[i - 1];
-            let (fpr, tpr) = roc_points[i];
-
-            auc += (fpr - prev_fpr) * (tpr + prev_tpr) / 2.0;
+        if n_pos == 0 || n_neg == 0 {
+            return 0.0;
         }
+    
+        let mut u_pos = 0.0;
+    
+        for &pos_score in &positive_scores {
+            for &neg_score in &negative_scores {
+                if pos_score > neg_score {
+                    u_pos += 1.0;
+                } else if pos_score == neg_score {
+                    u_pos += 0.5;
+                }
+            }
+        }
+    
+        let auc = u_pos as f64 / (n_pos as f64 * n_neg as f64);
         self.auc = auc;
         auc
-    } 
+    }
 
     /// Calculate the confusion matrix at a given threshold
     pub fn calculate_confusion_matrix(&self,data: &Data) -> (usize, usize, usize, usize) {

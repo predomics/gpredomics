@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+mod beam;
 pub mod data;
 mod utils;
 pub mod individual;
@@ -17,7 +18,6 @@ use rand::prelude::*;
 use param::Param;
 
 use log::{debug, info, warn, error};
-
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

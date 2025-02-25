@@ -188,3 +188,12 @@ impl Population {
 
     }
 }
+
+use std::fmt;
+impl fmt::Debug for Population {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Population")
+            .field("individuals", &self.individuals)
+            .finish()
+    }
+}
