@@ -529,21 +529,21 @@ impl fmt::Debug for Data {
         #[test]
         fn test_compare_classes_wilcoxon_class_0() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(0, 1.0, 0.0, 0.0);
+            let result = data.compare_classes_wilcoxon(0, 1.0, 0.0, 0.0);
             assert_eq!(result, 0, "test feature 0 should be significantly associated with class 0");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_1() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.0);
+            let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.0);
             assert_eq!(result, 1, "test feature 1 should be significantly associated with class 1");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_2_low_mean() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.95);
+            let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.95);
             println!("{:?}", result);
             assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
         }
@@ -551,21 +551,21 @@ impl fmt::Debug for Data {
         #[test]
         fn test_compare_classes_wilcoxon_class_2_low_prev() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.95, 0.0);
+            let result = data.compare_classes_wilcoxon(1, 1.0, 0.95, 0.0);
             assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_2_high_pval() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 0.00001, 0.0, 0.0);
+            let result = data.compare_classes_wilcoxon(1, 0.00001, 0.0, 0.0);
             assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_2_outside_range() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(48152342, 1.0, 0.0, 0.0);
+            let result = data.compare_classes_wilcoxon(48152342, 1.0, 0.0, 0.0);
             assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
         }
 
