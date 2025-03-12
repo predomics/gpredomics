@@ -343,7 +343,6 @@ impl Data {
         }
     }
 
-
     pub fn clone_with_new_x(&self, X:HashMap<(usize, usize), f64>) -> Data {
         Data {
             X: X,
@@ -367,7 +366,6 @@ impl Data {
                 }
             }
         }
-        self.samples.extend_from_slice(&other.samples);
         self.sample_len += other.sample_len;
     }
 
@@ -420,4 +418,291 @@ impl fmt::Debug for Data {
         // Reuse the Display formatter
         write!(f, "{}", self)
     }
+}
+
+// unit tests
+#[cfg(test)]
+    mod tests {
+        use super::*;
+        use sha2::{Sha256, Digest};
+        use std::collections::{BTreeMap, HashMap};
+
+        fn create_test_data() -> Data {
+            let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+            let mut feature_class: HashMap<usize, u8> = HashMap::new();
+    
+            // Simulate data
+            X.insert((0, 0), 0.9); // F0 C0
+            X.insert((0, 1), 0.01); // F1 C0
+            X.insert((1, 1), 0.91); // F1 C1
+            X.insert((3, 0), 0.12); // F0 C1
+            X.insert((3, 1), 0.75); // F1 C1
+            X.insert((4, 0), 0.01); // F0 C1
+            X.insert((5, 1), 0.9); // F1 C1
+            feature_class.insert(0, 0);
+            feature_class.insert(1, 1);
+            Data {
+                X,
+                y: vec![0, 1, 0, 1, 1, 1],
+                features: vec!["feature1".to_string(), "feature2".to_string()],
+                samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(), "sample4".to_string(), "sample5".to_string(), "sample6".to_string()],
+                feature_class,
+                feature_selection: vec![0, 1],
+                feature_len: 2,
+                sample_len: 6,
+            }
+        }
+
+        #[test]
+        fn test_load_data() {
+            let mut data_test = Data::new();
+            let _err = data_test.load_data("./samples/tests/X.tsv", "./samples/tests/y.tsv");
+
+            // Use the hashed test.X to make the code cleaner
+            let mut sorted_X: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+            for (key, value) in data_test.X {
+                sorted_X.insert(key, value);
+            }
+            let serialized = bincode::serialize(&sorted_X).unwrap();
+            let mut hasher = Sha256::new();
+            hasher.update(serialized);
+            let hash = hasher.finalize();
+            
+            assert_eq!(format!("{:x}", hash), "adba327f62ffab0a8d43c1aa3a6c20e630783d3b103dd103f28b9e23ab51eb18", 
+            "the test X hash isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+            assert_eq!(data_test.y, [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1],
+            "the test y are not the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/y.tsv");
+            assert_eq!(data_test.features, ["msp_0001", "msp_0002", "msp_0003", "msp_0004", "msp_0005", "msp_0006", "msp_0007", "msp_0008", "msp_0009", "msp_0010"],
+            "the test X features isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+            assert_eq!(data_test.samples, ["LV15", "HV26", "HV17", "LV9", "HV14", "HV7", "LV7", "HV30", "HV29", "HV15", "LV16", "LV1", "LV11", "HV16", "HV6", "LV23", 
+            "LV4", "LV22", "HV3", "LV13", "LV8", "LV24", "HV12", "HV13", "LV6", "HV9", "LV12", "HV23", "HV31", "LV14"],
+            "the test X samples are not the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+            assert_eq!(data_test.feature_len, 10,
+            "the test X feature_len isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+            assert_eq!(data_test.sample_len, 30,
+            "the test X sample_len isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+        }
+
+        #[test]
+        fn test_compare_classes_studentt_test_class_0() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(0, 1.0, 0.0, 0.0);
+            assert_eq!(result, 0, "test feature 0 should be significantly associated with class 0");
+        }
+
+        #[test]
+        fn test_compare_classes_studentt_test_class_1() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.0);
+            assert_eq!(result, 1, "test feature 1 should be significantly associated with class 1");
+        }
+
+        #[test]
+        fn test_compare_classes_studentt_test_class_2_low_mean() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.95);
+            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
+        }
+
+        #[test]
+        fn test_compare_classes_studentt_test_class_2_low_prev() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(1, 1.0, 0.95, 0.0);
+            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
+        }
+
+        #[test]
+        fn test_compare_classes_studentt_test_class_2_high_pval() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(1, 0.00001, 0.0, 0.0);
+            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
+        }
+
+        #[test]
+        fn test_compare_classes_studentt_test_class_2_outside_range() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(48152342, 1.0, 0.0, 0.0);
+            assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
+        }
+
+        // Same for Wilcoxon
+        #[test]
+        fn test_compare_classes_wilcoxon_class_0() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(0, 1.0, 0.0, 0.0);
+            assert_eq!(result, 0, "test feature 0 should be significantly associated with class 0");
+        }
+
+        #[test]
+        fn test_compare_classes_wilcoxon_class_1() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.0);
+            assert_eq!(result, 1, "test feature 1 should be significantly associated with class 1");
+        }
+
+        #[test]
+        fn test_compare_classes_wilcoxon_class_2_low_mean() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.95);
+            println!("{:?}", result);
+            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
+        }
+
+        #[test]
+        fn test_compare_classes_wilcoxon_class_2_low_prev() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(1, 1.0, 0.95, 0.0);
+            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
+        }
+
+        #[test]
+        fn test_compare_classes_wilcoxon_class_2_high_pval() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(1, 0.00001, 0.0, 0.0);
+            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
+        }
+
+        #[test]
+        fn test_compare_classes_wilcoxon_class_2_outside_range() {
+            let data = create_test_data();
+            let result = data.compare_classes_studentt(48152342, 1.0, 0.0, 0.0);
+            assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
+        }
+
+    // tests for select_features
+    // need to explore ga.rs before
+
+    // tests for subset
+    #[test]
+    fn test_subset_indices() {
+        let original_data = create_test_data();
+        let subset_data = original_data.subset(vec![0, 3]);
+
+        assert_eq!(subset_data.X, HashMap::from([((0, 0), 0.9), ((0, 1), 0.01), ((1, 0), 0.12), ((1, 1), 0.75)]),
+        "the subset X should be composed of the selected-samples X");
+        assert_eq!(subset_data.y, vec![0, 1], "the subset y should be composed of the selected-samples y");
+        assert_eq!(subset_data.samples, vec!["sample1".to_string(), "sample4".to_string()], "the subset samples names should be the selected-samples names");
+        assert_eq!(subset_data.feature_len, original_data.feature_len, "the subset feature_len should be the selected-samples feature_len");
+        assert_eq!(subset_data.sample_len, 2, "the subset sample_len should be the number of samples used to reduce the data");
+    }
+
+    #[test]
+    fn test_subset_empty_set() {
+        let original_data = create_test_data();
+        let subset_data = original_data.subset(vec![]);
+        let expected_X: HashMap<(usize, usize), f64> = HashMap::new();
+        let expected_y: Vec<u8> = vec![];
+        let expected_samples: Vec<String> = vec![];
+
+        assert_eq!(subset_data.X, expected_X, "an empty subset should have empty X");
+        assert_eq!(subset_data.y, expected_y, "an empty subset should have empty y");
+        assert_eq!(subset_data.samples, expected_samples, "an empty subset shouldn't have samples");
+        assert_eq!(subset_data.feature_len, original_data.feature_len, "an empty subset should keep its reference to features");
+        assert_eq!(subset_data.sample_len, 0, "an empty subset should have 0 sample");
+    }
+
+    // tests for clone_with_new_x
+    #[test]
+    fn test_clone_with_new_x_basic() {        
+        let original_data = create_test_data();
+
+        let new_x = HashMap::from([((0, 0), 0.5), ((1, 0), 0.8)]);
+        let cloned_data = original_data.clone_with_new_x(new_x.clone());
+
+        assert_eq!(cloned_data.X, new_x, "the clone must have the new X");
+        assert_eq!(cloned_data.y, original_data.y, "the clone must have the same y as the reference");
+        assert_eq!(cloned_data.features, original_data.features, "the clone must have the same features as the reference");
+        assert_eq!(cloned_data.samples, original_data.samples, "the clone must have the same samples as the reference");
+        assert_eq!(cloned_data.feature_class, original_data.feature_class, "the clone must have the same feature_class as the reference");
+        assert_eq!(cloned_data.feature_selection, original_data.feature_selection, "the clone must have the same feature_selection as the reference");
+        assert_eq!(cloned_data.feature_len, original_data.feature_len, "the clone must have the same feature_len as the reference");
+        assert_eq!(cloned_data.sample_len, original_data.sample_len, "the clone must have the same sample_len as the reference");
+    }
+
+    #[test]
+    fn test_clone_with_new_x_empty() {
+        let original_data = create_test_data();
+
+        let new_x: HashMap<(usize, usize), f64> = HashMap::new();
+        let cloned_data = original_data.clone_with_new_x(new_x);
+
+        assert!(cloned_data.X.is_empty(), "the clone must have the new X despite its emptiness");
+        assert_eq!(cloned_data.y, original_data.y, "the clone must have the same y as the reference");
+        assert_eq!(cloned_data.features, original_data.features, "the clone must have the same features as the reference");
+        assert_eq!(cloned_data.samples, original_data.samples, "the clone must have the same samples as the reference");
+        assert_eq!(cloned_data.feature_class, original_data.feature_class, "the clone must have the same feature_class as the reference");
+        assert_eq!(cloned_data.feature_selection, original_data.feature_selection, "the clone must have the same feature_selection as the reference");
+        assert_eq!(cloned_data.feature_len, original_data.feature_len, "the clone must have the same feature_len as the reference");
+        assert_eq!(cloned_data.sample_len, original_data.sample_len, "the clone must have the same sample_len as the reference");
+    }
+
+    // tests for add
+    #[test]
+    fn test_add_basic() {
+        let mut data1 = Data {
+            X: HashMap::from([((0, 0), 0.5), ((1, 0), 0.8)]),
+            y: vec![0, 1],
+            features: vec!["feature1".to_string()],
+            samples: vec!["sample1".to_string(), "sample2".to_string()],
+            feature_class: HashMap::new(),
+            feature_selection: Vec::new(),
+            feature_len: 1,
+            sample_len: 2,
+        };
+
+        let data2 = Data {
+            X: HashMap::from([((0, 0), 0.3), ((1, 0), 0.6)]),
+            y: vec![1, 0],
+            features: vec!["feature1".to_string()],
+            samples: vec!["sample3".to_string(), "sample4".to_string()],
+            feature_class: HashMap::new(),
+            feature_selection: Vec::new(),
+            feature_len: 1,
+            sample_len: 2,
+        };
+
+        data1.add(&data2);
+
+        let expected_X: HashMap<(usize, usize), f64> = HashMap::from([
+            ((0, 0), 0.5),
+            ((1, 0), 0.8),
+            ((2, 0), 0.3),
+            ((3, 0), 0.6),
+        ]);
+        let expected_y = vec![0, 1, 1, 0];
+        let expected_samples = vec![
+            "sample1".to_string(),
+            "sample2".to_string(),
+            "sample3".to_string(),
+            "sample4".to_string(),
+        ];
+
+        assert_eq!(data1.X, expected_X, "the combination of two Data must notably result in the combinaition of their X");
+        assert_eq!(data1.y, expected_y, "the combination of two Data must notably result in the combinaition of their y");
+        assert_eq!(data1.samples, expected_samples, "the combination of two Data must notably result in the combinaition of their samples");
+        assert_eq!(data1.sample_len, 4, "the combination of two Data must notably result in the sum of their sample_len");
+    }
+
+    #[test]
+    fn test_add_empty_data() {
+        let original_data = create_test_data();
+        let mut cumulated_data = original_data.clone();
+        let empty_data = Data::new();
+
+        cumulated_data.add(&empty_data);
+
+        assert_eq!(original_data.X, cumulated_data.X, "the combination of a Data with an empty Data must contain the X of the non-empty Data");
+        assert_eq!(original_data.y, cumulated_data.y, "the combination of a Data with an empty Data must contain the y of the non-empty Data");
+        assert_eq!(original_data.features, cumulated_data.features, "the combination of a Data with an empty Data must contain the features of the non-empty Data");
+        assert_eq!(original_data.feature_class, cumulated_data.feature_class, "the combination of a Data with an empty Data must contain the feature_class of the non-empty Data");
+        assert_eq!(original_data.feature_len, cumulated_data.feature_len, "the combination of a Data with an empty Data must contain the feature_len of the non-empty Data");
+        assert_eq!(original_data.samples, cumulated_data.samples, "the combination of a Data with an empty Data must contain the samples of the non-empty Data");
+        assert_eq!(original_data.sample_len, cumulated_data.sample_len, "the combination of a Data with an empty Data must contain the sample_len of the non-empty Data");
+    }
+
+    // a few ways to make add() more robust:
+    // fn test_add_same_samples() {} -> case where data1 contains samples 1 & 2 and data2 samples 1 & 3
+    // fn test_add_different_features() {} -> case where data1 contains feature X but data2 doesn't
+
+    // useful to test fmt display and debug ? 
 }
