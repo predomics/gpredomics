@@ -104,3 +104,129 @@ impl CV {
             .unwrap()
     }
 }
+
+// unit tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+    use std::collections::HashMap;
+
+    fn create_test_data() -> Data {
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        let mut feature_class: HashMap<usize, u8> = HashMap::new();
+
+        // Simulate data
+        X.insert((0, 0), 0.1);
+        X.insert((0, 1), 0.4);
+        X.insert((1, 0), 0.2);
+        X.insert((1, 1), 0.5);
+        X.insert((2, 0), 0.3);
+        X.insert((2, 1), 0.6);
+        X.insert((3, 0), 0.7);
+        X.insert((3, 1), 0.8);
+        X.insert((4, 0), 0.1);
+        X.insert((4, 1), 0.2);
+        X.insert((5, 0), 0.9);
+        X.insert((5, 1), 0.8);
+        feature_class.insert(0, 0);
+        feature_class.insert(1, 1);
+
+        Data {
+            X,
+            y: vec![0, 1, 0, 1, 1, 1],
+            features: vec!["feature1".to_string(), "feature2".to_string()],
+            samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(), "sample4".to_string(), "sample5".to_string(), "sample6".to_string()],
+            feature_class,
+            feature_selection: vec![0, 1],
+            feature_len: 2,
+            sample_len: 6,
+        }
+    }
+
+    #[test]
+    fn test_cv_new_creates_correct_number_of_folds() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = create_test_data();
+        let fold_number = 3;
+        let cv = CV::new(&data, fold_number, &mut rng);
+        assert_eq!(cv.folds.len(), fold_number);
+        assert_eq!(cv.datasets.len(), fold_number);
+    }
+
+    #[test]
+    fn test_cv_new_distributes_y_correctly_and_preserve_them() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = create_test_data();
+        let fold_number = 3;
+        let cv = CV::new(&data, fold_number, &mut rng);
+
+        // Check that y are correctly splitted
+        let expected_size = (data.y.len() + fold_number - 1) / fold_number;
+        for fold in &cv.folds {
+            let fold_size = fold.y.len();
+            assert!((fold_size as isize - expected_size as isize).abs() <= 1);
+        }
+
+        // Check that all data is preserved across all folds
+        let mut real_y: Vec<usize> = data.y.iter().map(|&x| x as usize).collect();
+        let mut collected_y = Vec::new();
+        for fold in &cv.folds {
+            collected_y.extend(fold.y.iter().map(|&x| x as usize));
+        }
+        real_y.sort();
+        collected_y.sort();
+ 
+         assert_eq!(collected_y, real_y);
+    }
+
+    // add a unit test to check if y are correctly distribued ? 
+
+    #[test]
+    fn test_cv_new_reproductibility() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = create_test_data();
+        let fold_number = 3;
+        let cv = CV::new(&data, fold_number, &mut rng);
+        
+        let mut X1: HashMap<(usize, usize), f64> = HashMap::new();
+        let mut X2: HashMap<(usize, usize), f64> = HashMap::new();
+        let mut X3: HashMap<(usize, usize), f64> = HashMap::new();
+
+        X1.insert((0, 0), 0.3);
+        X1.insert((0, 1), 0.6);
+        X1.insert((1, 0), 0.2);
+        X1.insert((1, 1), 0.5);
+        X1.insert((2, 0), 0.1);
+        X1.insert((2, 1), 0.2);
+        X2.insert((0, 0), 0.1);
+        X2.insert((0, 1), 0.4);
+        X2.insert((1, 0), 0.7);
+        X2.insert((1, 1), 0.8);
+        X3.insert((0, 0), 0.9);
+        X3.insert((0, 1), 0.8);
+
+        assert_eq!(cv.folds[0].X, X1);
+        assert_eq!(cv.folds[1].X, X2);
+        assert_eq!(cv.folds[2].X, X3);
+        assert_eq!(cv.folds[0].y, [0, 1, 1]);
+        assert_eq!(cv.folds[1].y, [0, 1]);
+        assert_eq!(cv.folds[2].y, [1]);
+
+        assert_eq!(cv.folds[0].samples, ["sample3", "sample2", "sample5"]);
+        assert_eq!(cv.folds[1].samples, ["sample1", "sample4"]);
+        assert_eq!(cv.folds[2].samples, ["sample6"]);
+        assert_eq!(cv.folds[0].sample_len, 3);
+        assert_eq!(cv.folds[1].sample_len, 2);
+        assert_eq!(cv.folds[2].sample_len, 1);
+
+        for fold in &cv.folds {
+            assert_eq!(fold.features, ["feature1", "feature2"]);
+            assert_eq!(fold.feature_len, 2);
+        }
+    }
+
+    // tests for pass to add
+
+}
