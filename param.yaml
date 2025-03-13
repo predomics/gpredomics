@@ -18,14 +18,14 @@ cv:
   fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
 
 data:
-  X: "/home/lesage/work/learn/predomics/gpredomics/test/data/Xtrain_msp.tsv"            # the features of the train data set 
-  y: "/home/lesage/work/learn/predomics/gpredomics/test/data/Ytrain_OS12.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
-  Xtest: "/home/lesage/work/learn/predomics/gpredomics/test/data/Xtest_msp.tsv"         # the features of the test data set
-  ytest: "/home/lesage/work/learn/predomics/gpredomics/test/data/Ytest_OS12.tsv"         # the class description of the test data set 
+  X: "samples/Qin2014/Xtrain.tsv"            # the features of the train data set 
+  y: "samples/Qin2014/Ytrain.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
+  Xtest: "samples/Qin2014/Xtest.tsv"         # the features of the test data set
+  ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
   pvalue_method: wilcoxon                    # possible values are wilcoxon or studentt. wilcoxon is recommanded in most cases.
   feature_minimal_prevalence_pct: 0.1         # per class, e.g. features are retained if any of the class reaches this level
   feature_maximal_pvalue: 0.1               # features with differences less significant (p value above that threshold) than this will be removed
-  feature_minimal_feature_value: 0.0002     # features which mean is below that value are discarded
+  feature_minimal_feature_value: 0.0001     # features which mean is below that value are discarded
 
 ga:
   population_size: 5000                      # the target number of models per generation (NB the real number may be below because of clone removal) 
