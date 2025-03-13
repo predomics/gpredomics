@@ -1,11 +1,11 @@
 # unless specifically indicated all field accept a single value
 general:
   seed: 41                                   # used in parent selection, child conception (cross over) and mutation, all of which is single thread
-  algo: ga                                   # use ga only for now
-  thread_number: 8                           # the number of thread used in feature selection and fit computation
+  algo: beam                                   # use ga only for now
+  thread_number: 20                          # the number of thread used in feature selection and fit computation
   log_level: debug                           # possible values are trace, debug, info, warning or error
   language: ter,bin,ratio,pow2               # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
-  data_type: raw,prev,log                    # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
+  data_type: raw                    # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
   data_type_minimum: 1e-5                    # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
   fit: auc                           # possible values are auc,specificity,sensitivity, see README.md for details
   k_penalty: 0.00001                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
@@ -18,14 +18,14 @@ cv:
   fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
 
 data:
-  X: "samples/Qin2014/Xtrain.tsv"            # the features of the train data set 
-  y: "samples/Qin2014/Ytrain.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
-  Xtest: "samples/Qin2014/Xtest.tsv"         # the features of the test data set
-  ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
+  X: "/home/lesage/work/learn/predomics/gpredomics/test/data/Xtrain_msp.tsv"            # the features of the train data set 
+  y: "/home/lesage/work/learn/predomics/gpredomics/test/data/Ytrain_OS12.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
+  Xtest: "/home/lesage/work/learn/predomics/gpredomics/test/data/Xtest_msp.tsv"         # the features of the test data set
+  ytest: "/home/lesage/work/learn/predomics/gpredomics/test/data/Ytest_OS12.tsv"         # the class description of the test data set 
   pvalue_method: wilcoxon                    # possible values are wilcoxon or studentt. wilcoxon is recommanded in most cases.
-  feature_minimal_prevalence_pct: 0         # per class, e.g. features are retained if any of the class reaches this level
-  feature_maximal_pvalue: 0.5               # features with differences less significant (p value above that threshold) than this will be removed
-  feature_minimal_feature_value: 0.0001      # features which mean is below that value are discarded
+  feature_minimal_prevalence_pct: 0.1         # per class, e.g. features are retained if any of the class reaches this level
+  feature_maximal_pvalue: 0.1               # features with differences less significant (p value above that threshold) than this will be removed
+  feature_minimal_feature_value: 0.0002     # features which mean is below that value are discarded
 
 ga:
   population_size: 5000                      # the target number of models per generation (NB the real number may be below because of clone removal) 
@@ -33,7 +33,7 @@ ga:
   min_epochs: 100                            # the minimum number of generation to do
   max_age_best_model: 100                    # stoping after min_epochs and before max_epochs will occur only if the best model reaches this age
   kmin: 1                                    # the minimal number of variables used in the initial population
-  kmax: 50                                   # the maximum number of varialbes used in the initial population (setting to 0 will remove any maximum) 
+  kmax: 50                                   # the maximum number of variables used in the initial population (setting to 0 will remove any maximum) 
   select_elite_pct: 2                       # the % of best models of previous generation retained: the lower the figure the more elitist you are
   select_niche_pct: 20                       # (optional default to 0) the % of best models of previous generation retained but split per language / data type (enable to maintain competition between language/data types)
   select_random_pct: 2                      # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
@@ -42,3 +42,11 @@ ga:
   mutation_non_null_chance_pct: 20           # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
   feature_importance_permutations: 100       # not used in ga (used in experimental "don't use me" "ga+cv" algorithm)
   keep_all_generation: false                 # keep this setting to false when using gpredomics as a binary (setting to true is interesting in gpredomicsR)
+
+beam:
+  max_nb_of_models: 10000 # the maximum number of models per generation 
+  kmin: 1 # the number of variables used in the initial population
+  kmax: 40 # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
+  nb_very_best_models: 100 # the number of best models where all variables are directly kept for next epoch
+  nb_best_models: 1000 # the number of used best models to calculate the feature importance
+  features_importance_minimal_pct: 0.1 # the minimum prevalence percentage among best_models required for a variable to be kept for next epoch

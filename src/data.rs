@@ -143,14 +143,12 @@ impl Data {
     
         if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
 
-
-    
         // Calculate t-statistic (simple, equal variance assumption)
 
         let var0 = class_0.iter().map(|x| (x - mean_0).powi(2)).sum::<f64>() / (n0 - 1.0);
         let var1 = class_1.iter().map(|x| (x - mean_1).powi(2)).sum::<f64>() / (n1 - 1.0);
 
-        let pooled_std = ((var0 / n0) + (var1 / n1)).sqrt();
+        let pooled_std = (((n0 - 1.0)*var0 + (n1 - 1.0)*var1) / (n0 + n1 - 2.0) * (1.0/n0 + 1.0/n1)).sqrt();
         if pooled_std > 0.0 {
             let t_stat = (mean_0 - mean_1) / pooled_std;
     
@@ -227,12 +225,29 @@ impl Data {
             while i + 1 < combined.len() && combined[i].0 == combined[i + 1].0 {
                 i += 1;
             }
-            let rank = (start + i + 1) as f64 / 2.0;
+            let rank = (start + i + 2) as f64 / 2.0;
             for j in start..=i {
                 ranks[j] = rank;
             }
             i += 1;
         }
+
+        // Ex-aequo tie correction
+        let mut tie_correction = 0.0;
+        let mut i = 0;
+        while i < combined.len() {
+            let start = i;
+            while i + 1 < combined.len() && combined[i].0 == combined[i + 1].0 {
+                i += 1;
+            }
+            let tied_count = i - start + 1;
+            if tied_count > 1 {
+                tie_correction += (tied_count.pow(3) - tied_count) as f64;
+            }
+            i += 1;
+        }
+
+        let std_u = ((n0 * n1 / 12.0) * ((n0 + n1 + 1.0) - tie_correction / ((n0 + n1) * (n0 + n1 - 1.0)))).sqrt();
     
         // Compute rank sums
         let rank_sum_0: f64 = combined
@@ -247,8 +262,9 @@ impl Data {
     
         // Compute p-value using normal approximation
         let mean_u = n0 * n1 / 2.0;
-        let std_u = ((n0 * n1 * (n0 + n1 + 1.0)) / 12.0).sqrt();
-        let z = (u_stat - mean_u) / std_u;
+        let diff = u_stat - mean_u;
+        let abs_diff_corrected = diff.abs() - 0.5; // Correction for continuous values
+        let z = abs_diff_corrected / std_u * diff.signum();
     
         let normal_dist = Normal::new(0.0, 1.0).unwrap();
         let p_value = 2.0 * (1.0 - normal_dist.cdf(z.abs())); // Two-tailed p-value
@@ -343,7 +359,6 @@ impl Data {
         }
     }
 
-
     pub fn clone_with_new_x(&self, X:HashMap<(usize, usize), f64>) -> Data {
         Data {
             X: X,
@@ -367,7 +382,6 @@ impl Data {
                 }
             }
         }
-        self.samples.extend_from_slice(&other.samples);
         self.sample_len += other.sample_len;
     }
 

@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-mod beam;
+pub mod beam;
 pub mod data;
 mod utils;
 pub mod individual;
@@ -10,6 +10,7 @@ mod ga;
 mod cv;
 pub mod gpu;
 
+pub use beam::run_beam;
 use data::Data;
 use individual::Individual;
 use population::Population;
