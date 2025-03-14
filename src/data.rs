@@ -9,6 +9,7 @@ use statrs::distribution::Normal;// For random shuffling
 use log::info;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
+use fishers_exact::fishers_exact;
 
 #[derive(Clone)]
 pub struct Data {
@@ -281,6 +282,45 @@ impl Data {
         }
     }
     
+    fn compare_classes_bayesian_fisher(&self, j: usize, min_absolute_log_factor: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
+        let mut class_0_present: u32 = 0;
+        let mut class_0_absent: u32 = 0;
+        let mut class_1_present: u32 = 0;
+        let mut class_1_absent: u32 = 0;
+
+        for i in 0..self.sample_len {
+            if self.y[i] == 0 {
+                if self.X.contains_key(&(i, j)) && self.X[&(i, j)] >= min_mean_value {
+                    class_0_present += 1;
+                } else {
+                    class_0_absent += 1;
+                }
+            } else if self.y[i] == 1 {
+                if self.X.contains_key(&(i, j)) && self.X[&(i, j)] >= min_mean_value {
+                    class_1_present += 1;
+                } else {
+                    class_1_absent += 1;
+                };
+            }};
+
+        if (class_0_present as f64) < min_prevalence && (class_1_present as f64) < min_prevalence {
+            return 2;
+        }
+
+        let fisher_test = fishers_exact(&[class_0_present, class_1_present, class_0_absent, class_1_absent]).unwrap();
+        let bayes_factor = fisher_test.greater_pvalue / fisher_test.less_pvalue;
+
+        if bayes_factor.log10().abs() >= min_absolute_log_factor {
+            if bayes_factor < 1.0 {
+                    0
+            } else {
+                    1
+                }
+            } 
+        else {
+                2
+            }
+        }
 
     /// Fill feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
     pub fn select_features(&mut self, param:&Param) {
@@ -292,48 +332,46 @@ impl Data {
             .build()
             .unwrap();
 
-
-        if param.data.pvalue_method=="studentt" { 
-            let results: Vec<(usize, u8)> = pool.install(|| {
-                (0..self.feature_len)
-                    .into_par_iter()
-                    .map(|j| {
-                        let class = self.compare_classes_studentt(
+        let results: Vec<(usize, u8)> = pool.install(|| {
+            (0..self.feature_len)
+                .into_par_iter()
+                .map(|j| {
+                    let class = if param.data.feature_selection_method == "studentt" {
+                        self.compare_classes_studentt(
                             j,
                             param.data.feature_maximal_pvalue,
-                            param.data.feature_minimal_prevalence_pct as f64/100.0,
+                            param.data.feature_minimal_prevalence_pct as f64 / 100.0,
                             param.data.feature_minimal_feature_value,
-                        );
-                        (j, class)
-                    })
-                    .collect()
-            });
-            for (j, class) in results {
-                if class!=2 {self.feature_class.insert(j, class); self.feature_selection.push(j);}
-            }
-        } 
-        else { 
-            let results: Vec<(usize, u8)> = pool.install(|| {
-                (0..self.feature_len)
-                    .into_par_iter()
-                    .map(|j| {
-                        let class = self.compare_classes_wilcoxon(
+                        )
+                    } else if param.data.feature_selection_method == "bayesian_fisher"{
+                        self.compare_classes_bayesian_fisher(
+                            j,
+                            param.data.feature_minimal_log_abs_bayes_factor,
+                            param.data.feature_minimal_prevalence_pct as f64 / 100.0,
+                            param.data.feature_minimal_feature_value,
+                        )
+                    } else {
+                        self.compare_classes_wilcoxon(
                             j,
                             param.data.feature_maximal_pvalue,
-                            param.data.feature_minimal_prevalence_pct as f64/100.0,
+                            param.data.feature_minimal_prevalence_pct as f64 / 100.0,
                             param.data.feature_minimal_feature_value,
-                        );
-                        (j, class)
-                    })
-                    .collect()
-            });
-            for (j, class) in results {
-                if class!=2 {self.feature_class.insert(j, class); self.feature_selection.push(j);}
-            }
-        };
+                        )
+                    };
 
+
+                    (j, class)
+                })
+                .collect()
+        });
         
-        
+        for (j, class) in results {
+            if class != 2 {
+                self.feature_class.insert(j, class);
+                self.feature_selection.push(j);
+            }
+        }
+
     }
 
     /// filter Data for some samples (represented by a Vector of indices)
