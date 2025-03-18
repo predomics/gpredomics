@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+pub mod beam;
 pub mod data;
 mod utils;
 pub mod individual;
@@ -9,6 +10,7 @@ mod ga;
 mod cv;
 pub mod gpu;
 
+pub use beam::run_beam;
 use data::Data;
 use individual::Individual;
 use population::Population;
@@ -17,7 +19,6 @@ use rand::prelude::*;
 use param::Param;
 
 use log::{debug, info, warn, error};
-
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

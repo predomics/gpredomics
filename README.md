@@ -2,7 +2,7 @@
 
 gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version v0.5 (requires gpu=true in params.yaml, general section). Only a subset of predomics is coded:
 
-- only the Genetic Algorithm is coded, the equivalent of ga2 in Predomics terms,
+- the Genetic Algorithm is coded, the equivalent of ga2 in Predomics terms,
 - the following languages are available bin(ary), ter(nary), ratio, pow2 (a language specific to gpredomics):
 
   - bin uses only 0 or 1 as coefficients for features (take a feature or ignore it), and makes the sum of them as a score,
@@ -25,6 +25,7 @@ gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version
   - `prevalence` : or presence/absence, features above data_type_minimum are 1 others are 0,
   - `log` : features are now equal to their log (`feature.ln()` in Rust). Features below data_type_minimum are set to this value before log transformation.
 
+- the Beam Algorithm is in beta version and fit on AUC. This beta version is not compatible yet with Pow2 language.
 - lots of features are still not implemented.
 
 At this stage (beta), the program is remains simple, yet it is already versatile and useful. 
@@ -127,3 +128,11 @@ The following parameter are for the fit function:
 - mutation_non_null_chance_pct: the likeliness of "positive" mutation, e.g. a mutation that select a new feature in the model.
 - feature_importance_permutations: the number of permutations in OOB algorithm to compute feature importance
 
+### beam
+
+- max_nb_of_models: the maximum number of models per generation
+- kmin: the number of features used in the initial population
+- kmax: the maximum number of features to consider in a single model; the feature count limit for the beam algorithm
+- nb_very_best_models: all features represented in these n models will be kept for the next generation
+- nb_best_models: these n models are used to compute feature importances at each generation and complement the very_best_models selected features
+- features_importance_minimal_pct: the minimum prevalence percentage among best_models required for a feature to be kept for the next epoch

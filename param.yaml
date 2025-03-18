@@ -15,14 +15,14 @@ general:
   gpu: true
 
 cv:
-  fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
+  fold_number: 10                           # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
 
 data:
   X: "samples/Qin2014/Xtrain.tsv"            # the features of the train data set 
   y: "samples/Qin2014/Ytrain.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
   Xtest: "samples/Qin2014/Xtest.tsv"         # the features of the test data set
   ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
-  feature_selection_method: bayesian_fisher   # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
+  feature_selection_method: wilcoxon   # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
   feature_minimal_prevalence_pct: 0         # per class, e.g. features are retained if any of the class reaches this level
   feature_maximal_pvalue: 0.5               # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_feature_value: 0.0001      # features which mean is below that value are discarded
@@ -34,7 +34,7 @@ ga:
   min_epochs: 100                            # the minimum number of generation to do
   max_age_best_model: 100                    # stoping after min_epochs and before max_epochs will occur only if the best model reaches this age
   kmin: 1                                    # the minimal number of variables used in the initial population
-  kmax: 50                                   # the maximum number of varialbes used in the initial population (setting to 0 will remove any maximum) 
+  kmax: 50                                   # the maximum number of variables used in the initial population (setting to 0 will remove any maximum) 
   select_elite_pct: 2                       # the % of best models of previous generation retained: the lower the figure the more elitist you are
   select_niche_pct: 20                       # (optional default to 0) the % of best models of previous generation retained but split per language / data type (enable to maintain competition between language/data types)
   select_random_pct: 2                      # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
@@ -43,3 +43,11 @@ ga:
   mutation_non_null_chance_pct: 20           # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
   feature_importance_permutations: 100       # not used in ga (used in experimental "don't use me" "ga+cv" algorithm)
   keep_all_generation: false                 # keep this setting to false when using gpredomics as a binary (setting to true is interesting in gpredomicsR)
+
+beam:
+  max_nb_of_models: 5000 # the maximum number of models per generation 
+  kmin: 1 # the number of variables used in the initial population
+  kmax: 50 # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
+  nb_very_best_models: 50 # the number of best models where all variables are directly kept for next epoch (recommanded : 1% of max_nb_of_models)
+  nb_best_models: 500 # the number of used best models to calculate the feature importance (recommanded : 10% of max_nb_of_models)
+  features_importance_minimal_pct: 10 # the minimum prevalence percentage among best_models required for a variable to be kept for next epoch
