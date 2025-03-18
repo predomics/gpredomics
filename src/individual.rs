@@ -235,39 +235,32 @@ impl Individual {
     /// Compute AUC for binary class using Mann-Whitney U algorithm
     pub fn compute_auc_from_value(&mut self, value: &[f64], y: &Vec<u8>) -> f64 {
         assert_eq!(value.len(), y.len());
-        let mut positive_scores = Vec::new();
-        let mut negative_scores = Vec::new();
-    
-        for (&score, &label) in value.iter().zip(y.iter()) {
-            if label == 1 {
-                positive_scores.push(score);
-            } else {
-                negative_scores.push(score);
-            }
+        let n1 = y.iter().filter(|&&label| label == 1).count();
+        let n2 = y.iter().filter(|&&label| label == 0).count();
+        
+        if n1 == 0 || n2 == 0 {
+            self.auc = 0.5;
+            return self.auc;
         }
-    
-        let n_pos = positive_scores.len();
-        let n_neg = negative_scores.len();
-
-        if n_pos == 0 || n_neg == 0 {
-            return 0.0;
-        }
-    
-        let mut u_pos = 0.0;
-    
-        for &pos_score in &positive_scores {
-            for &neg_score in &negative_scores {
-                if pos_score > neg_score {
-                    u_pos += 1.0;
-                } else if pos_score == neg_score {
-                    u_pos += 0.5;
+        
+        let mut u = 0.0;
+        
+        for (i, &score_i) in value.iter().enumerate() {
+            if y[i] == 1 { 
+                for (j, &score_j) in value.iter().enumerate() {
+                    if y[j] == 0 { 
+                        if score_i > score_j {
+                            u += 1.0;
+                        } else if score_i == score_j {
+                            u += 0.5; 
+                        }
+                    }
                 }
             }
         }
-    
-        let auc = u_pos as f64 / (n_pos as f64 * n_neg as f64);
-        self.auc = auc;
-        auc
+        
+        self.auc = u / (n1 as f64 * n2 as f64);
+        self.auc
     }
 
     /// Calculate the confusion matrix at a given threshold

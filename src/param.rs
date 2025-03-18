@@ -8,6 +8,7 @@ pub struct Param {
     pub general: General,
     pub data: Data,                          // Nested struct for "data"
     pub ga: GA,
+    pub beam: BEAM,
     pub cv: CV,
 }
 
@@ -98,6 +99,17 @@ pub struct GA {
 
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BEAM {
+    pub max_nb_of_models: usize,                // Maximum number of models
+    pub kmin: usize,                           // Minimum value of k
+    #[serde(default = "feature_kminkmax_default")]  
+    pub kmax: usize,                           // Maximum value of k
+    pub nb_very_best_models: usize,              // Number of very best models 
+    pub nb_best_models: usize,                   // Number of best models 
+    pub features_importance_minimal_pct: f64,  // Minimum prevalence percentage among best_models
+}
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CV {
@@ -125,6 +137,12 @@ impl Default for CV {
 }
 
 impl Default for GA {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for BEAM {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
