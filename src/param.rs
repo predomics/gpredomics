@@ -54,20 +54,22 @@ pub struct General {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Data {
-    pub X: String,                      // Path to X data
+    pub X: String,                     
     pub y: String,
-    #[serde(default = "empty_string")]                      // Path to y data
+    #[serde(default = "empty_string")]                      
     pub Xtest: String,
-    #[serde(default = "empty_string")]                      // Path to y data
+    #[serde(default = "empty_string")]                     
     pub ytest: String,
-    #[serde(default = "pvalue_method_default")]                      // Path to y data
-    pub pvalue_method: String,
-    #[serde(default = "feature_minimal_prevalence_pct_default")]                      // Path to y data
+    #[serde(default = "feature_selection_method_default")]                      
+    pub feature_selection_method: String,
+    #[serde(default = "feature_minimal_prevalence_pct_default")]                     
     pub feature_minimal_prevalence_pct: f64, // Minimum prevalence
-    #[serde(default = "feature_maximal_pvalue_default")]                      // Path to y data
-    pub feature_maximal_pvalue: f64, // Minimum prevalence
-    #[serde(default = "feature_minimal_feature_value_default")]                      // Path to y data
-    pub feature_minimal_feature_value: f64, // Minimum prevalence
+    #[serde(default = "feature_maximal_pvalue_default")]                     
+    pub feature_maximal_pvalue: f64, 
+    #[serde(default = "feature_minimal_feature_value_default")]                      
+    pub feature_minimal_feature_value: f64, 
+    #[serde(default = "feature_minimal_log_abs_bayes_factor_default")]                      
+    pub feature_minimal_log_abs_bayes_factor: f64, 
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -157,9 +159,10 @@ fn empty_string() -> String { "".to_string() }
 fn min_epochs_default() -> usize { 10 }
 fn max_age_best_model_default() -> usize { 10 }
 fn algorithm_default() -> String { "ga".to_string() }
-fn pvalue_method_default() -> String { "studentt".to_string() }
+fn feature_selection_method_default() -> String { "wilcoxon".to_string() }
 fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
 fn feature_maximal_pvalue_default() -> f64 { 0.5 }
+fn feature_minimal_log_abs_bayes_factor_default() -> f64 { 2.0 }
 fn feature_importance_permutations_default() -> usize { 10 }
 fn feature_minimal_feature_value_default() -> f64 { 0.0 }
 fn language_default() -> String { "binary".to_string() }
