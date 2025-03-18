@@ -25,7 +25,7 @@ gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version
   - `prevalence` : or presence/absence, features above data_type_minimum are 1 others are 0,
   - `log` : features are now equal to their log (`feature.ln()` in Rust). Features below data_type_minimum are set to this value before log transformation.
 
-- the Beam Algorithm is in beta version, fitting on AUC and working only with ternary language currently (terbeam in predomics terms) and with one selected data type. 
+- the Beam Algorithm is in beta version and fit on AUC. This beta version is not compatible yet with Pow2 language.
 - lots of features are still not implemented.
 
 At this stage (beta), the program is remains simple, yet it is already versatile and useful. 

@@ -1,7 +1,9 @@
+use crate::cv::CV;
+use crate::param;
 // BE CAREFUL : the adaptation of the Predomics beam algorithm for Gpredomics is still under development
 // IMPORTANT NOTE : this algorithm currently use the last statrs version (v0.18), where Gpredomics 0.5 use the v0.16
-use crate::individual::TERNARY_LANG;
 use crate::population::Population;
+use crate::individual::language;
 use crate::individual::data_type;
 use crate::individual::Individual;
 use crate::data::Data;
@@ -12,9 +14,9 @@ use log::{debug,info,warn,error};
 use std::sync::atomic::{AtomicBool, Ordering};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
-use statrs::stats_tests::fisher::fishers_exact;
-use statrs::stats_tests::Alternative;
 use std::sync::Arc;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 
 // Beam functions
 fn generate_combinations(features: &Vec<usize>, k: usize) -> Vec<Vec<usize>> {
@@ -72,7 +74,6 @@ fn beam_pop_from_combinations(features_combination: Vec<Vec<usize>>, ind:Individ
     let ind_vec: Vec<Individual> = features_combination.into_par_iter()
         .map(|combination| {
             let mut tmp_ind = ind.clone();
-            tmp_ind.language = TERNARY_LANG;
 
             tmp_ind.features = combination.iter()
                 .filter_map(|&k| ind.features.get(&k).map(|v| (k, v.clone())))
@@ -115,7 +116,7 @@ fn select_features_from_best(sorted_population: &Population, nbBest: usize, nbVe
         very_best_models_pop.individuals = very_best_models_pop.individuals[..nbVeryBest].to_vec();
         nVB = nbVeryBest;
     } else {
-        (very_best_models_pop, nVB) = very_best_models_pop.select_first_pct(1.0);
+        nVB = very_best_models_pop.individuals.len()
     }
 
     for individual in &very_best_models_pop.individuals {
@@ -130,33 +131,32 @@ fn select_features_from_best(sorted_population: &Population, nbBest: usize, nbVe
         best_models_pop.individuals = best_models_pop.individuals[..nbBest].to_vec();
         nB = nbBest;
     } else {
-        (best_models_pop, nB) = best_models_pop.select_first_pct(10.0);
+        nB = best_models_pop.individuals.len()
     }
 
     let features_appearances = count_feature_appearances(&best_models_pop);
     for (feature, count) in features_appearances {
-        if very_best_models_pop.individuals[0].features.len() != 1 && (count as f64 / nB as f64) >= threshold {
+        if very_best_models_pop.individuals[0].features.len() != 1 && (count as f64 / nB as f64) >= (threshold / 100.0) {
             unique_features.insert(feature);
         // Keep all best features when k=1
-        } else if very_best_models_pop.individuals[0].features.len() == 1 {
+        } else if very_best_models_pop.individuals[0].features.len() == 1 {      
             unique_features.insert(feature);
         }
     }
 
     features.extend(unique_features.into_iter());
 
-    info!(
-        "{:?} features present in at least {:?}% of the {:?} best models or present in the {:?} (very) best models kept",
-        features.len(),
-        threshold * 100.0,
-        nB,
-        nVB
-    );
+    if very_best_models_pop.individuals[0].features.len() != 1 {
+        info!("{:?} features present in at least {:?}% of the {:?} best models or present in the {:?} (very) best models kept",
+        features.len(), threshold, nB, nVB)
+    } else {
+        info!("Single-feature models : all features kept.")
+    };
 
     features
 }
 
-pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, data_type:u8) -> Individual {
+pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, language:u8, data_type:u8, param: &Param) -> Individual {
     let mut feature_counts = HashMap::new();
 
     for (&(sample_idx, feature_idx), &value) in &data.X {
@@ -180,9 +180,9 @@ pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, data_
     let mut count_1 = 0;
 
     for (&feature_idx, &counts) in &feature_counts {
-        if counts[0] > counts[1] {
+        if counts[0] > counts[1] && language != 0 {
             features.insert(feature_idx, -1);
-            count_neg_1 += 1;
+            count_neg_1 += 1 
         } else if counts[1] > counts[0] {
             features.insert(feature_idx, 1);
             count_1 += 1;
@@ -192,10 +192,10 @@ pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, data_
         }
     }
 
-    info!(
-        "\x1b[1;92mGenerating a standard Individual based on the average representativeness of features within samples:\nClass 0 associated: {}\nClass 1 associated: {}\nBalanced representation: {} \x1b[0m",
-        count_neg_1, count_1, count_0
-    );
+    //info!(
+    //    "\x1b[1;92mGenerating a standard Individual based on the average representativeness of features within samples:\nClass 0 associated: {}\nClass 1 associated: {}\nBalanced representation: {} \x1b[0m",
+    //    count_neg_1, count_1, count_0
+    //);
 
     Individual {
         features: features.clone(),
@@ -207,57 +207,22 @@ pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, data_
         threshold: 0.0,
         k: features.len(),
         epoch: 0,
-        language: TERNARY_LANG,
+        language: language,
         data_type: data_type,
         hash: 0,
-        data_type_minimum: 0.0,
+        data_type_minimum: param.general.data_type_epsilon,
     }
 }
 
-pub fn contingency_table(data: &Data, feature_index: usize, min:f64) -> [u64; 4] {
-    let mut table = [0u64; 4];
-
-    for (&(sample_index, feat_index), &value) in &data.X {
-        if feat_index == feature_index {
-            let class = data.y[sample_index] as usize;
-            if class == 0 || class == 1 {
-                if value >= min {
-                    table[class * 2] += 1;
-                } else {
-                    table[class * 2 + 1] += 1;
-                }
-            }
+pub fn compute_average_auc<'a>(population: &'a mut Population, cv: &'a CV) -> &'a mut Population {
+    for individual in &mut population.individuals {
+        let mut auc_sum = 0.0;
+        for dataset in &cv.datasets {
+            auc_sum += individual.compute_auc(dataset);
         }
+        individual.auc = auc_sum / cv.datasets.len() as f64;
     }
-
-    table
-}
-
-pub fn fisher_exact_test(data: &Data, feature_index: usize, min: f64) -> f64 {
-    let table = contingency_table(data, feature_index, min);
-    let p_value = fishers_exact(&table, Alternative::TwoSided).unwrap();
-
-    p_value
-}
-
-
-pub fn significant_features(data: &Data, p_value_threshold: f64, min: f64) -> Vec<usize> {
-    let significant_features: Vec<usize> = (0..data.feature_len)
-        .into_par_iter()
-        .filter(|&feature_index| {
-            let p_value = fisher_exact_test(data, feature_index, min);
-            p_value < p_value_threshold
-        })
-        .collect();
-
-    println!(
-        "\x1b[1;38;5;214mFisher Exact Test : kept {} on {} features (p-value < {})\x1b[0m",
-        significant_features.len(),
-        data.feature_len,
-        p_value_threshold
-    );
-
-    significant_features
+    population
 }
 
 pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
@@ -267,30 +232,54 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
     data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
     data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
 
+    // Cross-validation initialization
+    let mut cv: Option<CV> = None;
+    if param.cv.fold_number > 1 {
+        info!("Learning on {:?}-folds.", param.cv.fold_number);
+        let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+        cv = Some(CV::new(&data, param.cv.fold_number, &mut rng));
+    }
     let pool = ThreadPoolBuilder::new()
         .num_threads(param.general.thread_number)
         .build()
         .expect("Failed to build thread pool");
     
     pool.install(|| {
-            
+        
         info!("\x1b[1;96mLaunching Beam algorithm for a feature interval [{}, {}] with maximum {} models per epoch\x1b[0m", param.beam.kmin, param.beam.kmax, param.beam.max_nb_of_models);
 
         let mut collection: Vec<Population> = vec![];
 
         // Feature preselection
         data.select_features(&param);
-        let mut features_index = data.feature_selection.clone();
+        let features_index = data.feature_selection.clone();
+
+        let languages: Vec<u8> = param.general.language.split(",").map(language).collect();
+        let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
 
         let initial_combinations = generate_combinations(&features_index, param.beam.kmin);
         let mut combinations = initial_combinations.clone();
         let mut n: usize;
 
-        let ind = generate_individual(&data, &features_index, data_type(&param.general.data_type));
-        let mut pop = beam_pop_from_combinations(combinations, ind.clone());
+        let mut pop = Population::new();
 
+        let mut lang_and_type_pop = Population::new();
+        for language in &languages {
+            // Ignore pow2 language as beam algorithm has not (yet?) the ability to explore coefficient
+            if *language != 2 as u8 { 
+                for data_type in &data_types {
+                    let ind = generate_individual(&data, &features_index, *language, *data_type, &param);
+                    lang_and_type_pop.individuals.push(ind);
+                }
+            }
+        }
+
+        for ind in &lang_and_type_pop.individuals{
+            pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals)
+        }
+        
         // Fitting first Population composed of all k_start combinations
-        pop.auc_fit(&data, 0.0, 12);
+        pop.auc_fit(&data, 0.0, param.general.thread_number);
         pop = pop.sort();
 
         for ind_k in param.beam.kmin..param.beam.kmax {
@@ -306,7 +295,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
             }
 
             // Generate new combinations [k, k+1] for next step
-            let mut features_to_keep = select_features_from_best(&selected_pop, param.beam.nb_best_models, param.beam.nb_very_best_models, param.beam.features_importance_minimal_pct);
+            let features_to_keep = select_features_from_best(&selected_pop, param.beam.nb_best_models, param.beam.nb_very_best_models, param.beam.features_importance_minimal_pct);
             debug!("Selecting best combinations...");
             let best_combinations: Vec<Vec<usize>> = selected_pop.individuals.clone().par_iter().map(|ind| ind.features.keys().cloned().collect()).collect();
             debug!("Computing new combinations with these features...");
@@ -314,9 +303,20 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
             debug!("Generating Population...");
             
             // Compute AUC for generated Population and sort it
-            pop = beam_pop_from_combinations(combinations.clone(), ind.clone());
+            pop = Population::new();
+
+            for ind in &lang_and_type_pop.individuals{
+                pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals)
+            }
+
             debug!("Fitting AUC and sort...");
-            pop.auc_fit(&data, 0.0, 16);
+            if let Some(ref cv) = cv {
+                debug!("Cross-validation..");
+                pop.fit_on_folds(cv, &param);
+            }  else {
+                pop.auc_fit(&data, 0.0, param.general.thread_number);
+            }
+
             pop = pop.sort();
             let mut sorted_pop = Population::new();
             sorted_pop.individuals = pop.individuals.clone();
@@ -338,29 +338,36 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
         let mut final_pop = Population::new();
         final_pop.individuals = collection.last_mut().unwrap().individuals.clone();
         println!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
-        let mut limit = 20;
-        if final_pop.individuals.len() < 20 {
+        let mut limit = param.beam.nb_very_best_models;
+        if final_pop.individuals.len() < limit {
             limit = final_pop.individuals.len()
         }
         for i in 0..limit {
             let individual = &mut pop.individuals[i];
+            if param.cv.fold_number > 1 { 
+                individual.compute_auc(&data);
+            } else {};
             let auc_train = individual.auc;
             let auc_test = individual.compute_auc(&data_test);
             let (threshold, acc_train, se_train, sp_train) = individual.compute_threshold_and_metrics(&data);
             let (_, acc_test, se_test, sp_test) = individual.compute_threshold_and_metrics(&data_test);
-            println!("\x1b[1;93m#{}\x1b[0m: k={:?} || threshold {:.10} : AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} \n {:?}",
+            info!("\x1b[1;93m#{}\x1b[0m: k={:?} | threshold {:.10} : AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} \n {:?}",
             i + 1, individual.features.len(), threshold, auc_train, auc_test, acc_train, acc_test, se_train, se_test, sp_train, sp_test, individual);
         }
 
         println!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
-        let mut top_ten_pop = keep_n_best_model_within_collection(&collection, 20);
-        for i in 0..20 {
+        info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
+        let mut top_ten_pop = keep_n_best_model_within_collection(&collection, limit);
+        for i in 0..limit {
             let individual = &mut top_ten_pop.individuals[i];
+            if param.cv.fold_number > 1 { 
+                individual.compute_auc(&data); 
+            } else {};
             let auc_train = individual.auc;
             let auc_test = individual.compute_auc(&data_test);
             let (threshold, acc_train, se_train, sp_train) = individual.compute_threshold_and_metrics(&data);
             let (_, acc_test, se_test, sp_test) = individual.compute_threshold_and_metrics(&data_test);
-            println!("\x1b[1;93m#{}\x1b[0m: k={:?} || threshold {:.10} : AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} \n {:?}",
+            info!("\x1b[1;93m#{}\x1b[0m: k={:?} | threshold {:.10} : AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} \n {:?}",
             i + 1, individual.features.len(), threshold, auc_train, auc_test, acc_train, acc_test, se_train, se_test, sp_train, sp_test, individual);
         }
 

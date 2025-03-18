@@ -1,12 +1,12 @@
+use crate::cv::CV;
 use crate::data::Data;
 use crate::individual::Individual;
+use crate::param::Param;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use std::mem;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
-
-
 
 pub struct Population {
     pub individuals: Vec<Individual>
@@ -146,7 +146,27 @@ impl Population {
         self
     }
 
-    /// populate the population with a set of random individuals
+    // Function for cross-validation
+    pub fn fit_on_folds(&mut self, cv: &CV, param: &Param) {
+        self.individuals.par_iter_mut().for_each(|individual| {
+            let mut auc_sum = 0.0;
+            let mut auc_squared_sum = 0.0;
+            let num_folds = cv.datasets.len() as f64;
+
+            for dataset in &cv.datasets {
+                let auc = individual.compute_auc(dataset);
+                auc_sum += auc;
+                auc_squared_sum += auc * auc;
+            }
+
+            let average_auc = auc_sum / num_folds;
+            let variance = (auc_squared_sum / (num_folds - 1.0)) - (average_auc * average_auc);
+
+            individual.auc = average_auc;
+            individual.fit = average_auc - param.general.overfit_penalty * variance;
+        });
+    }
+
     /// populate the population with a set of random individuals
     pub fn generate(&mut self, population_size: u32, kmin:usize, kmax:usize, language: u8, data_type: u8, data_type_minimum: f64, data: &Data, rng: &mut ChaCha8Rng) {
         for _ in 0..population_size {

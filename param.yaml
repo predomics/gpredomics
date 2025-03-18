@@ -2,20 +2,20 @@
 general:
   seed: 41                                   # used in parent selection, child conception (cross over) and mutation, all of which is single thread
   algo: beam                                   # use ga only for now
-  thread_number: 20                          # the number of thread used in feature selection and fit computation
+  thread_number: 24                          # the number of thread used in feature selection and fit computation
   log_level: debug                           # possible values are trace, debug, info, warning or error
-  language: ter,bin,ratio,pow2               # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
-  data_type: raw                    # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
-  data_type_minimum: 1e-5                    # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
+  language: bin,ter,ratio             # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
+  data_type: raw,prev,log               # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
+  data_type_epsilon: 1e-5                    # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
   fit: auc                           # possible values are auc,specificity,sensitivity, see README.md for details
   k_penalty: 0.00001                            # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
-  overfit_penalty: 0.0                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
+  overfit_penalty: 0.0                     # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
   fr_penalty: 0.0                            # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
   nb_best_model_to_test: 30                  # nb of models to test in the last generation (default to 10, 0 means all models)
-  gpu: true
+  gpu: false
 
 cv:
-  fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
+  fold_number: 3                           # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
 
 data:
   X: "samples/Qin2014/Xtrain.tsv"            # the features of the train data set 
@@ -23,7 +23,7 @@ data:
   Xtest: "samples/Qin2014/Xtest.tsv"         # the features of the test data set
   ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
   pvalue_method: wilcoxon                    # possible values are wilcoxon or studentt. wilcoxon is recommanded in most cases.
-  feature_minimal_prevalence_pct: 0.1         # per class, e.g. features are retained if any of the class reaches this level
+  feature_minimal_prevalence_pct: 0.2         # per class, e.g. features are retained if any of the class reaches this level
   feature_maximal_pvalue: 0.1               # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_feature_value: 0.0001     # features which mean is below that value are discarded
 
@@ -44,9 +44,9 @@ ga:
   keep_all_generation: false                 # keep this setting to false when using gpredomics as a binary (setting to true is interesting in gpredomicsR)
 
 beam:
-  max_nb_of_models: 10000 # the maximum number of models per generation 
+  max_nb_of_models: 5000 # the maximum number of models per generation 
   kmin: 1 # the number of variables used in the initial population
-  kmax: 40 # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
-  nb_very_best_models: 100 # the number of best models where all variables are directly kept for next epoch
-  nb_best_models: 1000 # the number of used best models to calculate the feature importance
-  features_importance_minimal_pct: 0.1 # the minimum prevalence percentage among best_models required for a variable to be kept for next epoch
+  kmax: 50 # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
+  nb_very_best_models: 50 # the number of best models where all variables are directly kept for next epoch (recommanded : 1% of max_nb_of_models)
+  nb_best_models: 500 # the number of used best models to calculate the feature importance (recommanded : 10% of max_nb_of_models)
+  features_importance_minimal_pct: 10 # the minimum prevalence percentage among best_models required for a variable to be kept for next epoch
