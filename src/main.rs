@@ -74,7 +74,7 @@ fn main() {
             "testgpu" => gpu_random_run(&param),
             "ga"|"ga2"|"ga_no_overfit"|"ga2_no_overfit" => { ga_run(&param, running); },
             "ga+cv"|"ga2+cv" => { gacv_run(&param, running); },
-            "beam"|"beam"|"beam_no_overfit"|"beam_no_overfit" => { run_beam(&param, running); }
+            "beam" => { run_beam(&param, running); }
             other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
         } 
     });

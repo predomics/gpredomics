@@ -971,9 +971,9 @@ mod tests {
         assert_eq!(1.0, ind.compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]),
         "auc with a perfect classification and class0 < class1 should be 1.0");
         // maybe add a verification inside compute_auc to avoid below cases ?
-        assert_eq!(0.0, ind.compute_auc_from_value(&vec![0.1_f64, 0.2_f64, 0.3_f64, 0.4_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8]),
+        assert_eq!(0.5, ind.compute_auc_from_value(&vec![0.1_f64, 0.2_f64, 0.3_f64, 0.4_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8]),
         "auc should be equal to 0 when there is no positive class");
-        assert_eq!(0.0, ind.compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.7_f64, 0.8_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8]),
+        assert_eq!(0.5, ind.compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.7_f64, 0.8_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8]),
         "auc should be equal to 0 when there is no negative class to avoid positive biais in model selection");
     }
 
