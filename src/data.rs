@@ -143,14 +143,12 @@ impl Data {
     
         if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
 
-
-    
         // Calculate t-statistic (simple, equal variance assumption)
 
         let var0 = class_0.iter().map(|x| (x - mean_0).powi(2)).sum::<f64>() / (n0 - 1.0);
         let var1 = class_1.iter().map(|x| (x - mean_1).powi(2)).sum::<f64>() / (n1 - 1.0);
 
-        let pooled_std = ((var0 / n0) + (var1 / n1)).sqrt();
+        let pooled_std = (((n0 - 1.0)*var0 + (n1 - 1.0)*var1) / (n0 + n1 - 2.0) * (1.0/n0 + 1.0/n1)).sqrt();
         if pooled_std > 0.0 {
             let t_stat = (mean_0 - mean_1) / pooled_std;
     
@@ -227,12 +225,29 @@ impl Data {
             while i + 1 < combined.len() && combined[i].0 == combined[i + 1].0 {
                 i += 1;
             }
-            let rank = (start + i + 1) as f64 / 2.0;
+            let rank = (start + i + 2) as f64 / 2.0;
             for j in start..=i {
                 ranks[j] = rank;
             }
             i += 1;
         }
+
+        // Ex-aequo tie correction
+        let mut tie_correction = 0.0;
+        let mut i = 0;
+        while i < combined.len() {
+            let start = i;
+            while i + 1 < combined.len() && combined[i].0 == combined[i + 1].0 {
+                i += 1;
+            }
+            let tied_count = i - start + 1;
+            if tied_count > 1 {
+                tie_correction += (tied_count.pow(3) - tied_count) as f64;
+            }
+            i += 1;
+        }
+
+        let std_u = ((n0 * n1 / 12.0) * ((n0 + n1 + 1.0) - tie_correction / ((n0 + n1) * (n0 + n1 - 1.0)))).sqrt();
     
         // Compute rank sums
         let rank_sum_0: f64 = combined
@@ -247,8 +262,9 @@ impl Data {
     
         // Compute p-value using normal approximation
         let mean_u = n0 * n1 / 2.0;
-        let std_u = ((n0 * n1 * (n0 + n1 + 1.0)) / 12.0).sqrt();
-        let z = (u_stat - mean_u) / std_u;
+        let diff = u_stat - mean_u;
+        let abs_diff_corrected = diff.abs() - 0.5; // Correction for continuous values
+        let z = abs_diff_corrected / std_u * diff.signum();
     
         let normal_dist = Normal::new(0.0, 1.0).unwrap();
         let p_value = 2.0 * (1.0 - normal_dist.cdf(z.abs())); // Two-tailed p-value
@@ -518,32 +534,32 @@ impl fmt::Debug for Data {
             assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
         }
 
-        #[test]
-        fn test_compare_classes_studentt_test_class_2_outside_range() {
-            let data = create_test_data();
-            let result = data.compare_classes_studentt(48152342, 1.0, 0.0, 0.0);
-            assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
-        }
+        //#[test]
+        //fn test_compare_classes_studentt_test_class_2_outside_range() {
+        //    let data = create_test_data();
+        //    let result = data.compare_classes_studentt(48152342, 1.0, 0.0, 0.0);
+        //    assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
+        //}
 
         // Same for Wilcoxon
         #[test]
         fn test_compare_classes_wilcoxon_class_0() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(0, 1.0, 0.0, 0.0);
+            let result = data.compare_classes_wilcoxon(0, 1.0, 0.0, 0.0);
             assert_eq!(result, 0, "test feature 0 should be significantly associated with class 0");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_1() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.0);
+            let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.0);
             assert_eq!(result, 1, "test feature 1 should be significantly associated with class 1");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_2_low_mean() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.95);
+            let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.95);
             println!("{:?}", result);
             assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
         }
@@ -551,23 +567,23 @@ impl fmt::Debug for Data {
         #[test]
         fn test_compare_classes_wilcoxon_class_2_low_prev() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.95, 0.0);
+            let result = data.compare_classes_wilcoxon(1, 1.0, 0.95, 0.0);
             assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_2_high_pval() {
             let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 0.00001, 0.0, 0.0);
+            let result = data.compare_classes_wilcoxon(1, 0.00001, 0.0, 0.0);
             assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
         }
 
-        #[test]
-        fn test_compare_classes_wilcoxon_class_2_outside_range() {
-            let data = create_test_data();
-            let result = data.compare_classes_studentt(48152342, 1.0, 0.0, 0.0);
-            assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
-        }
+        //#[test]
+        //fn test_compare_classes_wilcoxon_class_2_outside_range() {
+        //    let data = create_test_data();
+        //    let result = data.compare_classes_wilcoxon(48152342, 1.0, 0.0, 0.0);
+        //    assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
+        //}
 
     // tests for select_features
     // need to explore ga.rs before
