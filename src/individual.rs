@@ -232,7 +232,7 @@ impl Individual {
         self.compute_auc_from_value(&value, y)
     }
 
-    /// Compute AUC based on the target vector y
+    /// Compute AUC for binary class using Mann-Whitney U algorithm
     pub fn compute_auc_from_value(&mut self, value: &[f64], y: &Vec<u8>) -> f64 {
         assert_eq!(value.len(), y.len());
         let n1 = y.iter().filter(|&&label| label == 1).count();
@@ -622,5 +622,639 @@ pub fn gene_convert_from_to(parent_language: u8, child_language: u8, value: i8) 
         (_, BINARY_LANG) => 1,
         (_, TERNARY_LANG)|(_, RATIO_LANG) => if value>0 {1} else {-1},
         _ => value
+    }
+}
+
+// unit tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, HashMap};
+    use rand::prelude::*;
+
+    fn create_test_individual() -> Individual {
+        Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
+        specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
+        data_type_minimum: f64::MIN_POSITIVE}
+    }
+
+    fn create_test_data() -> Data {
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        let mut feature_class: HashMap<usize, u8> = HashMap::new();
+
+        // Simulate data
+        X.insert((0, 0), 0.9); // Sample 0, Feature 0
+        X.insert((0, 1), 0.01); // Sample 0, Feature 1
+        X.insert((1, 0), 0.91); // Sample 1, Feature 0
+        X.insert((1, 1), 0.12); // Sample 1, Feature 1
+        X.insert((2, 0), 0.75); // Sample 2, Feature 0
+        X.insert((2, 1), 0.01); // Sample 2, Feature 1
+        X.insert((3, 0), 0.19); // Sample 3, Feature 0
+        X.insert((3, 1), 0.92); // Sample 3, Feature 1
+        X.insert((4, 0), 0.9);  // Sample 4, Feature 0
+        X.insert((4, 1), 0.01); // Sample 4, Feature 1
+        X.insert((5, 0), 0.91); // Sample 5, Feature 0
+        X.insert((5, 1), 0.12); // Sample 5, Feature 1
+        X.insert((6, 0), 0.75); // Sample 6, Feature 0
+        X.insert((6, 1), 0.01); // Sample 6, Feature 1
+        X.insert((7, 0), 0.19); // Sample 7, Feature 0
+        X.insert((7, 1), 0.92); // Sample 7, Feature 1
+        X.insert((8, 0), 0.9);  // Sample 8, Feature 0
+        X.insert((8, 1), 0.01); // Sample 8, Feature 1
+        X.insert((9, 0), 0.91); // Sample 9, Feature 0
+        X.insert((9, 1), 0.12); // Sample 9, Feature 1
+        feature_class.insert(0, 0);
+        feature_class.insert(1, 1);
+
+        Data {
+            X,
+            y: vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0], // Vraies étiquettes
+            features: vec!["feature1".to_string(), "feature2".to_string()],
+            samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(),
+            "sample4".to_string(), "sample5".to_string(), "sample6".to_string(), "sample7".to_string(), 
+            "sample8".to_string(), "sample9".to_string(), "sample10".to_string()],
+            feature_class,
+            feature_selection: vec![0, 1],
+            feature_len: 2,
+            sample_len: 10,
+        }
+    }
+
+    // test for language and data_types
+    #[test]
+    fn test_language_recognized() {
+        assert_eq!(language("binary"), BINARY_LANG, "'binary' misinterpreted");
+        assert_eq!(language("BIN"), BINARY_LANG, "'BIN' misinterpreted");
+        assert_eq!(language("ternary"), TERNARY_LANG, "'ternary' misinterpreted");
+        assert_eq!(language("ter"), TERNARY_LANG, "'ter' misinterpreted");
+        assert_eq!(language("pOw2"), POW2_LANG, "'pOw2' misinterpreted");
+        assert_eq!(language("ratiO"), RATIO_LANG, "'ratiO' misinterpreted");
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized language")]
+    fn test_language_unrecognized() {
+        language("unknown");
+    }
+
+    #[test]
+    fn test_data_type_recognized() {
+        assert_eq!(data_type("raw"), RAW_TYPE, "'raw' misinterpreted");
+        assert_eq!(data_type("prevalEnce"), PREVALENCE_TYPE, "'prevalEnce' misinterpreted");
+        assert_eq!(data_type("pRev"), PREVALENCE_TYPE, "'pRev' misinterpreted");
+        assert_eq!(data_type("log"), LOG_TYPE, "'log' misinterpreted");
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized data type")]
+    fn test_data_type_unrecognized() {
+        data_type("unknown");
+    }
+
+    /// test for hash
+    #[test]
+    fn test_compute_hash_first_hash() {
+        let mut ind = create_test_individual();
+        ind.compute_hash();
+
+        let mut hasher = DefaultHasher::new();
+        let sorted_features: BTreeMap<_, _> = ind.features.iter().collect();
+        sorted_features.hash(&mut hasher);
+        let expected_hash = hasher.finish();
+
+        assert_eq!(ind.hash, expected_hash, "hash is different from expected hash");
+    }
+
+    #[test]
+    fn test_compute_hash_and_rehash() {
+        let mut ind = create_test_individual();
+        ind.compute_hash();
+        let first_hash = ind.hash;
+
+        ind.features.insert(4, 0);
+        ind.compute_hash();
+
+        assert_ne!(ind.hash, first_hash, "hash should be different after adding a new feature");
+
+        let mut hasher = DefaultHasher::new();
+        let sorted_features: BTreeMap<_, _> = ind.features.iter().collect();
+        sorted_features.hash(&mut hasher);
+        let expected_hash = hasher.finish();
+
+        assert_eq!(ind.hash, expected_hash, "hash is different from expected hash");
+    }
+
+    // fn child(main_parent: &Individual)
+
+    // fn evaluate(&self, d: &Data)
+    #[test]
+    fn test_evaluate_and_evaluate_from_features() {
+        let mut ind = create_test_individual();
+        ind.data_type = RAW_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+
+        X.insert((0, 0), 0.1);
+        // missing value for (0, 1)
+        X.insert((1, 0), 0.3);
+        X.insert((1, 1), 0.9);
+
+        let mut data = Data::new();
+        data.X = X.clone();
+        data.sample_len = 2;
+
+        ind.data_type = RAW_TYPE;
+        assert_eq!(ind.evaluate_from_features(&X, 2), vec![0.1, -0.6000000000000001]);
+        assert_eq!(ind.evaluate(&data), ind.evaluate_from_features(&X, 2), 
+        "evaluate() and evaluate_from_features() should return the same result as the first call the second");
+        ind.data_type = PREVALENCE_TYPE;
+        assert_eq!(ind.evaluate(&data), ind.evaluate_from_features(&X, 2), 
+        "evaluate() and evaluate_from_features() should return the same result as the first call the second");
+        assert_eq!(ind.evaluate_from_features(&X, 2), vec![1.0, 0.0]);
+        ind.data_type = LOG_TYPE;
+        assert_eq!(ind.evaluate(&data), ind.evaluate_from_features(&X, 2), 
+        "evaluate() and evaluate_from_features() should return the same result as the first call the second");
+        assert_eq!(ind.evaluate_from_features(&X, 2), vec![706.09383343927, -1.0986122886680505]);
+        assert_eq!(ind.evaluate(&data), ind.evaluate_from_features(&X, 2), 
+        "evaluate() and evaluate_from_features() should return the same result as the first call the second");
+    }
+
+    // fn child(main_parent: &Individual)
+    
+    // fn evaluate_raw
+    #[test]
+    fn test_evaluate_raw_weighted_score() {
+        let mut ind: Individual = create_test_individual();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.data_type = RAW_TYPE;
+        
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 2.0);
+        X.insert((0, 1), 3.0);
+        X.insert((1, 0), 4.0);
+        X.insert((1, 1), 5.0);
+
+        ind.language = RATIO_LANG;
+        assert_eq!(ind.evaluate_raw(&X, 2), vec![2.0 / (3.0+1e-12), 4.0 / (5.0+1e-12)],
+                                "bad calculation for raw data scores with ratio Language");
+        ind.language = TERNARY_LANG;
+        assert_eq!(ind.evaluate_raw(&X, 2), vec![2.0 * 1.0 + 3.0 * -1.0, 4.0 * 1.0 + 5.0 * -1.0],
+                                "bad calculation for raw data scores with ter language");
+        ind.features = vec![(0, 2), (1, -4)].into_iter().collect();
+        ind.language = POW2_LANG;
+        assert_eq!(ind.evaluate_raw(&X, 2), vec![2.0 * 2.0 + 3.0 * -4.0, 4.0 * 2.0 + 5.0 * -4.0],
+                                "bad calculation for raw data scores with pow2 language");
+        ind.features = vec![(0, 1), (1, 0)].into_iter().collect();
+        ind.language = BINARY_LANG;
+        assert_eq!(ind.evaluate_raw(&X, 2), vec![2.0 * 1.0 + 3.0 * 0.0, 4.0 * 1.0 + 5.0 * 0.0],
+                                "bad calculation for raw data scores with bin language");
+        
+    }
+
+    #[test]
+    fn test_evaluate_raw_zero_or_more_sample_len() {
+        let ind = create_test_individual();
+        let X: HashMap<(usize, usize), f64> = HashMap::new();
+        let scores = ind.evaluate_raw(&X, 0);
+        assert!(scores.is_empty(), "score should be empty when sample_len=0");
+        let scores = ind.evaluate_raw(&X, 10);
+        assert_eq!(scores, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "selecting samples outside the range should lead to a score of 0.0");
+    
+    }
+
+    #[test]
+    fn test_evaluate_raw_missing_values() {
+        let mut ind = create_test_individual();
+        ind.data_type = RAW_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 2.0);
+        // missing value for (0, 1)
+        X.insert((1, 0), 4.0);
+        X.insert((1, 1), 5.0);
+
+        let scores = ind.evaluate_raw(&X, 2);
+        assert_eq!(scores, vec![2.0 * 1.0, 4.0 * 1.0 + 5.0 * (-1.0)], "X missing value should be interpreted as coefficient 0");
+        }
+
+    // fn evaluate_prevalence
+    #[test]
+    fn test_evaluate_prevalence_weighted_score() {
+        let mut ind: Individual = create_test_individual();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.data_type = RAW_TYPE;
+        
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 2.0);
+        X.insert((0, 1), 3.0);
+        X.insert((1, 0), 4.0);
+        X.insert((1, 1), 5.0);
+
+        ind.language = RATIO_LANG;
+        assert_eq!(ind.evaluate_prevalence(&X, 2), vec![1.0 / (1.0+1e-12), 1.0 / (1.0+1e-12)],
+                                "bad calculation for prevalence data scores with ratio Language");
+        ind.language = TERNARY_LANG;
+        assert_eq!(ind.evaluate_prevalence(&X, 2), vec![1.0 - 1.0, 1.0 - 1.0],
+                                "bad calculation for prevalence data scores with ter language");
+        ind.features = vec![(0, 2), (1, -4)].into_iter().collect();
+        ind.language = POW2_LANG;
+        assert_eq!(ind.evaluate_prevalence(&X, 2), vec![2.0 - 4.0, 2.0 - 4.0],
+                                "bad calculation for prevalence data scores with pow2 language");
+        ind.features = vec![(0, 1), (1, 0)].into_iter().collect();
+        ind.language = BINARY_LANG;
+        assert_eq!(ind.evaluate_prevalence(&X, 2), vec![1.0 * 1.0 + 1.0 * 0.0, 1.0 * 1.0 + 1.0 * 0.0],
+                                "bad calculation for prevalence data scores with bin language");
+        
+    }
+
+    #[test]
+    fn test_evaluate_prevalence_zero_or_more_sample_len() {
+        let ind = create_test_individual();
+        let X: HashMap<(usize, usize), f64> = HashMap::new();
+        let scores = ind.evaluate_prevalence(&X, 0);
+        assert!(scores.is_empty(), "score should be empty when sample_len=0");
+        let scores = ind.evaluate_prevalence(&X, 10);
+        assert_eq!(scores, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "selecting samples outside the range should lead to a score of 0.0");
+    }
+
+    #[test]
+    fn test_evaluate_prevalence_missing_values() {
+        let mut ind = create_test_individual();
+        ind.data_type = RAW_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 2.0);
+        // missing value for (0, 1)
+        X.insert((1, 0), 4.0);
+        X.insert((1, 1), 5.0);
+
+        let scores = ind.evaluate_prevalence(&X, 2);
+        assert_eq!(scores, vec![1.0 * 1.0, 1.0 * 1.0 + 1.0 * (-1.0)], "X missing value should be interpreted as coefficient 0");
+        }
+
+    #[test]
+    fn test_evaluate_log_weighted_score() {
+        let mut ind: Individual = create_test_individual();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.data_type = LOG_TYPE;
+        
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 0.1);
+        X.insert((0, 1), 0.75);
+        X.insert((1, 0), 0.3);
+        X.insert((1, 1), 0.9);
+
+        // Could be interesting to add a is_nan() or is_infinite() verification in evaluate_log        
+        ind.language = RATIO_LANG;
+        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.data_type_minimum).ln() / ((0.75_f64 / ind.data_type_minimum).ln() +1e-12 ), (0.3_f64 / ind.data_type_minimum).ln() / ((0.9_f64 / ind.data_type_minimum).ln() + 1e-12)],
+                                "bad calculation for log data scores with ratio language");
+        ind.language = TERNARY_LANG;
+        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.data_type_minimum).ln() * 1.0 +(0.75_f64 / ind.data_type_minimum).ln() * -1.0, (0.3_f64 / ind.data_type_minimum).ln() * 1.0 + (0.9_f64 / ind.data_type_minimum).ln() * -1.0],
+                                "bad calculation for log data scores with ter language");
+        ind.features = vec![(0, 2), (1, -4)].into_iter().collect();
+        ind.language = POW2_LANG;
+        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.data_type_minimum).ln() * 2.0 + (0.75_f64 / ind.data_type_minimum).ln() * -4.0, (0.3_f64 / ind.data_type_minimum).ln() * 2.0 + (0.9_f64 / ind.data_type_minimum).ln() * -4.0],
+                                "bad calculation for log data scores with pow2 language");
+                                ind.features = vec![(0, 1), (1, 0)].into_iter().collect();
+        ind.language = BINARY_LANG;
+        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.data_type_minimum).ln() * 1.0 + (0.75_f64 / ind.data_type_minimum).ln() * 0.0, (0.3_f64 / ind.data_type_minimum).ln() * 1.0 + (0.9_f64 / ind.data_type_minimum).ln() * 0.0],
+                                "bad calculation for log data scores with bin language");         
+    }
+
+    #[test]
+    fn test_evaluate_log_zero_or_more_sample_len() {
+        let mut ind = create_test_individual();
+        ind.data_type = LOG_TYPE;
+        let X: HashMap<(usize, usize), f64> = HashMap::new();
+        let scores = ind.evaluate_log(&X, 0);
+        assert!(scores.is_empty(), "score should be empty when sample_len=0");
+        let scores = ind.evaluate_log(&X, 10);
+        assert_eq!(scores, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "selecting samples outside the range should lead to a score of 0.0");
+    }
+
+    #[test]
+    fn test_evaluate_log_missing_values() {
+        let mut ind = create_test_individual();
+        ind.data_type = RAW_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 0.1);
+        // missing value for (0, 1)
+        X.insert((1, 0), 0.3);
+        X.insert((1, 1), 0.9);
+
+        let scores = ind.evaluate_log(&X, 2);
+        assert_eq!(scores, vec![(0.1_f64 / ind.data_type_minimum).ln() * 1.0, 
+        (0.3_f64 / ind.data_type_minimum).ln() * 1.0 + (0.9_f64 / ind.data_type_minimum).ln() * -1.0], 
+        "X missing value should be interpreted as coefficient 0");
+        }
+
+    // tests for auc
+    #[test]
+    fn test_compute_auc() {
+        let mut ind = create_test_individual();
+        ind.threshold = 0.75;
+        let data = create_test_data();
+        assert_eq!(0.7380952380952381, ind.compute_auc(&data), "bad calculation for AUC");
+        assert_eq!(ind.compute_auc(&data), ind.compute_auc_from_features(&data.X, data.sample_len, &data.y),
+        "Individual.compute_auc_from_features(&data.X, &data.sample_len, &data.y) should return the same result as Individual.compute_auc(&data)");
+        assert_eq!(ind.compute_auc(&data), ind.compute_auc_from_value(&ind.evaluate(&data), &data.y),
+        "Individual.compute_auc_from_value(scores, &data.y) should return the same result as Individual.compute_auc(&data)");
+        assert_eq!(0.0, ind.compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8, 0_u8]),
+        "auc with a perfect classification and class1 < class0 should be 0.0");
+        assert_eq!(1.0, ind.compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]),
+        "auc with a perfect classification and class0 < class1 should be 1.0");
+        assert_eq!(1.0, ind.compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]),
+        "auc with a perfect classification and class0 < class1 should be 1.0");
+        // maybe add a verification inside compute_auc to avoid below cases ?
+        assert_eq!(0.0, ind.compute_auc_from_value(&vec![0.1_f64, 0.2_f64, 0.3_f64, 0.4_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8]),
+        "auc should be equal to 0 when there is no positive class");
+        assert_eq!(0.0, ind.compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.7_f64, 0.8_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8]),
+        "auc should be equal to 0 when there is no negative class to avoid positive biais in model selection");
+    }
+
+    // fn calculate_confusion_matrix
+    #[test]
+    fn test_calculate_confusion_matrix_basic() {
+        let mut ind = create_test_individual();
+        ind.threshold = 0.75;
+        let data = create_test_data();
+        let confusion_matrix = ind.calculate_confusion_matrix(&data);
+        assert_eq!(confusion_matrix.0, 2, "incorrect identification of true positives");
+        assert_eq!(confusion_matrix.1, 4, "incorrect identification of false positives");
+        assert_eq!(confusion_matrix.2, 3, "incorrect identification of true negatives");
+        assert_eq!(confusion_matrix.3, 1, "incorrect identification of false negatives");
+    }
+
+    #[test]
+    fn test_calculate_confusion_matrix_class_2() {
+        let mut ind = create_test_individual();
+        ind.threshold = 0.75;
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 2, 0, 0, 0, 0, 0, 1, 0];
+        let confusion_matrix = ind.calculate_confusion_matrix(&data);
+        assert_eq!(confusion_matrix.3, 0, "class 2 shoudn't  be classified");
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid class label in y: 3")]
+    fn test_calculate_confusion_matrix_invalid_class_label() {
+        let ind = create_test_individual();
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 3, 3, 3, 3, 0, 1, 0, 1];
+        let confusion_matrix = ind.calculate_confusion_matrix(&data);
+        println!("{:?}", confusion_matrix);
+    }
+
+    // fn count_k
+    #[test]
+    fn test_count_k_basic() {
+        let mut ind = create_test_individual();
+        ind.count_k();
+        assert_eq!(ind.features.len(), ind.k, "count_k() should attribute Individual.features.len() as Individual.k");
+    }
+
+    #[test]
+    fn test_count_k_no_features() {
+        let mut ind = Individual::new();
+        ind.count_k();
+        assert_eq!(ind.features.len(), ind.k, "count_k() should attribute Individual.features.len() as Individual.k");
+    }
+
+    #[test]
+    fn test_random() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = create_test_data();
+        let ind = Individual::random(&data, &mut rng);
+        // warning : ind.features.len() != data.feature_len as generate_random_vector can return 0 not kept in the Hashmap
+        assert!(ind.features.len() <= data.feature_len, "random indivudal features should respect the data feature_len");
+        assert_eq!(ind.k, ind.features.len(), "random indivudal k should respect the data feature_len");
+        assert_eq!(ind.features, vec![(0, -1), (1, 1)].into_iter().collect(),
+        "the generated Individual isn't the same as generated in the past, indicating a reproducibility problem.");
+    }
+
+    // fn random_select_k
+    #[test]
+    fn test_random_select_k() {
+        let features = vec![0, 1, 2, 3, 4];
+        let mut expected_features = HashMap::new();
+        let mut feature_class= HashMap::new();
+        feature_class.insert(0, 1);
+        feature_class.insert(1, 0);
+        feature_class.insert(2, 1);
+        feature_class.insert(3, 0);
+        feature_class.insert(4, 1);
+        expected_features.insert(2, 1);
+
+        // warning : random_select_k never select kmax features
+        let mut rng = ChaCha8Rng::seed_from_u64(42); // Seed for reproducibility
+        let ind_bin = Individual::random_select_k(2, 3, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+        let ind_ter = Individual::random_select_k(2, 3, &features, &feature_class, TERNARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+        let ind_ratio = Individual::random_select_k(2, 3, &features, &feature_class, RATIO_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+        let ind_pow2 = Individual::random_select_k(2, 3, &features, &feature_class, POW2_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+        
+        assert!(ind_bin.features.iter().all(|(key, value)| feature_class.get(key) == Some(&(*value as u8))), "selected k features should be part of input feature_class");
+        assert_eq!(ind_bin.language, BINARY_LANG, "input language should be respected");
+        assert_eq!(ind_bin.data_type, RAW_TYPE, "input data_type should be respected");
+        assert_eq!(ind_bin.data_type_minimum, DEFAULT_MINIMUM, "input data_type_minimum should be respected"); 
+        assert!(ind_bin.features.values().all(|&v| vec![0, 1].contains(&v)), "invalid coefficient for BINARY_LANG");
+        assert!(ind_ter.features.values().all(|&v| vec![-1, 1].contains(&v)), "invalid coefficient for TERNARY_LANG");
+        assert!(ind_ratio.features.values().all(|&v| vec![-1, 1].contains(&v)), "invalid coefficient for RATIO_LANG");
+        assert!(ind_pow2.features.values().all(|&v| vec![-4, 4].contains(&v)), "invalid initial coefficient for POW2_LANG");
+        assert_eq!(ind_ratio.threshold, 1.0, "new individual created with random_select_k() with a RATIO_LANG should have a threshold of 1.0");
+
+        
+        let ind = Individual::random_select_k(0, 3, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+        assert_eq!(ind.features, expected_features, 
+        "the selected features are not the same as selected in the past, indicating a reproducibility problem.");
+        // kmin=1 & kmax=1 should return 1 feature and not panic 
+        // ind = Individual::random_select_k(1, 1, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+        
+    }
+
+    // fn compute_metrics
+    #[test]
+    #[should_panic(expected = "A predicted vs real class of (0, 3) should not exist")]
+    fn test_compute_metrics_invalid_class() {
+        let ind = create_test_individual();
+        let mut data = create_test_data();
+        data.y = vec![1, 3, 1, 0, 0, 0, 0, 0, 1, 1];
+        ind.compute_metrics(&data);
+    }
+
+    #[test]
+    fn test_compute_metrics_basic() {
+        let mut ind = create_test_individual();
+        ind.threshold = 0.75;
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        let metrics = ind.compute_metrics(&data);
+        assert_eq!(0.5_f64, metrics.0, "bad calculation for accuracy");
+        assert_eq!(0.6666666666666666_f64, metrics.1, "bad calculation for sensitivity");
+        assert_eq!(0.42857142857142855_f64, metrics.2, "bad calculation for specificity");
+    }
+
+    #[test]
+    fn test_compute_metrics_class2() {
+        let mut ind = create_test_individual();
+        ind.threshold = 0.75;
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 2];
+        assert_eq!((0.5555555555555556_f64, 0.6666666666666666_f64, 0.5_f64), ind.compute_metrics(&data),
+        "class 2 should be omitted in calculation")
+    }
+
+    #[test]
+    fn test_compute_metrics_too_much_y() {
+        let mut ind = create_test_individual();
+        ind.threshold = 0.75;
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1];
+        assert_eq!((0.5_f64, 0.6666666666666666_f64, 0.42857142857142855_f64), ind.compute_metrics(&data),
+        "when ind.sample_len < data.sample_len (or y.len() if it does not match), only the ind.sample_len values should be used to calculate its metrics");
+    }
+
+    #[test]
+    fn test_compute_metrics_not_enough_y() {
+        let mut ind = create_test_individual();
+        ind.threshold = 0.75;
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 1, 1];
+        assert_eq!((0.25_f64, 0.3333333333333333_f64, 0.0_f64), ind.compute_metrics(&data),
+        "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
+    }
+
+    // fn compute_threshold_and_metrics
+    // threshold = 0.84 according to R ; same metrics as below
+    #[test]
+    fn test_compute_threshold_and_metrics_basic() {
+        let ind = create_test_individual();
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        let results = ind.compute_threshold_and_metrics(&data);
+        assert_eq!(0.79_f64, results.0, "bad identification of the threshold");
+        assert_eq!(0.8_f64, results.1, "bad calculation for accuracy");
+        assert_eq!(0.6666666666666666_f64, results.2, "bad calculation for sensitivity");
+        assert_eq!(0.8571428571428571_f64, results.3, "bad calculation for specificity");
+    }
+
+    #[test]
+    // threshold = 0.84 according to R ; same metrics as below -> need to control if this difference could be a problem
+    fn test_compute_threshold_and_metrics_class_2() {
+        let ind = create_test_individual();
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 2];
+        assert_eq!((0.79_f64, 0.7777777777777778_f64, 0.6666666666666666_f64, 0.8333333333333334_f64), ind.compute_threshold_and_metrics(&data),
+        "class 2 should be omitted in calculation");
+    }
+
+    // the results should be the same as above
+    //#[test]
+    //fn test_compute_threshold_and_metrics_too_much_y() {
+    //    let mut ind = create_test_individual();
+    //    ind.threshold = 0.75;
+    //    let mut data = create_test_data();
+    //    data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1];
+    //    assert_eq!((0.79_f64, 0.8_f64, 0.6666666666666666_f64, 0.8571428571428571_f64), ind.compute_threshold_and_metrics(&data),
+    //    "when ind.sample_len < data.sample_len (or y.len() if it does not match), only the ind.sample_len values should be used to calculate its metrics");
+    //}
+
+    #[test]
+    // threshold "accuracy", "sensitivity", "specificity" : 0.84 0.5 0.3333333  1 0 
+    fn test_compute_threshold_and_metrics_not_enough_y() {
+        let mut ind = create_test_individual();
+        ind.threshold = 0.75;
+        let mut data = create_test_data();
+        data.y = vec![1, 0, 1, 1];
+        assert_eq!((0.79_f64, 0.5_f64, 0.3333333333333333_f64, 1.0_f64), ind.compute_threshold_and_metrics(&data),
+        "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
+    }
+
+    // fn features_index
+    #[test]
+    fn test_features_index_basic() {
+        let mut ind = create_test_individual();
+        ind.features.insert(10, 0.42 as i8);
+        assert_eq!(vec![0_usize, 1_usize, 2_usize, 3_usize, 10_usize], ind.features_index());
+    }
+
+    // fn compute_oob_feature_importance
+    #[test]
+    fn test_compute_oob_feature_importance_basic() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut ind = create_test_individual();
+        let data = create_test_data();
+        let importances = ind.compute_oob_feature_importance(&data, 2, &mut rng);
+        assert_eq!(importances.len(), ind.features.len(),
+        "the number of importances should be the same as the number of features Individual.features.len()");
+        for importance in importances.clone() {
+            assert!(importance >= 0.0, "importance can not be negative");
+        }
+        assert_eq!(importances, vec![0.09523809523809534, 0.3928571428571429, 0.0, 0.0],
+        "the calculated importances are not the same as calculated in the past for a same seed, indicating a reproducibility problem");
+    }
+
+    // fn maximize_objective
+
+
+
+    // fn maximize_objective_with_scores
+    #[test]
+    fn test_maximize_objective_with_scores() {
+        let mut ind = create_test_individual();
+        let data = create_test_data();
+        let scores = ind.evaluate(&data);
+        let best_objective = ind.maximize_objective_with_scores(&scores, &data, 1.0, 1.0);
+
+        assert_eq!(ind.maximize_objective(&data, 1.0, 1.0), ind.maximize_objective_with_scores(&scores, &data, 1.0, 1.0),
+        "Individual.maximize_objective() and Individual.maximize_objective_with_scores() should return the same results for a same scores vector");
+        assert!(best_objective > 0.0, "The best objective should be greater than 0.0");
+        assert!(ind.sensitivity >= 0.0 && ind.sensitivity <= 1.0, "Sensitivity should be between 0.0 and 1.0");
+        assert!(ind.specificity >= 0.0 && ind.specificity <= 1.0, "Specificity should be between 0.0 and 1.0");
+        assert!(ind.accuracy >= 0.0 && ind.accuracy <= 1.0, "Accuracy should be between 0.0 and 1.0");
+        let _best_objective = ind.maximize_objective_with_scores(&scores, &data, 0.0, 1.0);
+        assert_eq!(ind.sensitivity, 1.0, "focusing only on sensitivity (fpr_penalty=0.0 and fnr_penalty=1.0) normally leads to a sensitivity of 1.0 (the model classifies everything positively)");
+        assert_eq!(ind.specificity, 0.0, "focusing only on sensitivity (fpr_penalty=0.0 and fnr_penalty=1.0) normally leads to a specificity of 0.0 (the model classifies everything positively)");
+        
+        // Function is broke : sp=1 VS se=0 never reached
+        // Interesting fact : R selected threshold (0.89) is correctly reached by this function
+        // let best_objective = ind.maximize_objective_with_scores(&scores, &data, 1.0, 0.0);
+        // assert_eq!(ind.sensitivity, 0.0, "focusing only on specificity (fpr_penalty=1.0 and fnr_penalty=0.0) normally leads to a sensitivity of 0.0 (the model classifies everything negatively)");
+        // assert_eq!(ind.specificity, 1.0, "focusing only on specificity (fpr_penalty=1.0 and fnr_penalty=0.0) normally leads to a specificity of 1.0 (the model classifies everything negatively)");
+    
+        // maybe add a panic! for fpr_penalty=0.O and fnr_penalty=0.0 to avoid NaN ? 
+        // let best_objective = ind.maximize_objective_with_scores(&scores, &data, 0.0, 0.0);
+    }
+
+    #[test]
+    fn test_get_language() {
+        let mut ind = create_test_individual();
+        ind.language = BINARY_LANG;
+        assert_eq!(ind.get_language(), "Binary");
+        ind.language = TERNARY_LANG;
+        assert_eq!(ind.get_language(), "Ternary");
+        ind.language = RATIO_LANG;
+        assert_eq!(ind.get_language(), "Ratio");
+        ind.language = POW2_LANG;
+        assert_eq!(ind.get_language(), "Pow2");
+        ind.language = 42;
+        assert_eq!(ind.get_language(), "Unknown");
+    }
+
+    #[test]
+    fn test_get_data_type() {
+        let mut ind = create_test_individual();
+        ind.data_type = RAW_TYPE;
+        assert_eq!(ind.get_data_type(), "Raw");
+        ind.data_type = PREVALENCE_TYPE;
+        assert_eq!(ind.get_data_type(), "Prevalence");
+        ind.data_type = LOG_TYPE;
+        assert_eq!(ind.get_data_type(), "Log");
+        ind.data_type = 42;
+        assert_eq!(ind.get_data_type(), "Unknown");
     }
 }
