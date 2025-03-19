@@ -156,7 +156,7 @@ pub fn gpu_random_run(param: &Param) {
 }
 
 /// the Genetic Algorithm test
-pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
     info!("                          GA TEST\n-----------------------------------------------------");
     let mut my_data = Data::new();
     
