@@ -124,6 +124,10 @@ impl Data {
         Ok(())
     }
 
+    pub fn set_classes(&mut self, classes: Vec<String>) {
+        self.classes = classes;
+    }
+
     /// for a given feature (chosen as the #j line of X ) answer 0 if the feature is more significantly associated with class 0, 1 with class 1, 2 otherwise 
     /// using student T e.g. for normally ditributed features
     fn compare_classes_studentt(&self, j: usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {

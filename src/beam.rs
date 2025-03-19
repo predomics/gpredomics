@@ -231,6 +231,8 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     let mut data_test = Data::new();
     data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
     data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
+    data.set_classes(param.data.classes.clone());
+    data_test.set_classes(param.data.classes.clone());
 
     // Cross-validation initialization
     let mut cv: Option<CV> = None;
