@@ -38,6 +38,8 @@ impl Data {
         }
     }
 
+    /// TODO : create a check_compability(self, other_data) (same features, e.g. same names and order)
+
     /// Load data from `X.tsv` and `y.tsv` files.
     pub fn load_data(&mut self, X_path: &str, y_path: &str) -> Result<(), Box<dyn Error>> {
         info!("Loading files {} and {}...", X_path, y_path);

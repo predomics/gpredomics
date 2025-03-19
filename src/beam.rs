@@ -225,7 +225,7 @@ pub fn compute_average_auc<'a>(population: &'a mut Population, cv: &'a CV) -> &'
     population
 }
 
-pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
+pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
     // Load data
     let mut data = Data::new();
     let mut data_test = Data::new();
@@ -371,7 +371,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
             i + 1, individual.features.len(), threshold, auc_train, auc_test, acc_train, acc_test, se_train, se_test, sp_train, sp_test, individual);
         }
 
-        collection
+        (collection, data, data_test)
     })
 }
 
