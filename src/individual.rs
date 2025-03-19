@@ -677,6 +677,7 @@ mod tests {
             feature_selection: vec![0, 1],
             feature_len: 2,
             sample_len: 10,
+            classes: vec!["a".to_string(),"b".to_string()]
         }
     }
 

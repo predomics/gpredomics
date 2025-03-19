@@ -71,6 +71,9 @@ pub struct Data {
     pub feature_minimal_feature_value: f64, 
     #[serde(default = "feature_minimal_log_abs_bayes_factor_default")]                      
     pub feature_minimal_log_abs_bayes_factor: f64, 
+    #[serde(default = "class_names_default")]                      
+    pub class_names: Vec<String>, 
+
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -198,3 +201,4 @@ fn fit_default() -> FitFunction { FitFunction::auc }
 fn nb_best_model_to_test_default() -> u32 { 10 }
 fn feature_select_niche_pct_default() -> f64 { 0.0 }
 fn false_default() -> bool { false }
+fn class_names_default() -> Vec<String> { Vec::new() }
