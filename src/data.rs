@@ -20,7 +20,8 @@ pub struct Data {
     pub feature_class: HashMap<usize, u8>, // Sign for each feature
     pub feature_selection: Vec<usize>,
     pub feature_len: usize,
-    pub sample_len: usize
+    pub sample_len: usize,
+    pub classes: Vec<String>
 }
 
 impl Data {
@@ -34,7 +35,8 @@ impl Data {
             feature_class: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 0,
-            sample_len: 0
+            sample_len: 0,
+            classes: Vec::new()
         }
     }
 
@@ -401,7 +403,8 @@ impl Data {
             feature_class: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: self.feature_len,
-            sample_len: samples.len()
+            sample_len: samples.len(),
+            classes: self.classes.clone()
         }
     }
 
@@ -414,7 +417,8 @@ impl Data {
             feature_class: self.feature_class.clone(),
             feature_selection: self.feature_selection.clone(),
             feature_len: self.feature_len,
-            sample_len: self.sample_len
+            sample_len: self.sample_len,
+            classes: self.classes.clone()
         }
     }
 
@@ -512,6 +516,7 @@ impl fmt::Debug for Data {
                 feature_selection: vec![0, 1],
                 feature_len: 2,
                 sample_len: 6,
+                classes: vec!["a".to_string(), "b".to_string()]
             }
         }
 
@@ -710,6 +715,7 @@ impl fmt::Debug for Data {
             feature_selection: Vec::new(),
             feature_len: 1,
             sample_len: 2,
+            classes: vec!["a".to_string(), "b".to_string()]
         };
 
         let data2 = Data {
@@ -721,6 +727,7 @@ impl fmt::Debug for Data {
             feature_selection: Vec::new(),
             feature_len: 1,
             sample_len: 2,
+            classes: vec!["a".to_string(), "b".to_string()]
         };
 
         data1.add(&data2);
