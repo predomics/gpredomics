@@ -161,6 +161,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     let mut my_data = Data::new();
     
     let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    my_data.set_classes(param.data.classes.clone());
     info!("{:?}", my_data); 
     let has_auc = true;
 
@@ -233,6 +234,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     let mut test_data=Data::new();
     if param.data.Xtest.len()>0 {
         let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
+        test_data.set_classes(param.data.classes.clone());
         
         debug!("Length of population {}",population.individuals.len());
 
@@ -324,6 +326,7 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
     
     let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    my_data.set_classes(param.data.classes.clone());
     info!("{:?}", my_data); 
 
     let mut crossval = cv::CV::new(&my_data, 10, &mut rng);
@@ -337,6 +340,7 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
     let mut test_data=Data::new();
     if param.data.Xtest.len()>0 {
         let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
+        test_data.set_classes(param.data.classes.clone());
         
         for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
             let holdout_auc=best_model.compute_auc(&test_data);

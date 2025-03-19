@@ -72,7 +72,7 @@ pub struct Data {
     #[serde(default = "feature_minimal_log_abs_bayes_factor_default")]                      
     pub feature_minimal_log_abs_bayes_factor: f64, 
     #[serde(default = "class_names_default")]                      
-    pub class_names: Vec<String>, 
+    pub classes: Vec<String>, 
 
 }
 
