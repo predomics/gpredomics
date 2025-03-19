@@ -38,7 +38,13 @@ impl Data {
         }
     }
 
-    /// TODO : create a check_compability(self, other_data) (same features, e.g. same names and order)
+    // TODO : create a check_compability(self, other_data) (same features, e.g. same names and order)
+    // TODO : optionnally look intoy y file to see class names instead of 0,1 or 2 in link with a parameter specifying what is the name of the "1" class and that of the "0" class
+
+    /// Check if another dataset is compatible with the current one
+    pub fn check_compatibility(&self, other: &Data) -> bool {
+        self.features == other.features
+    }
 
     /// Load data from `X.tsv` and `y.tsv` files.
     pub fn load_data(&mut self, X_path: &str, y_path: &str) -> Result<(), Box<dyn Error>> {
@@ -759,6 +765,17 @@ impl fmt::Debug for Data {
     // a few ways to make add() more robust:
     // fn test_add_same_samples() {} -> case where data1 contains samples 1 & 2 and data2 samples 1 & 3
     // fn test_add_different_features() {} -> case where data1 contains feature X but data2 doesn't
+
+    #[test]
+    fn test_data_compatibility() {
+
+        let mut data_test = create_test_data();
+        let data_test2 = create_test_data();
+        assert!(data_test.check_compatibility(&data_test2),"two identical data should be compatible");
+
+        data_test.features[1]="some other name".to_string();
+        assert!(!data_test.check_compatibility(&data_test2),"two data with different features should not be compatible");
+    }
 
     // useful to test fmt display and debug ? 
 }
