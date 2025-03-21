@@ -35,8 +35,8 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                             .par_iter_mut()
                             .enumerate()
                             .for_each(|(n,i)| {
-                                i.fit = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y)
-                                     - i.k as f64 * param.general.k_penalty;
+                                i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
+                                i.fit = i.auc - i.k as f64 * param.general.k_penalty;
                             });
                     });
                 },
@@ -76,8 +76,8 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                             .enumerate()
                             .for_each(|(n,i)| {
                                 let test_auc = i.compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
-                                i.fit = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y)
-                                     - i.k as f64 * param.general.k_penalty - (i.auc-test_auc).abs() * param.general.overfit_penalty;
+                                i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
+                                i.fit = i.auc - i.k as f64 * param.general.k_penalty - (i.auc-test_auc).abs() * param.general.overfit_penalty;
                             });
                     });
                 },

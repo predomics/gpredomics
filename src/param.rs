@@ -50,7 +50,11 @@ pub struct General {
     #[serde(default = "nb_best_model_to_test_default")] 
     pub nb_best_model_to_test: u32,
     #[serde(default = "false_default")] 
-    pub gpu: bool
+    pub gpu: bool,
+    #[serde(default = "display_level_default")] 
+    pub display_level: usize,
+    #[serde(default = "display_colorful_default")] 
+    pub display_colorful: bool
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -101,13 +105,18 @@ pub struct GA {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BEAM {
-    pub max_nb_of_models: usize,                // Maximum number of models
+    #[serde(default = "beam_method_default")]  
+    pub method: String,
+    #[serde(default = "feature_kminkmax_default")]  
     pub kmin: usize,                           // Minimum value of k
     #[serde(default = "feature_kminkmax_default")]  
     pub kmax: usize,                           // Maximum value of k
-    pub nb_very_best_models: usize,              // Number of very best models 
-    pub nb_best_models: usize,                   // Number of best models 
-    pub features_importance_minimal_pct: f64,  // Minimum prevalence percentage among best_models
+    #[serde(default = "best_models_ci_alpha_default")]
+    pub best_models_ci_alpha: f64,              // Number of very best models 
+    #[serde(default = "very_best_models_pct_default")]
+    pub very_best_models_pct: f64,                   // Number of best models 
+    #[serde(default = "features_importance_minimal_pct_default")]
+    pub features_importance_minimal_pct: f64,                   // Number of best models 
 }
 
 
@@ -198,3 +207,9 @@ fn fit_default() -> FitFunction { FitFunction::auc }
 fn nb_best_model_to_test_default() -> u32 { 10 }
 fn feature_select_niche_pct_default() -> f64 { 0.0 }
 fn false_default() -> bool { false }
+fn display_level_default() -> usize { 2 }
+fn display_colorful_default() -> bool { false }
+fn beam_method_default() -> String { "classic".to_string() }
+fn best_models_ci_alpha_default() -> f64 { 0.05 }
+fn very_best_models_pct_default() -> f64 { 0.1 }
+fn features_importance_minimal_pct_default() -> f64 { 0.1 }

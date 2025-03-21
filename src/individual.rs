@@ -104,6 +104,134 @@ impl Individual {
         }
     }
 
+    pub fn display(&self, data: &Data, data_to_test: Option<&Data>, algo: &String, level: usize, beautiful: bool) -> String {
+        let algo_str;
+        if algo == "ga" {
+            algo_str = format!(" [gen:{}] ", self.epoch);
+        } else {
+            algo_str = format!(" ");
+        }
+
+        let metrics;
+        match data_to_test {
+            Some(test_data) => { 
+                let (_, acc_test, se_test, sp_test) = self.compute_threshold_and_metrics(test_data);
+                if beautiful == true {
+                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} |  accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
+                                  self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
+                                  self.sensitivity, se_test, self.specificity, sp_test)
+                } else {
+                    metrics = format!("{}:{} k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} |  accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
+                                  self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
+                                  self.sensitivity, se_test, self.specificity, sp_test)
+                }
+            },
+    
+            None => {
+                if beautiful == true {
+                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} |  accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
+                    self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity)
+                } else {
+                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} |  accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
+                    self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity)
+                }
+            }
+                
+        }
+        
+
+        // Sort features by index
+        let mut sorted_features: Vec<_> = self.features.iter().collect();
+        sorted_features.sort_by(|a, b| a.0.cmp(b.0));
+    
+        let mut positive_features: Vec<_> = sorted_features.iter().filter(|&&(_, &coef)| coef > 0).collect();
+        let mut negative_features: Vec<_> = sorted_features.iter().filter(|&&(_, &coef)| coef < 0).collect();
+    
+        positive_features.sort_by(|a, b| b.1.cmp(a.1));
+        negative_features.sort_by(|a, b| b.1.cmp(a.1));
+    
+        let positive_str: Vec<String> = positive_features.iter().enumerate().map(|(i, &&(index, coef))| {
+            if self.language == POW2_LANG && !(*coef == 1_i8) {
+                if level == 0 && beautiful == true {
+                    format!("{}*\x1b[96mF_POS_{}\x1b[0m", coef, i)
+                } else if level == 0 && beautiful == false {
+                    format!("{}*F_POS_{}", coef, i)
+                } else if level == 1 && beautiful == true {
+                    format!("{}*\x1b[96m[{}]\x1b[0m", coef, index)
+                } else if level == 1 && beautiful == false { 
+                    format!("{}*[{}]", coef, index)
+                } else if level == 2 && beautiful == true {
+                    format!("{}*\x1b[96m{}\x1b[0m", coef, data.features[*index])
+                } else {
+                    format!("{}*{}", coef, data.features[*index])
+                }
+            } else {
+                if level == 0 && beautiful == true {
+                    format!("\x1b[96mF_POS_{}\x1b[0m", i)
+                } else if level == 0 && beautiful == false {
+                    format!("F_POS_{}", i)
+                } else if level == 1 && beautiful == true {
+                    format!("\x1b[96m[{}]\x1b[0m", index.to_string())
+                } else if level == 1 && beautiful == false {
+                    format!("[{}]", index.to_string())
+                } else if level == 2 && beautiful == true {
+                    format!("\x1b[96m{}\x1b[0m", data.features[*index])
+                } else {
+                    data.features[*index].clone()
+                }
+            }
+        }).collect();
+    
+        let negative_str: Vec<String> = negative_features.iter().enumerate().map(|(i, &&(index, coef))| {
+            if self.language == POW2_LANG && !(*coef == -1_i8) {
+                if level == 0 && beautiful == true {
+                    format!("{}*\x1b[95m{}\x1b[0m", coef, i)
+                } else if level == 0 && beautiful == false {
+                    format!("{}*F_NEG_{}", coef, i)
+                } else if level == 1 && beautiful == true {
+                    format!("{}*\x1b[95m[{}]\x1b[0m", coef, index)
+                } else if level == 1 && beautiful == false { 
+                    format!("{}*[{}]", coef, index)
+                } else if level == 2 && beautiful == true {
+                    format!("{}*\x1b[95m{}\x1b[0m", coef, data.features[*index])
+                } else {
+                    format!("{}*{}", coef, data.features[*index])
+                }
+            } else {
+                if level == 0 && beautiful == true {
+                    format!("\x1b[95mF_NEG_{}\x1b[0m", i)
+                } else if level == 0 && beautiful == false {
+                    format!("F_POS_{}", i)
+                } else if level == 1 && beautiful == true {
+                    format!("\x1b[95m[{}]\x1b[0m", index.to_string())
+                } else if level == 1 && beautiful == false {
+                    format!("[{}]", index.to_string())
+                } else if level == 2 && beautiful == true {
+                    format!("\x1b[95m{}\x1b[0m", data.features[*index])
+                } else {
+                    data.features[*index].clone()
+                }
+            }
+        }).collect();
+    
+        // Join the vectors into comma-separated strings
+        let positive_str_joined = positive_str.join(" + ");
+        let negative_str_joined = negative_str.join(" + ");
+    
+        let formatted_string;
+        if self.language == BINARY_LANG && (level == 0 || level == 1 || level == 2) {
+            formatted_string = format!("{}\nClass 1 <======> ({}) > {:.5}", metrics, positive_str_joined, self.threshold)
+        } else if (self.language == TERNARY_LANG || self.language == POW2_LANG) && (level == 0 || level == 1 || level == 2) {
+            formatted_string = format!("{}\nClass 1 <======> ({}) - ({}) > {:.5}", metrics, positive_str_joined, negative_str_joined, self.threshold)
+        } else if self.language == RATIO_LANG && (level == 0 || level == 1 || level == 2) {
+            formatted_string = format!("{}\nClass 1 <======> ({}) / ({}) > {:.5}", metrics, positive_str_joined, negative_str_joined, self.threshold)
+        } else {
+            formatted_string = format!("{}\nClass 1 <======> {:?}", metrics, self);
+        };
+    
+        formatted_string
+    }
+
     pub fn compute_hash(&mut self) {
         let mut hasher = DefaultHasher::new();
         
@@ -223,44 +351,77 @@ impl Individual {
     /// Compute AUC based on the target vector y
     pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
+        self.auc = self.compute_auc_from_value(&value, &d.y);
+        self.auc
+    }
+
+    // Compute AUC without changing self.auc
+    pub fn compute_new_auc(&self, d: &Data) -> f64 {
+        let value = self.evaluate(d);
         self.compute_auc_from_value(&value, &d.y)
     }
 
     /// Compute AUC based on X and y rather than a complete Data object
     pub fn compute_auc_from_features(&mut self, X: &HashMap<(usize,usize),f64>, sample_len: usize, y: &Vec<u8>) -> f64 {
         let value = self.evaluate_from_features(X, sample_len);
-        self.compute_auc_from_value(&value, y)
+        self.auc = self.compute_auc_from_value(&value, y);
+        self.auc
     }
 
-    /// Compute AUC for binary class using Mann-Whitney U algorithm
-    pub fn compute_auc_from_value(&mut self, value: &[f64], y: &Vec<u8>) -> f64 {
+    /// Compute AUC for binary class using Mann-Whitney U algorithm O(n log n)
+    pub fn compute_auc_from_value(&self, value: &[f64], y: &Vec<u8>) -> f64 {
         assert_eq!(value.len(), y.len());
+        
+        // Count positive and negative examples
+        let n = value.len();
         let n1 = y.iter().filter(|&&label| label == 1).count();
-        let n2 = y.iter().filter(|&&label| label == 0).count();
+        let n2 = n - n1;
         
         if n1 == 0 || n2 == 0 {
-            self.auc = 0.5;
-            return self.auc;
+            return 0.5;
         }
         
+        // Create pairs of (score, label) and sort by score (descending)
+        let mut data: Vec<(f64, u8)> = value.iter()
+            .zip(y.iter())
+            .map(|(&v, &y)| (v, y))
+            .collect();
+        
+        data.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        
+        // Calculate U efficiently with a single pass through the sorted array
         let mut u = 0.0;
+        let mut pos_so_far = 0;
+        let mut i = 0;
         
-        for (i, &score_i) in value.iter().enumerate() {
-            if y[i] == 1 { 
-                for (j, &score_j) in value.iter().enumerate() {
-                    if y[j] == 0 { 
-                        if score_i > score_j {
-                            u += 1.0;
-                        } else if score_i == score_j {
-                            u += 0.5; 
-                        }
-                    }
+        while i < n {
+            let score = data[i].0;
+            
+            let mut pos_equal = 0;
+            let mut neg_equal = 0;
+            
+            while i < n && data[i].0 == score {
+                if data[i].1 == 1 {
+                    pos_equal += 1;
+                } else {
+                    neg_equal += 1;
                 }
+                i += 1;
             }
+            
+            // For each negative with this score:
+            // - Add the number of positives with a higher score
+            // - Add 0.5 for each positive with the same score
+            if neg_equal > 0 {
+                u += neg_equal as f64 * pos_so_far as f64; // Positives with higher scores
+                u += 0.5 * neg_equal as f64 * pos_equal as f64; // Positives with equal scores
+            }
+            
+            // Update the counter of positives seen so far
+            pos_so_far += pos_equal;
         }
         
-        self.auc = u / (n1 as f64 * n2 as f64);
-        self.auc
+        u / (n1 as f64 * n2 as f64)
     }
 
     /// Calculate the confusion matrix at a given threshold
@@ -1142,8 +1303,8 @@ mod tests {
         assert_eq!(0.8571428571428571_f64, results.3, "bad calculation for specificity");
     }
 
-    #[test]
     // threshold = 0.84 according to R ; same metrics as below -> need to control if this difference could be a problem
+    #[test]
     fn test_compute_threshold_and_metrics_class_2() {
         let ind = create_test_individual();
         let mut data = create_test_data();
@@ -1152,7 +1313,6 @@ mod tests {
         "class 2 should be omitted in calculation");
     }
 
-    // the results should be the same as above
     //#[test]
     //fn test_compute_threshold_and_metrics_too_much_y() {
     //    let mut ind = create_test_individual();
@@ -1164,7 +1324,6 @@ mod tests {
     //}
 
     #[test]
-    // threshold "accuracy", "sensitivity", "specificity" : 0.84 0.5 0.3333333  1 0 
     fn test_compute_threshold_and_metrics_not_enough_y() {
         let mut ind = create_test_individual();
         ind.threshold = 0.75;
@@ -1199,8 +1358,6 @@ mod tests {
     }
 
     // fn maximize_objective
-
-
 
     // fn maximize_objective_with_scores
     #[test]
@@ -1256,5 +1413,36 @@ mod tests {
         assert_eq!(ind.get_data_type(), "Log");
         ind.data_type = 42;
         assert_eq!(ind.get_data_type(), "Unknown");
+    }
+
+    #[test]
+    fn test_auc_on_more_complicated_data() {
+        let mut individual = Individual::new();
+        let mut data = Data::new();
+        let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv");
+
+        // Set the language and data type
+        individual.language = POW2_LANG;
+        individual.data_type = LOG_TYPE;
+        individual.data_type_minimum = 1e-5;
+
+        // Set the feature indices and their signs
+        let feature_indices = vec![
+            (9, 1), (22, 1), (23, 1), (24, -1), (42, -1), (47, 1), (57, -1), (66, -1), (72, -1),
+            (82, -1), (87, -1), (92, -1), (105, 1), (124, -1), (130, -1), (174, 1), (194, 1),
+            (221, 1), (222, 1), (262, 1), (272, 1), (301, -1), (319, 1), (320, -1), (324, 1),
+            (334, 1), (359, 1), (378, 2), (436, -1), (466, -1), (468, -1), (476, -1), (488, 1),
+            (497, -1), (512, 1), (522, -1), (546, -1), (565, 1), (591, -1), (614, -1), (649, -1),
+            (658, 1), (670, -1), (686, 1), (716, 1), (825, 1), (834, -1), (865, -1), (867, 1),
+            (874, 1), (877, 1), (1117, 2), (1273, 1), (1313, 1), (1317, 1), (1464, 1), (1525, 1),
+            (1629, 1), (1666, 1), (1710, 1), (1735, 1), (1738, 1), (1740, 1), (1741, 1), (1794, 1),
+            (1870, 1)
+        ];
+
+        for (index, sign) in feature_indices {
+            individual.features.insert(index, sign);
+        }
+
+        assert_eq!(individual.compute_auc(&data), 0.9641038380325425);
     }
 }
