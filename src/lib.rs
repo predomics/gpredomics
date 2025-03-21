@@ -157,7 +157,7 @@ pub fn gpu_random_run(param: &Param) {
 
 /// the Genetic Algorithm test
 pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
-    info!("                          GA TEST\n-----------------------------------------------------");
+    info!("Genetic algorithm\n-----------------------------------------------------");
     let mut my_data = Data::new();
     
     let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
@@ -251,46 +251,8 @@ pub fn ga_run(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
                 .par_iter_mut()
                 .enumerate()
                 .map(|(i, individual)| {
-                    let mut auc = individual.auc;
-                    let test_auc = individual.compute_auc(&test_data);
-
-                    if has_auc {
-                        individual.auc = auc;
-                        let (threshold, accuracy, sensitivity, specificity) =
-                            individual.compute_threshold_and_metrics(&my_data);
-                        individual.threshold = threshold;
-                        individual.accuracy = accuracy;
-                        individual.sensitivity = sensitivity;
-                        individual.specificity = specificity;
-                    } else {
-                        auc = individual.compute_auc(&my_data);
-                    }
-
-                    let (tp, fp, tn, fn_count) = individual.calculate_confusion_matrix(&test_data);
-                    format!(
-                        "Model #{} [k={}] [gen:{}] threshold {:.3} : AUC {:.3}/{:.3} |  accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} \n   < {:?} >",
-                        i + 1,
-                        individual.k,
-                        individual.epoch,
-                        individual.threshold,
-                        test_auc,
-                        auc,
-                        (tp + tn) as f64 / (fp + tp + fn_count + tn) as f64,
-                        individual.accuracy,
-                        if tp + fn_count > 0 {
-                            tp as f64 / (tp + fn_count) as f64
-                        } else {
-                            0.0
-                        },
-                        individual.sensitivity,
-                        if tn + fp > 0 {
-                            tn as f64 / (tn + fp) as f64
-                        } else {
-                            0.0
-                        },
-                        individual.specificity,
-                        individual
-                    )
+                    (individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = individual.compute_threshold_and_metrics(&my_data);
+                    individual.display(&my_data, Some(&test_data), &param.general.algo, 2, true)
                 })
                 .collect();
 

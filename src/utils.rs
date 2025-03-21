@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use rand::SeedableRng;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand::seq::SliceRandom;
+use statrs::distribution::{Normal, ContinuousCDF};
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -66,11 +66,31 @@ pub fn shuffle_row(X: &mut HashMap<(usize, usize), f64>, sample_len: usize, feat
     }
 }
 
+// Statistical functions
+
+pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f64) {
+    assert!(n > 0, "confInterBinomial: Sample size (n) must be greater than zero.");
+    assert!(accuracy >= 0.0 && accuracy <= 1.0, "confInterBinomial: accuracy should not be lower than 0 or greater than 1");
+    assert!(alpha >= 0.0 && alpha <= 1.0, "confInterBinomial: alpha should not be lower than 0 or greater than 1");
+
+    let normal = Normal::new(0.0, 1.0).unwrap_or_else(|e| panic!("Normal distribution creation failed: {}", e));
+    let z_value = -normal.inverse_cdf(alpha / 2.0);
+    let std_error = ((accuracy * (1.0 - accuracy)) / n as f64).sqrt();
+    
+    let ci_range = z_value * std_error;
+    let lower_bound = 0.0f64.max(accuracy - ci_range); 
+    let upper_bound = 1.0f64.min(accuracy + ci_range);  
+
+    (lower_bound, accuracy, upper_bound)
+}
+
 
 // unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic;
+    use rand::SeedableRng;
     
     // tests for generate_random_vector
     #[test]
@@ -236,4 +256,23 @@ mod tests {
         assert_eq!(X1.get(&(1, 0)), Some(&3.0), "the generated HeatMap isn't the same as generated in the past, indicating a reproducibility problem probably linked to the seed interpretation");
         assert_eq!(X1.get(&(3, 0)), Some(&4.0), "the generated HeatMap isn't the same as generated in the past, indicating a reproducibility problem probably linked to the seed interpretation");
     }   
+
+    #[test]
+    fn test_conf_inter_binomial(){
+        // assert_eq(Rust function results  == R function results)
+        assert_eq!(conf_inter_binomial(0.0, 50, 0.05), (0_f64, 0_f64, 0_f64));
+        assert_eq!(conf_inter_binomial(0.76, 50, 0.05), (0.6416207713410322_f64, 0.76_f64, 0.8783792286589678_f64));
+        assert_eq!(conf_inter_binomial(1.0, 50, 0.05), (1_f64, 1_f64, 1_f64));
+
+        // control panic! to avoid statistical issues due to invalid input
+        let resultErrZeroSample = panic::catch_unwind(|| { conf_inter_binomial(0.76, 0, 0.05) });
+        assert!(resultErrZeroSample.is_err(), "function should panic! when there is no sample");
+
+        let resultErrInf = panic::catch_unwind(|| { conf_inter_binomial(-0.3, 50, 0.05) });
+        assert!(resultErrInf.is_err(), "function should panic! for an accuracy lower than 0");
+
+        let resultErrSup = panic::catch_unwind(|| { conf_inter_binomial(1.3, 50, 0.05) });
+        assert!(resultErrSup.is_err(), "function should panic! for an accuracy greater than 1");
+    }
+
 }

@@ -1,3 +1,4 @@
+use crate::utils::{conf_inter_binomial};
 use crate::cv::CV;
 use crate::data::Data;
 use crate::individual::Individual;
@@ -5,8 +6,9 @@ use crate::param::Param;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use std::mem;
-use rayon::ThreadPoolBuilder;
+use rayon::{ThreadPoolBuilder};
 use rayon::prelude::*;
+use std::cmp::max;
 
 pub struct Population {
     pub individuals: Vec<Individual>
@@ -32,6 +34,28 @@ impl Population {
         "
     }
 
+    pub fn display(&mut self, data: &Data, data_to_test: Option<&Data>, param: &Param) -> String {
+        let limit:u32;
+        if (self.individuals.len() as u32) < param.general.nb_best_model_to_test {
+            limit = self.individuals.len() as u32
+        } else {
+            limit = param.general.nb_best_model_to_test
+        }
+
+        let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
+        for i in 0..=(limit-1) as usize {
+            (self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_threshold_and_metrics(data);
+            if param.general.display_colorful == true && param.general.log_base == "" {
+                str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
+            } else if param.general.display_colorful == false && param.general.log_base == "" {
+                str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
+            } else {
+                // avoid ASCII symbols and newlines in log file
+                str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, false));
+            }
+            }
+        str
+    }
 
     pub fn new() -> Population {
         Population {
@@ -148,23 +172,63 @@ impl Population {
 
     // Function for cross-validation
     pub fn fit_on_folds(&mut self, cv: &CV, param: &Param) {
-        self.individuals.par_iter_mut().for_each(|individual| {
-            let mut auc_sum = 0.0;
-            let mut auc_squared_sum = 0.0;
-            let num_folds = cv.datasets.len() as f64;
-
-            for dataset in &cv.datasets {
-                let auc = individual.compute_auc(dataset);
-                auc_sum += auc;
-                auc_squared_sum += auc * auc;
+        let chunk_size = max(1, self.individuals.len() / (4 * rayon::current_num_threads()));
+        
+        self.individuals.par_chunks_mut(chunk_size).for_each(|chunk| {
+            for individual in chunk {
+                let (auc_sum, auc_squared_sum) = cv.datasets.par_iter()
+                    .map(|dataset| {
+                        let auc = individual.compute_new_auc(dataset);
+                        (auc, auc * auc)
+                    })
+                    .reduce(
+                        || (0.0, 0.0),
+                        |(auc_sum1, auc_squared_sum1), (auc_sum2, auc_squared_sum2)| {
+                            (auc_sum1 + auc_sum2, auc_squared_sum1 + auc_squared_sum2)
+                        }
+                    );
+    
+                let num_folds = cv.datasets.len() as f64;
+                let average_auc = auc_sum / num_folds;
+                let variance = (auc_squared_sum / (num_folds - 1.0)) - (average_auc * average_auc);
+                individual.auc = average_auc;
+                individual.fit = average_auc - (param.general.overfit_penalty * variance) - (individual.k as f64 * param.general.k_penalty);
             }
-
-            let average_auc = auc_sum / num_folds;
-            let variance = (auc_squared_sum / (num_folds - 1.0)) - (average_auc * average_auc);
-
-            individual.auc = average_auc;
-            individual.fit = average_auc - param.general.overfit_penalty * variance;
         });
+    }
+    
+
+    pub fn select_best_population(&self, alpha:f64) -> Population { 
+        // This function return a population containing only individuals with a Fit greater than the best individual evaluation metric lower bound
+        // it require a sorted population and a fit between 0 et 1. 
+        let mut best_pop = Population::new();    
+        let mut eval: Vec<f64> = vec![];
+
+        // Collect evaluation score == ind.fit
+        for ind in &self.individuals {
+            eval.push(ind.fit)
+            //eval = ind.fit - (k_penalty * spar) -> it is useful as fit already take k_penalty in account ? 
+        }
+
+        // Control the distribution of evaluation metric
+        if eval[0] > 1.0 && eval.last().unwrap_or(&0.0) < &0.0 {
+            panic!("Evaluation metric should be in the [0, 1] interval");
+        } 
+
+        let (lower_bound, _, _) = conf_inter_binomial(eval[0], self.individuals.len(), alpha);
+
+        for ind in &self.individuals {
+            if ind.fit > lower_bound {
+                best_pop.individuals.push(ind.clone());
+            } 
+            // indivduals are theoricaly sorted by fit
+            else {
+                break
+            }
+        }
+
+        best_pop
+        
     }
 
     /// populate the population with a set of random individuals
