@@ -117,11 +117,11 @@ impl Individual {
             Some(test_data) => { 
                 let (_, acc_test, se_test, sp_test) = self.compute_threshold_and_metrics(test_data);
                 if beautiful == true {
-                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} |  accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
+                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
                                   self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
                                   self.sensitivity, se_test, self.specificity, sp_test)
                 } else {
-                    metrics = format!("{}:{} k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} |  accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
+                    metrics = format!("{}:{} k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
                                   self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
                                   self.sensitivity, se_test, self.specificity, sp_test)
                 }
@@ -129,10 +129,10 @@ impl Individual {
     
             None => {
                 if beautiful == true {
-                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} |  accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
+                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
                     self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity)
                 } else {
-                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} |  accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
+                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
                     self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity)
                 }
             }
@@ -150,7 +150,7 @@ impl Individual {
         positive_features.sort_by(|a, b| b.1.cmp(a.1));
         negative_features.sort_by(|a, b| b.1.cmp(a.1));
     
-        let positive_str: Vec<String> = positive_features.iter().enumerate().map(|(i, &&(index, coef))| {
+        let mut positive_str: Vec<String> = positive_features.iter().enumerate().map(|(i, &&(index, coef))| {
             if self.language == POW2_LANG && !(*coef == 1_i8) {
                 if level == 0 && beautiful == true {
                     format!("{}*\x1b[96mF_POS_{}\x1b[0m", coef, i)
@@ -182,7 +182,7 @@ impl Individual {
             }
         }).collect();
     
-        let negative_str: Vec<String> = negative_features.iter().enumerate().map(|(i, &&(index, coef))| {
+        let mut negative_str: Vec<String> = negative_features.iter().enumerate().map(|(i, &&(index, coef))| {
             if self.language == POW2_LANG && !(*coef == -1_i8) {
                 if level == 0 && beautiful == true {
                     format!("{}*\x1b[95m{}\x1b[0m", coef, i)
@@ -215,18 +215,43 @@ impl Individual {
         }).collect();
     
         // Join the vectors into comma-separated strings
+        if self.data_type == LOG_TYPE {
+            for element in &mut positive_str {
+                element.push_str(&format!("/{:e}", self.data_type_minimum));
+            }
+            for element in &mut negative_str {
+                element.push_str(&format!("/{:e}", self.data_type_minimum));
+            }
+        }
+        if self.language == RATIO_LANG {
+            negative_str.push("1e-12".to_string());
+        }
+        if positive_str.len() == 0 {
+            positive_str.push("0".to_string());
+        }
+        if negative_str.len() == 0 {
+            negative_str.push("0".to_string());
+        }
+           
         let positive_str_joined = positive_str.join(" + ");
         let negative_str_joined = negative_str.join(" + ");
+
+        let predicted_class;
+        if beautiful == true {
+            predicted_class = format!("{}", data.classes[1]);
+        } else {
+            predicted_class = format!("{}", data.classes[1]);
+        }
     
         let formatted_string;
         if self.language == BINARY_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass 1 <======> ({}) > {:.5}", metrics, positive_str_joined, self.threshold)
+            formatted_string = format!("{}\nClass {} <======> ({}) > {:.5}", metrics, predicted_class, positive_str_joined, self.threshold)
         } else if (self.language == TERNARY_LANG || self.language == POW2_LANG) && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass 1 <======> ({}) - ({}) > {:.5}", metrics, positive_str_joined, negative_str_joined, self.threshold)
+            formatted_string = format!("{}\nClass {} <======> ({}) - ({}) > {:.5}", metrics, predicted_class, positive_str_joined, negative_str_joined, self.threshold)
         } else if self.language == RATIO_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass 1 <======> ({}) / ({}) > {:.5}", metrics, positive_str_joined, negative_str_joined, self.threshold)
+            formatted_string = format!("{}\nClass {} <======> ({}) / ({}) > {:.5}", metrics, predicted_class, positive_str_joined, negative_str_joined, self.threshold)
         } else {
-            formatted_string = format!("{}\nClass 1 <======> {:?}", metrics, self);
+            formatted_string = format!("{}\nClass {} <======> {:?}", metrics, predicted_class, self);
         };
     
         formatted_string
@@ -838,6 +863,7 @@ mod tests {
             feature_selection: vec![0, 1],
             feature_len: 2,
             sample_len: 10,
+            classes: vec!["a".to_string(),"b".to_string()]
         }
     }
 

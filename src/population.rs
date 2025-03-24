@@ -199,6 +199,7 @@ impl Population {
     
 
     pub fn select_best_population(&self, alpha:f64) -> Population { 
+        // (Family of best models)
         // This function return a population containing only individuals with a Fit greater than the best individual evaluation metric lower bound
         // it require a sorted population and a fit between 0 et 1. 
         let mut best_pop = Population::new();    
@@ -346,6 +347,7 @@ mod tests {
             feature_selection: vec![0, 1],
             feature_len: 2,
             sample_len: 5,
+            classes: vec!["a".to_string(),"b".to_string()]
         }
     }
 
@@ -377,6 +379,7 @@ mod tests {
             feature_selection: vec![0, 1],
             feature_len: 2,
             sample_len: 5,
+            classes: vec!["a".to_string(),"b".to_string()]
         }
     }
 
