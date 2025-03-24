@@ -30,8 +30,8 @@ data:
   feature_minimal_feature_value: 0.0001      # features which mean is below that value are discarded
   feature_minimal_log_abs_bayes_factor: 2    # features with a fewer log absolute bayes factor will be removed (bayesian method only)
   classes:
-    - "non-responder"
-    - "responder"
+    - "healthy"
+    - "cirrhosis"
     - "unknown"
 
 ga:
