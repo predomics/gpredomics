@@ -75,6 +75,9 @@ pub struct Data {
     pub feature_minimal_feature_value: f64, 
     #[serde(default = "feature_minimal_log_abs_bayes_factor_default")]                      
     pub feature_minimal_log_abs_bayes_factor: f64, 
+    #[serde(default = "class_names_default")]                      
+    pub classes: Vec<String>, 
+
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -117,6 +120,8 @@ pub struct BEAM {
     pub very_best_models_pct: f64,                   // Number of best models 
     #[serde(default = "features_importance_minimal_pct_default")]
     pub features_importance_minimal_pct: f64,                   // Number of best models 
+    #[serde(default = "max_nb_of_models_default")]
+    pub max_nb_of_models: usize,                   // Number of best models 
 }
 
 
@@ -213,3 +218,5 @@ fn beam_method_default() -> String { "classic".to_string() }
 fn best_models_ci_alpha_default() -> f64 { 0.05 }
 fn very_best_models_pct_default() -> f64 { 0.1 }
 fn features_importance_minimal_pct_default() -> f64 { 0.1 }
+fn max_nb_of_models_default() -> usize { 5000 }
+fn class_names_default() -> Vec<String> { Vec::new() }

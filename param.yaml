@@ -9,7 +9,7 @@ general:
   data_type_minimum: 1e-5                    # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
   fit: auc                                   # possible values are auc,specificity,sensitivity, see README.md for details
   k_penalty: 0.00001                         # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
-  overfit_penalty: 0.0                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
+  overfit_penalty: 3.0                       # setting this will trigger the removal of a random fold in the train population (change fold_number in CV to ajust), and the fit delta will be removed multiplied by this coefficient to the initial fit
   fr_penalty: 0.0                            # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
   nb_best_model_to_test: 30                  # nb of models to test in the last generation (default to 10, 0 means all models)
   log_level: debug                           # possible values are trace, debug, info, warning or error
@@ -26,13 +26,17 @@ data:
   ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
   feature_selection_method: wilcoxon         # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
   feature_minimal_prevalence_pct: 0          # per class, e.g. features are retained if any of the class reaches this level
-  feature_maximal_pvalue: 0.005                # features with differences less significant (p value above that threshold) than this will be removed
+  feature_maximal_pvalue: 0.05                # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_feature_value: 0.0001      # features which mean is below that value are discarded
   feature_minimal_log_abs_bayes_factor: 2    # features with a fewer log absolute bayes factor will be removed (bayesian method only)
+  classes:
+    - "non-responder"
+    - "responder"
+    - "unknown"
 
 ga:
   population_size: 5000                      # the target number of models per generation (NB the real number may be below because of clone removal) 
-  max_epochs: 100                            # the maximum number of generation before stopping (note that you can stop manually before sending a kill -1 to the process)
+  max_epochs: 10                            # the maximum number of generation before stopping (note that you can stop manually before sending a kill -1 to the process)
   min_epochs: 1                              # the minimum number of generation to do
   max_age_best_model: 100                    # stoping after min_epochs and before max_epochs will occur only if the best model reaches this age
   kmin: 1                                    # the minimal number of variables used in the initial population
@@ -50,6 +54,7 @@ beam:
   method: classic                            # classic : generate all combinations (k out of features_to_keep). extend : increment each best_models of k features with each features_to_keep.
   kmin: 1                                    # the number of variables used in the initial population
   kmax: 100                                  # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
-  best_models_ci_alpha: 1e-10               # family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
+  best_models_ci_alpha: 1e-3                 # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
   features_importance_minimal_pct: 10.0      # the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch
   very_best_models_pct: 10.0                 # the % of best models where all variables are features_to_keep 
+  max_nb_of_models: 25                       # control the population size to increment with each feature_to_keep in extend mode.

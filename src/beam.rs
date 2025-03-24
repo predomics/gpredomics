@@ -18,12 +18,12 @@ use rand_chacha::ChaCha8Rng;
 
 // Beam functions
 fn generate_combinations(features: &Vec<usize>, k: usize) -> Vec<Vec<usize>> {
-    let mut combinations = Vec::new();
+    let mut combinations = HashSet::new();
     let mut indices = (0..k).collect::<Vec<_>>();
 
     loop {
         let combination: Vec<usize> = indices.iter().map(|&i| features[i]).collect();
-        combinations.push(combination);
+        combinations.insert(combination);
 
         let mut i = k as isize - 1;
         while i >= 0 && indices[i as usize] == features.len() - k + i as usize {
@@ -40,7 +40,7 @@ fn generate_combinations(features: &Vec<usize>, k: usize) -> Vec<Vec<usize>> {
         }
     }
 
-    combinations
+    combinations.into_iter().collect()
 }
 
 fn combine_with_best(best_combinations: Vec<Vec<usize>>, features: &Vec<usize>) -> Vec<Vec<usize>> {
@@ -143,13 +143,6 @@ fn select_features_from_best(best_pop: &Population, very_best_pop: &Population, 
 
     features.extend(unique_features.into_iter());
 
-    if best_pop.individuals[0].features.len() != 1 {
-        info!("{:?} features present in at least {:.2}% of the {:?} best models or present in the {:?} (very) best models kept",
-        features.len(), best_pct, best_pop.individuals.len(), very_best_pop.individuals.len())
-    } else {
-        info!("Single-feature models : all features kept.")
-    };
-
     features
 }
 
@@ -200,12 +193,13 @@ pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, langu
     }
 }
 
-pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
-    // Load data
+pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
     let mut data = Data::new();
     let mut data_test = Data::new();
     let _ = data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
     let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
+    data.set_classes(param.data.classes.clone());
+    data_test.set_classes(param.data.classes.clone());
 
     // Cross-validation initialization
     let mut cv: Option<CV> = None;
@@ -260,8 +254,9 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
 
         for ind_k in param.beam.kmin..param.beam.kmax {
             info!("Generating models with {:?} features...", ind_k);
+            debug!("[k={:?}] initial population length = {:?}", ind_k, pop.individuals.len());
 
-            // Select maxNbOfModels
+            // dynamically select the best_models where features_to_keep are picked
             debug!("Selecting models...");
             let best_pop = pop.select_best_population(param.beam.best_models_ci_alpha);
             let (very_best_pop, _) = best_pop.select_first_pct(param.beam.very_best_models_pct);
@@ -269,9 +264,10 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
             debug!("Kept {:?} individuals for k={:?} from the family of best models", best_pop.individuals.len(), ind_k);
             debug!("Kept {:?} individuals for k={:?} from the family of very best models", very_best_pop.individuals.len(), ind_k);
 
+            // pertinent features to use for next combinations
             let features_to_keep = select_features_from_best(&best_pop, &very_best_pop, param.beam.features_importance_minimal_pct);
 
-            // Stop the loop to avoid a panic! due to not enough models in a few epochs
+            // Stop the loop to avoid a panic! if there is not enough features_to_keep
             if (features_to_keep.len() <= ind_k ) & (ind_k != 1) {
                 info!("\x1b[1;91mLimit reached : new model contains all pertinent features\x1b[0m");
                 break;
@@ -279,13 +275,24 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
 
             if param.beam.method == "classic" {
                 // Generate all possible combinations between the features_to_keep
+                // Combinations are limited by features_to_keep (by param.beam.best_models_ci_alpha)
                 combinations = generate_combinations(&features_to_keep, ind_k);
-            } else {
+            } else if param.beam.method == "extend" {
                 // Generate new combinations Mk + 1 feature_to_keep for next step
+                // Combinations are limited both by Mk maximum (param.beam.max_nb_of_models) and features_to_keep (param.beam.best_models_ci_alpha)
+                // Combinations are currently generated at each epoch in each languages and data_type
                 debug!("Selecting best combinations...");
-                let best_combinations: Vec<Vec<usize>> = best_pop.individuals.clone().par_iter().map(|ind| ind.features.keys().cloned().collect()).collect();
+                let mut reduced_best_pop = Population::new();
+                if best_pop.individuals.len() > param.beam.max_nb_of_models {
+                    reduced_best_pop.individuals = best_pop.individuals[..param.beam.max_nb_of_models].to_vec();
+                } else {
+                    reduced_best_pop.individuals = best_pop.individuals;
+                }
+                let best_combinations: Vec<Vec<usize>> = reduced_best_pop.individuals.clone().par_iter().map(|ind| ind.features.keys().cloned().collect()).collect();
                 debug!("Computing new combinations with these features...");
                 combinations = combine_with_best(best_combinations.clone(), &features_to_keep);
+            } else {
+                panic!("Unknown beam method");
             }
             debug!("{:?} unique combinations generated ", combinations.len());
 
@@ -329,7 +336,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
         let mut top_ten_pop = keep_n_best_model_within_collection(&collection, param.general.nb_best_model_to_test as usize);
         info!("{}", top_ten_pop.display(&data, Some(&data_test), param));
 
-        collection
+        (collection, data, data_test)
     })
 }
 
