@@ -6,9 +6,10 @@ use crate::individual::data_type;
 use crate::individual::Individual;
 use crate::data::Data;
 use crate::param::Param;
+use crate::ga::remove_stillborn;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use log::{debug,info};
+use log::{debug,info,warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -246,6 +247,9 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals)
     }
 
+    let n_unvalid = remove_stillborn(&mut pop) as usize;
+    if n_unvalid>0 { warn!("Some stillborn are presents: {}", n_unvalid) }
+
     // Fitting first Population composed of all k_start combinations
     pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
     pop = pop.sort();
@@ -296,7 +300,6 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             }
             debug!("{:?} unique combinations generated ", combinations.len());
 
-
             // Compute AUC for generated Population and sort it
             pop = Population::new();
 
@@ -314,6 +317,10 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
             debug!("Sorting population...");
             pop = pop.sort();
+            
+            let n_unvalid = remove_stillborn(&mut pop) as usize;
+            if n_unvalid>0 { warn!("Some stillborn are presents: {}", n_unvalid) }
+
             let mut sorted_pop = Population::new();
             sorted_pop.individuals = pop.individuals.clone();
             collection.push(sorted_pop);
