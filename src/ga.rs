@@ -264,9 +264,7 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
 
 
         // Creating new generation
-
         new_pop.add(select_parents(&pop, param, &mut rng));
-
         let mut children_to_create = param.ga.population_size as usize-new_pop.individuals.len();
         let mut children=Population::new();
         while children_to_create>0 {
@@ -336,7 +334,10 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
     //parents.add(pop.select_random_above_n(param.ga.select_random_pct, n, rng));
     let n2 = (pop.individuals.len() as f64 * param.ga.select_random_pct / 100.0 / individual_by_types.keys().len() as f64) as usize;
 
-    for i_type in individual_by_types.keys() {
+    let mut sorted_keys: Vec<_> = individual_by_types.keys().collect();
+    sorted_keys.sort(); 
+
+    for i_type in sorted_keys {
         debug!("Adding {}:{} Individuals {} ", individual_by_types[i_type][0].get_language(), individual_by_types[i_type][0].get_data_type(), n2);
         parents.individuals.extend(individual_by_types[i_type].choose_multiple(rng, n2).map(|i| (*i).clone()));
     }
