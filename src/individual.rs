@@ -251,7 +251,7 @@ impl Individual {
         } else if self.language == RATIO_LANG && (level == 0 || level == 1 || level == 2) {
             formatted_string = format!("{}\nClass {} <======> ({}) / ({}) > {:.5}", metrics, predicted_class, positive_str_joined, negative_str_joined, self.threshold)
         } else {
-            formatted_string = format!("{}\nClass {} <======> {:?}", metrics, predicted_class, self);
+            formatted_string = format!("{}\nClass {} <======> {:?} > {:.5}", metrics, predicted_class, self, self.threshold);
         };
     
         formatted_string

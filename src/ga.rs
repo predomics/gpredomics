@@ -433,7 +433,7 @@ pub fn mutate(children: &mut Population, param: &Param, feature_selection: &Vec<
     }
 }
 
-fn remove_stillborn(children: &mut Population) -> u32 {
+pub fn remove_stillborn(children: &mut Population) -> u32 {
     let mut stillborn_children: u32 =0;
     let mut valid_individuals: Vec<Individual> = Vec::new();
     let individuals = mem::take(&mut children.individuals);
