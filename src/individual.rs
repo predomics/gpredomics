@@ -124,6 +124,17 @@ impl Individual {
         i
     }
 
+    pub fn evaluate_class_and_score(&self, d: &Data) -> (Vec<u8>, Vec<f64>) {
+        let value = self.evaluate(d);
+        let class = value.iter().map(|&v| if v>self.threshold {1} else {0}).collect();
+        (class, value)
+    }
+
+    pub fn evaluate_class(&self, d: &Data) -> Vec<u8> {
+        let value = self.evaluate(d);
+        value.iter().map(|&v| if v>self.threshold {1} else {0}).collect()
+    }
+
     pub fn evaluate(&self, d: &Data) -> Vec<f64> {
         self.evaluate_from_features(&d.X, d.sample_len)
     }
@@ -635,6 +646,12 @@ mod tests {
     fn create_test_individual() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
+        data_type_minimum: f64::MIN_POSITIVE}
+    }
+
+    fn create_test_individual_n2() -> Individual {
+        Individual  {features: vec![(0, 1), (1, -1)].into_iter().collect(), auc: 0.4, fit: 0.8, 
+        specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 0.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
         data_type_minimum: f64::MIN_POSITIVE}
     }
 
@@ -1257,5 +1274,15 @@ mod tests {
         assert_eq!(ind.get_data_type(), "Log");
         ind.data_type = 42;
         assert_eq!(ind.get_data_type(), "Unknown");
+    }
+
+    #[test]
+    fn test_evaluate_class_and_score() {
+        let mut ind = create_test_individual_n2();
+        let data = create_test_data();
+        let scores = ind.evaluate(&data);
+        assert_eq!(scores, vec![0.89, 0.79, 0.74, -0.73, 0.89, 0.79, 0.74, -0.73, 0.89, 0.79], "bad calculation for score");
+        let class_and_score = ind.evaluate_class_and_score(&data);
+        assert_eq!(class_and_score, (vec![1, 1, 1, 0, 1, 1, 1, 0, 1, 1],vec![0.89, 0.79, 0.74, -0.73, 0.89, 0.79, 0.74, -0.73, 0.89, 0.79]), "bad calculation for class_and_score ");
     }
 }
