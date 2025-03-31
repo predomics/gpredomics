@@ -49,13 +49,13 @@ ga:
   mutated_features_pct: 10                   # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
   mutation_non_null_chance_pct: 20           # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
   feature_importance_permutations: 100       # not used in ga (used in experimental "don't use me" "ga+cv" algorithm)
-  keep_all_generations: true                 # keep this setting to false when using gpredomics as a binary (setting to true is interesting in gpredomicsR)
+  keep_all_generations: false                # keep this setting to false when using gpredomics as a binary (setting to true is useful in gpredomicsR but computationally heavy)
 
 beam:
   method: exhaustive                         # exhaustive: generate all combinations (k out of features_to_keep). extend: increment each extendable_models of each 1 feature from features_to_keep.
   kmin: 1                                    # the number of variables used in the initial population
   kmax: 100                                  # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
   best_models_ci_alpha: 1e-10                # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
-  features_importance_minimal_pct: 10.0       # the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch
+  features_importance_minimal_pct: 10.0      # the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch
   very_best_models_pct: 10.0                 # the % of best models where all variables are features_to_keep 
   extendable_models: 100                     # best_models number to increment with each feature_to_keep in extend mode.
