@@ -193,7 +193,6 @@ impl Population {
                 let num_folds = cv.folds.len() as f64;
                 let average_auc = auc_sum / num_folds;
                 let variance = (auc_squared_sum / (num_folds - 1.0)) - (average_auc * average_auc);
-                individual.auc = average_auc;
                 individual.fit = average_auc - (param.general.overfit_penalty * variance) - (individual.k as f64 * param.general.k_penalty);
             }
         });
@@ -276,9 +275,11 @@ impl Population {
     }
 
     pub fn compute_all_metrics(&mut self, data: &Data) {
-        for ind in &mut self.individuals {
-            (ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity) = ind.compute_threshold_and_metrics(data);
-        }
+        self.individuals
+            .par_iter_mut()
+            .for_each(|ind| {
+                (ind.auc, ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity) = ind.compute_roc_and_metrics(data);
+            });
     }
 
 }
