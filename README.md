@@ -25,7 +25,11 @@ gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version
   - `prevalence` : or presence/absence, features above data_type_minimum are 1 others are 0,
   - `log` : features are now equal to their log (`feature.ln()` in Rust). Features below data_type_minimum are set to this value before log transformation.
 
-- the Beam Algorithm is in beta version and fit on AUC. This beta version is not compatible yet with Pow2 language.
+- the Beam Algorithm is in beta version and fit on AUC. This beta version is not compatible yet with Pow2 language. Two submethods are currently available : 
+
+  - `exhaustive` generates all the possible combinations of features selected at each epoch (an epoch is a population of individuals of size k) which is equivalent of terBeam in Predomics terms. 
+  - `extend` adds each of the features selected to each of the best extendable_models at each epoch.
+
 - lots of features are still not implemented.
 
 At this stage (beta), the program is remains simple, yet it is already versatile and useful. 
@@ -130,9 +134,10 @@ The following parameter are for the fit function:
 
 ### beam
 
-- extendable_models: the maximum number of models per generation
-- kmin: the number of features used in the initial population
-- kmax: the maximum number of features to consider in a single model; the feature count limit for the beam algorithm
-- nb_very_best_models: all features represented in these n models will be kept for the next generation
-- nb_best_models: these n models are used to compute feature importances at each generation and complement the very_best_models selected features
-- features_importance_minimal_pct: the minimum prevalence percentage among best_models required for a feature to be kept for the next epoch
+- method: exhaustive or extend, more details above
+- kmin: the number of variables used in the initial population
+- kmax: the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
+- best_models_ci_alpha: alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range
+- features_importance_minimal_pct: the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch
+- very_best_models_pct: the percentage of best models where all variables are features_to_keep 
+- extendable_models: the number of models to increment with each feature_to_keep in extend mode
