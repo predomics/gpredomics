@@ -44,7 +44,9 @@ impl Population {
 
         let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
         for i in 0..=(limit-1) as usize {
-            (self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_threshold_and_metrics(data);
+            if param.ga.keep_all_generations == false {
+                (self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_threshold_and_metrics(data);
+            }
             if param.general.display_colorful == true && param.general.log_base == "" {
                 str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
             } else if param.general.display_colorful == false && param.general.log_base == "" {
@@ -176,9 +178,9 @@ impl Population {
         
         self.individuals.par_chunks_mut(chunk_size).for_each(|chunk| {
             for individual in chunk {
-                let (auc_sum, auc_squared_sum) = cv.datasets.par_iter()
-                    .map(|dataset| {
-                        let auc = individual.compute_new_auc(dataset);
+                let (auc_sum, auc_squared_sum) = cv.folds.par_iter()
+                    .map(|fold| {
+                        let auc = individual.compute_new_auc(fold);
                         (auc, auc * auc)
                     })
                     .reduce(
@@ -188,7 +190,7 @@ impl Population {
                         }
                     );
     
-                let num_folds = cv.datasets.len() as f64;
+                let num_folds = cv.folds.len() as f64;
                 let average_auc = auc_sum / num_folds;
                 let variance = (auc_squared_sum / (num_folds - 1.0)) - (average_auc * average_auc);
                 individual.auc = average_auc;
@@ -272,6 +274,13 @@ impl Population {
         }
 
     }
+
+    pub fn compute_all_metrics(&mut self, data: &Data) {
+        for ind in &mut self.individuals {
+            (ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity) = ind.compute_threshold_and_metrics(data);
+        }
+    }
+
 }
 
 use std::fmt;

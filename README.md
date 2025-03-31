@@ -130,7 +130,7 @@ The following parameter are for the fit function:
 
 ### beam
 
-- max_nb_of_models: the maximum number of models per generation
+- extendable_models: the maximum number of models per generation
 - kmin: the number of features used in the initial population
 - kmax: the maximum number of features to consider in a single model; the feature count limit for the beam algorithm
 - nb_very_best_models: all features represented in these n models will be kept for the next generation

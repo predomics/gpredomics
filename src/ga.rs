@@ -13,6 +13,7 @@ use log::{debug,info,warn,error};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::mem;
+use std::time::Instant;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 
@@ -146,7 +147,7 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
 }
 
 pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> 
-{
+{   let time = Instant::now();
     // generate a random population with a given size  (and evaluate it for selection)
     let mut pop = Population::new();
     let mut epoch:usize = 0;
@@ -284,6 +285,7 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
         new_pop.add(children);
 
         if param.ga.keep_all_generations {
+            pop.compute_all_metrics(data);
             populations.push(pop);
         }
         else {
@@ -293,6 +295,8 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
 
     }
 
+    let elapsed = time.elapsed();
+        info!("Genetic algorithm computed {:?} generations in {:.2?}", populations.len(), elapsed);
     populations
     
 }

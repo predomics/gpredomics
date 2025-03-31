@@ -241,28 +241,30 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         let nb_model_to_test = if param.general.nb_best_model_to_test>0 {param.general.nb_best_model_to_test as usize} else {population.individuals.len()};
         debug!("Testing {} models",nb_model_to_test);
 
-        // Prepare the evaluation pool
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(param.general.thread_number)
-            .build()
-            .expect("Failed to build thread pool");
+        info!("{}", population.display(&my_data, Some(&test_data), param));
 
-        // Compute the final metrics
-        pool.install(|| {
-            let results: Vec<String> = population.individuals[..nb_model_to_test]
-                .par_iter_mut()
-                .enumerate()
-                .map(|(i, individual)| {
-                    (individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = individual.compute_threshold_and_metrics(&my_data);
-                    individual.display(&my_data, Some(&test_data), &param.general.algo, 2, true)
-                })
-                .collect();
+        // // Prepare the evaluation pool
+        // let pool = ThreadPoolBuilder::new()
+        //     .num_threads(param.general.thread_number)
+        //     .build()
+        //     .expect("Failed to build thread pool");
 
-            // Output results in order
-            for result in results {
-                info!("{}", result);
-            }
-        });
+        // // Compute the final metrics
+        // pool.install(|| {
+        //     let results: Vec<String> = population.individuals[..nb_model_to_test]
+        //         .par_iter_mut()
+        //         .enumerate()
+        //         .map(|(i, individual)| {
+        //             (individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = individual.compute_threshold_and_metrics(&my_data);
+        //             individual.display(&my_data, Some(&test_data), &param.general.algo, 2, true)
+        //         })
+        //         .collect();
+
+        //     // Output results in order
+        //     for result in results {
+        //         info!("{}", result);
+        //     }
+        // });
     }
     else {
         for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
