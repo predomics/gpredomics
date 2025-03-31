@@ -54,7 +54,7 @@ pub fn basic_test(param: &Param) {
     info!("my individual evaluation: {:?}",my_individual.evaluate(&my_data));
     // shoud display 1.0 (the AUC is 1.0)
     info!("my individual AUC: {:?}",my_individual.compute_auc(&my_data));
-
+    
     let mut my_individual2 = Individual::new();
     my_individual2.features.insert(0, 1);
     my_individual2.features.insert(1, -1);

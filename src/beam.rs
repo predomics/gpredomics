@@ -271,9 +271,17 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     if let Some(ref cv) = cv {
         debug!("Computing penalized AUC (with cross-validation)...");
         pop.fit_on_folds(cv, &param);
+        if param.ga.keep_all_generations {
+            pop.compute_all_metrics(&data);
+        }
     }  else {
         debug!("Computing penalized AUC...");
-        pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
+        if param.ga.keep_all_generations {
+            pop.compute_all_metrics(&data);
+        } else {
+            pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
+        }
+        
     }
 
     pop = pop.sort();
@@ -334,9 +342,16 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             if let Some(ref cv) = cv {
                 debug!("Computing penalized AUC (with cross-validation)...");
                 pop.fit_on_folds(cv, &param);
+                if param.ga.keep_all_generations {
+                    pop.compute_all_metrics(&data);
+                }
             }  else {
                 debug!("Computing penalized AUC...");
-                pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
+                if param.ga.keep_all_generations {
+                    pop.compute_all_metrics(&data);
+                } else {
+                    pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
+                }
             }
 
             debug!("Sorting population...");
@@ -350,7 +365,6 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
             // maybe move keep_all_generations to general
             if param.ga.keep_all_generations {
-                sorted_pop.compute_all_metrics(&data);
                 collection.push(sorted_pop);
             }
             else {

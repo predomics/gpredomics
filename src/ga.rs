@@ -36,7 +36,10 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                             .par_iter_mut()
                             .enumerate()
                             .for_each(|(n,i)| {
-                                i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
+                                if param.ga.keep_all_generations {
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
+                                } else {
+                                    i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
                                 i.fit = i.auc - i.k as f64 * param.general.k_penalty;
                             });
                     });
@@ -77,6 +80,10 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                             .enumerate()
                             .for_each(|(n,i)| {
                                 let test_auc = i.compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
+                                if param.ga.keep_all_generations {
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
+                                } else {
+                                    i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
                                 i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
                                 i.fit = i.auc - i.k as f64 * param.general.k_penalty - (i.auc-test_auc).abs() * param.general.overfit_penalty;
                             });
@@ -146,8 +153,8 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
     }
 }
 
-pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> 
-{   let time = Instant::now();
+pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {   
+    let time = Instant::now();
     // generate a random population with a given size  (and evaluate it for selection)
     let mut pop = Population::new();
     let mut epoch:usize = 0;
@@ -285,7 +292,6 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
         new_pop.add(children);
 
         if param.ga.keep_all_generations {
-            pop.compute_all_metrics(data);
             populations.push(pop);
         }
         else {
