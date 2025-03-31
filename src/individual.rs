@@ -151,91 +151,79 @@ impl Individual {
         negative_features.sort_by(|a, b| b.1.cmp(a.1));
     
         let mut positive_str: Vec<String> = positive_features.iter().enumerate().map(|(i, &&(index, coef))| {
-            if self.language == POW2_LANG && !(*coef == 1_i8) {
-                if level == 0 && beautiful == true {
-                    format!("{}*\x1b[96mF_POS_{}\x1b[0m", coef, i)
-                } else if level == 0 && beautiful == false {
-                    format!("{}*F_POS_{}", coef, i)
-                } else if level == 1 && beautiful == true {
-                    format!("{}*\x1b[96m[{}]\x1b[0m", coef, index)
-                } else if level == 1 && beautiful == false { 
-                    format!("{}*[{}]", coef, index)
-                } else if level == 2 && beautiful == true {
-                    format!("{}*\x1b[96m{}\x1b[0m", coef, data.features[*index])
-                } else {
-                    format!("{}*{}", coef, data.features[*index])
-                }
+            let mut str;
+            if level == 0 && beautiful == true {
+                str = format!("\x1b[96mF_POS_{}\x1b[0m", i)
+            } else if level == 0 && beautiful == false {
+                str = format!("F_POS_{}", i)
+            } else if level == 1 && beautiful == true {
+                str = format!("\x1b[96m[{}]\x1b[0m", index.to_string())
+            } else if level == 1 && beautiful == false {
+                str = format!("[{}]", index.to_string())
+            } else if level == 2 && beautiful == true {
+                str = format!("\x1b[96m{}\x1b[0m", data.features[*index])
             } else {
-                if level == 0 && beautiful == true {
-                    format!("\x1b[96mF_POS_{}\x1b[0m", i)
-                } else if level == 0 && beautiful == false {
-                    format!("F_POS_{}", i)
-                } else if level == 1 && beautiful == true {
-                    format!("\x1b[96m[{}]\x1b[0m", index.to_string())
-                } else if level == 1 && beautiful == false {
-                    format!("[{}]", index.to_string())
-                } else if level == 2 && beautiful == true {
-                    format!("\x1b[96m{}\x1b[0m", data.features[*index])
-                } else {
-                    data.features[*index].clone()
-                }
+                str = data.features[*index].clone()
             }
+            if self.language == POW2_LANG && !(*coef == 1_i8) && self.language != LOG_TYPE {
+                str = format!("{}*{}", coef, str);
+            } else if self.language == POW2_LANG && !(*coef == 1_i8) && self.language == LOG_TYPE {
+                // b*ln(a) == ln(a^b)
+                str = format!("{}^{}", str, coef);
+            }
+            str
         }).collect();
     
         let mut negative_str: Vec<String> = negative_features.iter().enumerate().map(|(i, &&(index, coef))| {
-            if self.language == POW2_LANG && !(*coef == -1_i8) {
-                if level == 0 && beautiful == true {
-                    format!("{}*\x1b[95m{}\x1b[0m", coef, i)
+            let mut str;
+            if level == 0 && beautiful == true {
+                    str = format!("\x1b[95mF_NEG_{}\x1b[0m", i)
                 } else if level == 0 && beautiful == false {
-                    format!("{}*F_NEG_{}", coef, i)
+                    str = format!("F_NEG_{}", i)
                 } else if level == 1 && beautiful == true {
-                    format!("{}*\x1b[95m[{}]\x1b[0m", coef, index)
-                } else if level == 1 && beautiful == false { 
-                    format!("{}*[{}]", coef, index)
-                } else if level == 2 && beautiful == true {
-                    format!("{}*\x1b[95m{}\x1b[0m", coef, data.features[*index])
-                } else {
-                    format!("{}*{}", coef, data.features[*index])
-                }
-            } else {
-                if level == 0 && beautiful == true {
-                    format!("\x1b[95mF_NEG_{}\x1b[0m", i)
-                } else if level == 0 && beautiful == false {
-                    format!("F_POS_{}", i)
-                } else if level == 1 && beautiful == true {
-                    format!("\x1b[95m[{}]\x1b[0m", index.to_string())
+                    str = format!("\x1b[95m[{}]\x1b[0m", index.to_string())
                 } else if level == 1 && beautiful == false {
-                    format!("[{}]", index.to_string())
+                    str = format!("[{}]", index.to_string())
                 } else if level == 2 && beautiful == true {
-                    format!("\x1b[95m{}\x1b[0m", data.features[*index])
+                    str = format!("\x1b[95m{}\x1b[0m", data.features[*index])
                 } else {
-                    data.features[*index].clone()
+                    str = data.features[*index].clone()
                 }
+            if self.language == POW2_LANG && !(*coef == -1_i8) && self.language != LOG_TYPE {
+                str = format!("{}*{}", coef, str);
+            } else if self.language == POW2_LANG && !(*coef == -1_i8) && self.language == LOG_TYPE {
+                // b*ln(a) == ln(a^b)
+                // absolute coeff as minus is before ln() -> ln(prod(pos)) - ln(prod(neg)) = threshold + ln(prod(data.type_minimum^coeff)
+                str = format!("{}^{}", str, coef.abs());
             }
+            str
         }).collect();
     
-        // Join the vectors into comma-separated strings
-        if self.data_type == LOG_TYPE {
-            for element in &mut positive_str {
-                element.push_str(&format!("/{:e}", self.data_type_minimum));
-            }
-            for element in &mut negative_str {
-                element.push_str(&format!("/{:e}", self.data_type_minimum));
-            }
-        }
         if self.language == RATIO_LANG {
             negative_str.push("1e-12".to_string());
         }
+
+        let threshold;
+        let positive_str_joined;
+        let negative_str_joined;
+        if self.data_type == LOG_TYPE && self.language != RATIO_LANG {
+            // Calculate the product of data_type_minimum raised to the power of each coefficient
+            let product: f64 = self.features.values().map(|&coef| self.data_type_minimum.powi(coef as i32)).product();
+            threshold = format!("{} (+ {})", self.threshold, product.ln());
+            positive_str_joined = format!("ln({})", positive_str.join(" * "));
+            negative_str_joined = format!("ln({})", negative_str.join(" * "));
+        } else {
+            threshold = format!("{}", self.threshold);
+            positive_str_joined = format!("({})", positive_str.join(" + "));
+            negative_str_joined = format!("({})", negative_str.join(" + "));
+        }
+
         if positive_str.len() == 0 {
             positive_str.push("0".to_string());
         }
         if negative_str.len() == 0 {
             negative_str.push("0".to_string());
         }
-           
-        let positive_str_joined = positive_str.join(" + ");
-        let negative_str_joined = negative_str.join(" + ");
-
         let predicted_class;
         if beautiful == true {
             predicted_class = format!("{}", data.classes[1]);
@@ -245,13 +233,13 @@ impl Individual {
     
         let formatted_string;
         if self.language == BINARY_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {} <======> ({}) > {:.5}", metrics, predicted_class, positive_str_joined, self.threshold)
+            formatted_string = format!("{}\nClass {} <======> {} > {}", metrics, predicted_class, positive_str_joined, threshold)
         } else if (self.language == TERNARY_LANG || self.language == POW2_LANG) && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {} <======> ({}) - ({}) > {:.5}", metrics, predicted_class, positive_str_joined, negative_str_joined, self.threshold)
+            formatted_string = format!("{}\nClass {} <======> {} - {} > {}", metrics, predicted_class, positive_str_joined, negative_str_joined, threshold)
         } else if self.language == RATIO_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {} <======> ({}) / ({}) > {:.5}", metrics, predicted_class, positive_str_joined, negative_str_joined, self.threshold)
+            formatted_string = format!("{}\nClass {} <======> {} / {} > {}", metrics, predicted_class, positive_str_joined, negative_str_joined, threshold)
         } else {
-            formatted_string = format!("{}\nClass {} <======> {:?} > {:.5}", metrics, predicted_class, self, self.threshold);
+            formatted_string = format!("{}\nClass {} <======> {:?} > {}", metrics, predicted_class, self, threshold);
         };
     
         formatted_string

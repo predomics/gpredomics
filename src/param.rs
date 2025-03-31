@@ -120,8 +120,8 @@ pub struct BEAM {
     pub very_best_models_pct: f64,                   // Number of best models 
     #[serde(default = "features_importance_minimal_pct_default")]
     pub features_importance_minimal_pct: f64,                   // Number of best models 
-    #[serde(default = "max_nb_of_models_default")]
-    pub max_nb_of_models: usize,                   // Number of best models 
+    #[serde(default = "extendable_models_default")]
+    pub extendable_models: usize,                   // Number of best models 
 }
 
 
@@ -214,9 +214,9 @@ fn feature_select_niche_pct_default() -> f64 { 0.0 }
 fn false_default() -> bool { false }
 fn display_level_default() -> usize { 2 }
 fn display_colorful_default() -> bool { false }
-fn beam_method_default() -> String { "classic".to_string() }
+fn beam_method_default() -> String { "exhaustive".to_string() }
 fn best_models_ci_alpha_default() -> f64 { 0.05 }
 fn very_best_models_pct_default() -> f64 { 0.1 }
 fn features_importance_minimal_pct_default() -> f64 { 0.1 }
-fn max_nb_of_models_default() -> usize { 5000 }
+fn extendable_models_default() -> usize { 50 }
 fn class_names_default() -> Vec<String> { Vec::new() }

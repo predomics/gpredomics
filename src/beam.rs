@@ -1,5 +1,6 @@
 // BE CAREFUL : the adaptation of the Predomics beam algorithm for Gpredomics is still under development
 use crate::cv::CV;
+use crate::gpu::GpuAssay;
 use crate::population::Population;
 use crate::individual::language;
 use crate::individual::data_type;
@@ -16,6 +17,7 @@ use rayon::ThreadPoolBuilder;
 use std::sync::Arc;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use std::time::Instant;
 
 // Beam functions
 fn generate_combinations(features: &Vec<usize>, k: usize) -> Vec<Vec<usize>> {
@@ -195,12 +197,17 @@ pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, langu
 }
 
 pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+    let time = Instant::now();
+
     let mut data = Data::new();
     let mut data_test = Data::new();
     let _ = data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
     let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
     data.set_classes(param.data.classes.clone());
     data_test.set_classes(param.data.classes.clone());
+
+    // GPU assay
+    // let gpu_assay = Some(None);
 
     // Cross-validation initialization
     let mut cv: Option<CV> = None;
@@ -209,12 +216,11 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
         cv = Some(CV::new(&data, param.cv.fold_number, &mut rng));
     }
+    
     let pool = ThreadPoolBuilder::new()
         .num_threads(param.general.thread_number)
         .build()
         .expect("Failed to build thread pool");
-
-   
 
     info!("\x1b[1;96mLaunching Beam algorithm for a feature interval [{}, {}]\x1b[0m", param.beam.kmin, param.beam.kmax);
 
@@ -250,8 +256,26 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     let n_unvalid = remove_stillborn(&mut pop) as usize;
     if n_unvalid>0 { warn!("Some stillborn are presents: {}", n_unvalid) }
 
+    // // Cross-validation initialisation
+    // let (mut run_test_data, run_data): (Option<Data>,Option<Data>) = if param.general.overfit_penalty>0.0 {
+    //     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+    //     let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
+    //     (Some(cv.folds.remove(0)),Some(cv.datasets.remove(0)))
+    // } else { (None,None) };
+    // let cv_assay = if param.general.gpu && param.general.overfit_penalty>0.0 {
+    //     let cv_data = cv_data.as_mut().unwrap();
+    //     Some(GpuAssay::new(&cv_data.X, &data.feature_selection, cv_data.sample_len, param.ga.population_size as usize))
+    // } else { None };
+
     // Fitting first Population composed of all k_start combinations
-    pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
+    if let Some(ref cv) = cv {
+        debug!("Computing penalized AUC (with cross-validation)...");
+        pop.fit_on_folds(cv, &param);
+    }  else {
+        debug!("Computing penalized AUC...");
+        pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
+    }
+
     pop = pop.sort();
 
     pool.install(|| {
@@ -260,7 +284,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             info!("Generating models with {:?} features...", ind_k);
             debug!("[k={:?}] initial population length = {:?}", ind_k, pop.individuals.len());
 
-            // dynamically select the best_models where features_to_keep are picked
+            // Dynamically select the best_models where features_to_keep are picked
             debug!("Selecting models...");
             let best_pop = pop.select_best_population(param.beam.best_models_ci_alpha);
             let (very_best_pop, _) = best_pop.select_first_pct(param.beam.very_best_models_pct);
@@ -277,18 +301,18 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                 break;
             }
 
-            if param.beam.method == "classic" {
+            if param.beam.method == "exhaustive" {
                 // Generate all possible combinations between the features_to_keep
                 // Combinations are limited by features_to_keep (by param.beam.best_models_ci_alpha)
                 combinations = generate_combinations(&features_to_keep, ind_k);
             } else if param.beam.method == "extend" {
                 // Generate new combinations Mk + 1 feature_to_keep for next step
-                // Combinations are limited both by Mk maximum (param.beam.max_nb_of_models) and features_to_keep (param.beam.best_models_ci_alpha)
+                // Combinations are limited both by Mk maximum (param.beam.extendable_models) and features_to_keep (param.beam.best_models_ci_alpha)
                 // Combinations are currently generated at each epoch in each languages and data_type
                 debug!("Selecting best combinations...");
                 let mut reduced_best_pop = Population::new();
-                if best_pop.individuals.len() > param.beam.max_nb_of_models {
-                    reduced_best_pop.individuals = best_pop.individuals[..param.beam.max_nb_of_models].to_vec();
+                if best_pop.individuals.len() > param.beam.extendable_models {
+                    reduced_best_pop.individuals = best_pop.individuals[..param.beam.extendable_models].to_vec();
                 } else {
                     reduced_best_pop.individuals = best_pop.individuals;
                 }
@@ -298,7 +322,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             } else {
                 panic!("Unknown beam method");
             }
-            debug!("{:?} unique combinations generated ", combinations.len());
+            debug!("{:?} unique combinations generated (* {} language.data_type)", combinations.len(), lang_and_type_pop.individuals.len());
 
             // Compute AUC for generated Population and sort it
             pop = Population::new();
@@ -323,7 +347,15 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
             let mut sorted_pop = Population::new();
             sorted_pop.individuals = pop.individuals.clone();
-            collection.push(sorted_pop);
+
+            // maybe move keep_all_generations to general
+            if param.ga.keep_all_generations {
+                sorted_pop.compute_all_metrics(&data);
+                collection.push(sorted_pop);
+            }
+            else {
+                collection = vec![sorted_pop];
+            }
 
             debug!("Best fit : {:?}", pop.individuals[0].fit);
 
@@ -333,14 +365,17 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             }
         }
 
-        // Print final 20 best models
+        let elapsed = time.elapsed();
+        info!("Beam algorithm in {} mode computed {:?} generations in {:.2?}", param.beam.method, collection.len(), elapsed);
+
+        // Print final best models
         let mut final_pop = Population::new();
         final_pop.individuals = collection.last_mut().unwrap().individuals.clone();
         info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
         info!("{}", final_pop.display(&data, Some(&data_test), param));
 
         info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
-        let mut top_ten_pop = keep_n_best_model_within_collection(&collection, param.general.nb_best_model_to_test as usize);
+        let mut top_ten_pop = keep_n_best_model_within_collection(&collection, param);
         info!("{}", top_ten_pop.display(&data, Some(&data_test), param));
 
         (collection, data, data_test)
@@ -348,7 +383,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 }
 
 // Function to extract best models among all epochs, not necessarily having k_max features
-fn keep_n_best_model_within_collection(collection:&Vec<Population>, n:usize) -> Population {
+fn keep_n_best_model_within_collection(collection:&Vec<Population>, param:&Param) -> Population {
     let mut all_models = Population::new();
     for population in collection {
         for individual in population.individuals.clone() {
@@ -357,7 +392,13 @@ fn keep_n_best_model_within_collection(collection:&Vec<Population>, n:usize) -> 
     }
     all_models = all_models.sort();
 
-    Population { individuals : all_models.individuals.clone()[..n].to_vec() }
+    let best_n_pop;
+    if all_models.individuals.len() > param.general.nb_best_model_to_test as usize {
+        best_n_pop = Population { individuals : all_models.individuals.clone()[..param.general.nb_best_model_to_test as usize].to_vec() }
+    } else {
+        best_n_pop = all_models 
+    }
+    best_n_pop
 }
 
 // still have to write unit-tests to confirm every function behavior in any situation
