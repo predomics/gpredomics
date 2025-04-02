@@ -100,7 +100,7 @@ impl Individual {
             language: BINARY_LANG,
             data_type: RAW_TYPE,
             hash: 0,
-            data_type_minimum: DEFAULT_MINIMUM
+            data_type_minimum: DEFAULT_MINIMUM,
         }
     }
 
@@ -115,13 +115,13 @@ impl Individual {
         let metrics;
         match data_to_test {
             Some(test_data) => { 
-                let (_, acc_test, se_test, sp_test) = self.compute_threshold_and_metrics(test_data);
+                let (acc_test, se_test, sp_test) = self.compute_metrics(test_data);
                 if beautiful == true {
                     metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
                                   self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
                                   self.sensitivity, se_test, self.specificity, sp_test)
                 } else {
-                    metrics = format!("{}:{} k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
+                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
                                   self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
                                   self.sensitivity, se_test, self.specificity, sp_test)
                 }
@@ -616,7 +616,7 @@ impl Individual {
     pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64) {
         let value = self.evaluate(d); // Predicted probabilities
         let predicted_and_real_class: Vec<(u8, u8)> = value.iter().cloned()
-                .map(|x| {if x>=self.threshold {1} else {0}}).zip(d.y.iter().cloned()).collect();
+                .map(|x| {if x>self.threshold {1} else {0}}).zip(d.y.iter().cloned()).collect();
         
         // Initialize confusion matrix
         let mut tp = 0;
@@ -1236,7 +1236,7 @@ mod tests {
         assert_eq!(0.5, ind.compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.7_f64, 0.8_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8]),
         "auc should be equal to 0 when there is no negative class to avoid positive biais in model selection");
         assert_eq!(0.4166666666666667, ind.compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.3_f64, 0.1_f64, 0.9_f64, 0.1_f64], &vec![1_u8, 2_u8, 1_u8, 0_u8, 0_u8, 1_u8]),
-        "auc should be equal to 0 when there is no negative class to avoid positive biais in model selection");
+        "class 2 should be omited in AUC");
     }
 
     // fn calculate_confusion_matrix
@@ -1536,10 +1536,12 @@ mod tests {
     fn test_on_more_complicated_data() {
         let mut individual = Individual::new();
         let mut data = Data::new();
+        let mut data_test = Data::new();
         let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv");
+        let _ = data_test.load_data("samples/Qin2014/Xtest.tsv", "samples/Qin2014/Ytest.tsv");
 
         // Set the language and data type
-        individual.language = POW2_LANG;
+        individual.language = TERNARY_LANG;
         individual.data_type = LOG_TYPE;
         individual.data_type_minimum = 1e-5;
 
@@ -1548,10 +1550,10 @@ mod tests {
             (9, 1), (22, 1), (23, 1), (24, -1), (42, -1), (47, 1), (57, -1), (66, -1), (72, -1),
             (82, -1), (87, -1), (92, -1), (105, 1), (124, -1), (130, -1), (174, 1), (194, 1),
             (221, 1), (222, 1), (262, 1), (272, 1), (301, -1), (319, 1), (320, -1), (324, 1),
-            (334, 1), (359, 1), (378, 2), (436, -1), (466, -1), (468, -1), (476, -1), (488, 1),
+            (334, 1), (359, 1), (378, 1), (436, -1), (466, -1), (468, -1), (476, -1), (488, 1),
             (497, -1), (512, 1), (522, -1), (546, -1), (565, 1), (591, -1), (614, -1), (649, -1),
             (658, 1), (670, -1), (686, 1), (716, 1), (825, 1), (834, -1), (865, -1), (867, 1),
-            (874, 1), (877, 1), (1117, 2), (1273, 1), (1313, 1), (1317, 1), (1464, 1), (1525, 1),
+            (874, 1), (877, 1), (1117, 1), (1273, 1), (1313, 1), (1317, 1), (1464, 1), (1525, 1),
             (1629, 1), (1666, 1), (1710, 1), (1735, 1), (1738, 1), (1740, 1), (1741, 1), (1794, 1),
             (1870, 1)
         ];
@@ -1560,13 +1562,40 @@ mod tests {
             individual.features.insert(index, sign);
         }
 
-        assert_eq!(individual.compute_auc(&data), 0.9641038380325425, "Wrong auc calculated");
+        data.classes = vec!["healthy".to_string(), "cirrhosis".to_string()];
+        data.y[3] = 2 as u8;
+        data.y[4] = 2 as u8;
+        data_test.y[7] = 2 as u8;
+
+        // control both metrics and display
+        let right_string = concat!("Ternary:Log [k=66] [gen:0] [fit:0.000] AUC 0.962/0.895 | accuracy 0.921/0.828 | sensitivity 0.937/0.867 | specificity 0.904/0.786\n",
+                            "Class cirrhosis <======> ln(msp_0010 * msp_0023 * msp_0024 * msp_0048 * msp_0106 * msp_0176 * msp_0196 * msp_0223 * msp_0224 * msp_0265",
+                            " * msp_0275 * msp_0324 * msp_0329 * msp_0339 * msp_0364 * msp_0383 * msp_0493 * msp_0517 * msp_0570 * msp_0664 * msp_0692 * msp_0722",
+                            " * msp_0832 * msp_0874 * msp_0881 * msp_0884 * msp_1127 * msp_1284 * msp_1325 * msp_1329 * msp_1479 * msp_1543 * msp_1660 * msp_1700",
+                            " * msp_1748 * msp_1782 * msp_1785 * msp_1787 * msp_1788 * msp_1862 * msp_1942) - ln(msp_0025 * msp_0043 * msp_0058 * msp_0067 * msp_0073",
+                            " * msp_0083 * msp_0088 * msp_0093 * msp_0125 * msp_0131 * msp_0306 * msp_0325 * msp_0441 * msp_0471 * msp_0473c * msp_0481 * msp_0502", 
+                            " * msp_0527 * msp_0551 * msp_0596 * msp_0619 * msp_0654 * msp_0676 * msp_0841 * msp_0872) > 19.398124045367666 (+ -184.20680743952366)");
+
+        (individual.auc, individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = individual.compute_roc_and_metrics(&data);
+
+        // except the threshold (small variation between launch ~0.000000000001)
+        assert_eq!(right_string.split("> 19").collect::<Vec<_>>()[0], individual.display(&data, Some(&data_test), &"ga".to_string(), 2, false).split("> 19").collect::<Vec<_>>()[0]);
+
+        assert_eq!(individual.compute_auc(&data), 0.961572606214331, "Wrong auc calculated");
+        assert_eq!(individual.compute_new_auc(&data_test), 0.8952380952380953, "Wrong test auc calculated");
         // Compute ROC and metrics should return the same AUC as .compute_auc and the same metrics as .compute_threshold_and_metrics
-        let (auc, _, accuracy, sensitivity, specificity): (f64, f64, f64, f64, f64)= individual.compute_roc_and_metrics(&data);
-        assert_eq!(auc, individual.compute_auc(&data), "AUC calculated with Individual.compute_auc() and Individual.compute_roc_and_metrics() should be the same" );
-        assert_eq!(accuracy, individual.compute_threshold_and_metrics(&data).1, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
-        assert_eq!(sensitivity, individual.compute_threshold_and_metrics(&data).2, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
-        assert_eq!(specificity, individual.compute_threshold_and_metrics(&data).3, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
+        let (threshold, accuracy, sensitivity, specificity): (f64, f64, f64, f64)= individual.compute_threshold_and_metrics(&data);
+       
+        assert_eq!(individual.compute_new_auc(&data), individual.auc, "AUC calculated with Individual.compute_auc() and Individual.compute_roc_and_metrics() should be the same" );
+        assert_eq!(accuracy,  individual.accuracy, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
+        assert_eq!(sensitivity, individual.sensitivity, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
+        assert_eq!(specificity,  individual.specificity, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
+        
+        individual.threshold = threshold;
+        assert_eq!(accuracy, individual.compute_metrics(&data).0,  "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_metrics() should be the same");
+        assert_eq!(sensitivity, individual.compute_metrics(&data).1,  "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_metrics() should be the same");
+        assert_eq!(specificity, individual.compute_metrics(&data).2,  "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_metrics() should be the same");
+    
     }
 
     #[test]
