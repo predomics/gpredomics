@@ -270,18 +270,16 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     // Fitting first Population composed of all k_start combinations
     if let Some(ref cv) = cv {
         debug!("Computing penalized AUC (with cross-validation)...");
-        pop.fit_on_folds(cv, &param);
+        pop.fit_on_folds(&data, cv, &param);
         if param.ga.keep_all_generations {
             pop.compute_all_metrics(&data);
-        }
+        } 
     }  else {
         debug!("Computing penalized AUC...");
+        pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
         if param.ga.keep_all_generations {
             pop.compute_all_metrics(&data);
-        } else {
-            pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
         }
-        
     }
 
     pop = pop.sort();
@@ -339,37 +337,31 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                 pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals)
             }
 
+            let n_unvalid = remove_stillborn(&mut pop) as usize;
+            if n_unvalid>0 { warn!("Some stillborn are presents: {}", n_unvalid) }
+
             if let Some(ref cv) = cv {
                 debug!("Computing penalized AUC (with cross-validation)...");
-                pop.fit_on_folds(cv, &param);
+                pop.fit_on_folds(&data, cv, &param);
                 if param.ga.keep_all_generations {
                     pop.compute_all_metrics(&data);
-                }
+                } 
             }  else {
                 debug!("Computing penalized AUC...");
+                pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
                 if param.ga.keep_all_generations {
                     pop.compute_all_metrics(&data);
-                } else {
-                    pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
                 }
             }
 
             debug!("Sorting population...");
             pop = pop.sort();
             
-            let n_unvalid = remove_stillborn(&mut pop) as usize;
-            if n_unvalid>0 { warn!("Some stillborn are presents: {}", n_unvalid) }
-
             let mut sorted_pop = Population::new();
             sorted_pop.individuals = pop.individuals.clone();
 
-            // maybe move keep_all_generations to general
-            if param.ga.keep_all_generations {
-                collection.push(sorted_pop);
-            }
-            else {
-                collection = vec![sorted_pop];
-            }
+            // in beam mode print every result
+            collection.push(sorted_pop);
 
             debug!("Best fit : {:?}", pop.individuals[0].fit);
 

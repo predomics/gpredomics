@@ -66,6 +66,7 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                 }
             }
         } else {
+            warn!("Something is broken with GA no-overfit AUC");
             let t_assay = test_assay.as_ref().unwrap();
             let test_data = test_data.as_mut().unwrap();
             let scores:Vec<f64> = assay.compute_scores(&pop.individuals, param.general.data_type_epsilon as f32)
@@ -84,7 +85,6 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
                                 } else {
                                     i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
-                                i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
                                 i.fit = i.auc - i.k as f64 * param.general.k_penalty - (i.auc-test_auc).abs() * param.general.overfit_penalty;
                             });
                     });

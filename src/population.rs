@@ -45,7 +45,7 @@ impl Population {
         let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
         for i in 0..=(limit-1) as usize {
             if param.ga.keep_all_generations == false {
-                (self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_threshold_and_metrics(data);
+                (_, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_roc_and_metrics(data);
             }
             if param.general.display_colorful == true && param.general.log_base == "" {
                 str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
@@ -173,7 +173,7 @@ impl Population {
     }
 
     // Function for cross-validation
-    pub fn fit_on_folds(&mut self, cv: &CV, param: &Param) {
+    pub fn fit_on_folds(&mut self, data: &Data, cv: &CV, param: &Param) {
         let chunk_size = max(1, self.individuals.len() / (4 * rayon::current_num_threads()));
         
         self.individuals.par_chunks_mut(chunk_size).for_each(|chunk| {
@@ -193,6 +193,7 @@ impl Population {
                 let num_folds = cv.folds.len() as f64;
                 let average_auc = auc_sum / num_folds;
                 let variance = (auc_squared_sum / (num_folds - 1.0)) - (average_auc * average_auc);
+                individual.auc = individual.compute_auc(&data);
                 individual.fit = average_auc - (param.general.overfit_penalty * variance) - (individual.k as f64 * param.general.k_penalty);
             }
         });
