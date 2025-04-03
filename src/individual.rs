@@ -23,7 +23,8 @@ pub struct Individual {
     pub language: u8, // binary (0,1), ternary (-1,0,1), pow2 (-4,-2,-1,0,1,2,4), ratio (-1,-1,-1,81)
     pub data_type: u8, // abundance (raw), prevalence (0,1), log
     pub hash: u64,
-    pub data_type_minimum: f64
+    pub data_type_minimum: f64,
+    pub parents: Option<Vec<u64>>
 }
 
 pub const BINARY_LANG :u8 = 0;
@@ -101,6 +102,7 @@ impl Individual {
             data_type: RAW_TYPE,
             hash: 0,
             data_type_minimum: DEFAULT_MINIMUM,
+            parents: None
         }
     }
 
@@ -887,13 +889,13 @@ mod tests {
     fn create_test_individual() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        data_type_minimum: f64::MIN_POSITIVE}
+        data_type_minimum: f64::MIN_POSITIVE, parents: None}
     }
 
     fn create_test_individual_n2() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 0.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        data_type_minimum: f64::MIN_POSITIVE}
+        data_type_minimum: f64::MIN_POSITIVE, parents: None}
     }
 
     fn create_test_data() -> Data {

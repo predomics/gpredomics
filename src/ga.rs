@@ -341,7 +341,7 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
 
 
     // add a random part of the others
-    //parents.add(pop.select_random_above_n(param.ga.select_random_pct, n, rng));
+    // parents.add(pop.select_random_above_n(param.ga.select_random_pct, n, rng));
     let n2 = (pop.individuals.len() as f64 * param.ga.select_random_pct / 100.0 / individual_by_types.keys().len() as f64) as usize;
 
     let mut sorted_keys: Vec<_> = individual_by_types.keys().collect();
@@ -403,6 +403,7 @@ pub fn cross_over(parents: &Population, feature_len: usize, children_number: usi
 
         child.count_k();
 
+        child.parents = Some(vec!(p1.hash, p2.hash));
         children.individuals.push(child);
     }
 
