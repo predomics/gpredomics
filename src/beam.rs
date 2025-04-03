@@ -193,6 +193,7 @@ pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, langu
         data_type: data_type,
         hash: 0,
         data_type_minimum: param.general.data_type_epsilon,
+        parents : None
     }
 }
 
@@ -287,6 +288,8 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     pool.install(|| {
 
         for ind_k in param.beam.kmin..param.beam.kmax {
+            pop.compute_hash();
+
             info!("Generating models with {:?} features...", ind_k);
             debug!("[k={:?}] initial population length = {:?}", ind_k, pop.individuals.len());
 
@@ -363,7 +366,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             // in beam mode print every result
             collection.push(sorted_pop);
 
-            debug!("Best fit : {:?}", pop.individuals[0].fit);
+            debug!("Best fit : {:?} | Associated AUC delta Train/Test : {:.6}", pop.individuals[0].fit, pop.individuals[0].auc-pop.individuals[0].compute_new_auc(&data_test));
 
             // Stop the loop if someone kill the program
             if !running.load(Ordering::Relaxed) {
@@ -415,7 +418,7 @@ mod tests {
     fn create_test_individual() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8,
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0,
-        data_type_minimum: f64::MIN_POSITIVE}
+        data_type_minimum: f64::MIN_POSITIVE, parents: None}
     }
 
     #[test]
