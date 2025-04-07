@@ -3,10 +3,11 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::fmt;
+use crate::param;
 use crate::param::Param;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
-use log::info;
+use log::{info,warn};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use fishers_exact::fishers_exact;
@@ -130,7 +131,7 @@ impl Data {
 
     /// for a given feature (chosen as the #j line of X ) answer 0 if the feature is more significantly associated with class 0, 1 with class 1, 2 otherwise 
     /// using student T e.g. for normally ditributed features
-    fn compare_classes_studentt(&self, j: usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
+    fn compare_classes_studentt(&self, j: usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> (u8, f64) {
         // Separate values into two classes
 
         let mut count_0: usize=0;
@@ -149,14 +150,13 @@ impl Data {
 
         let prev0 = count_0 as f64 / n0;
         let prev1 = count_1 as f64 / n1;
-
-        if prev0<min_prevalence && prev1<min_prevalence { return 2 }
+        if prev0<min_prevalence && prev1<min_prevalence { return (2_u8, 2.0) }
 
         // Calculate means
         let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
         let mean_1 = class_1.iter().copied().sum::<f64>() / class_1.len() as f64;
-    
-        if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
+
+        if mean_0<min_mean_value && mean_1<min_mean_value { return (2_u8, 2.0) }
 
         // Calculate t-statistic (simple, equal variance assumption)
 
@@ -177,21 +177,21 @@ impl Data {
             // Interpretation
             if p_value < max_p_value {
                 if mean_0 > mean_1 {
-                    0
+                    (0_u8, p_value)
                 } else {
-                    1
+                    (1_u8, p_value)
                 }
             } else {
-                2
+                (2_u8, p_value)
             }
         }
-        else {2}
+        else {(2_u8, 2.0)}
     }
     
 
     /// Same as above but using Wilcoxon this time: for a given feature (chosen as the #j line of X ) answer 0 if the feature is more significantly associated with class 0, 1 with class 1, 2 otherwise 
     /// using Wilcoxon e.g. for sparse/log normal features
-    pub fn compare_classes_wilcoxon(&self, j:usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
+    pub fn compare_classes_wilcoxon(&self, j:usize, max_p_value: f64, min_prevalence: f64, min_mean_value: f64) -> (u8, f64) {
         // Separate values into two classes
         let mut count_0: usize=0;
         let mut count_1: usize=0;
@@ -207,20 +207,18 @@ impl Data {
         let n0 = class_0.len() as f64;
         let n1 = class_1.len() as f64;
 
-        if n0==0.0 || n1==0.0 { return 2 }
+        if n0==0.0 || n1==0.0 { return (2_u8, 2.0) }
 
         let prev0 = count_0 as f64 / n0;
         let prev1 = count_1 as f64 / n1;
 
-        if prev0<min_prevalence && prev1<min_prevalence { return 2 }
+        if prev0<min_prevalence && prev1<min_prevalence { return (2_u8, 2.0) }
 
         // Calculate means
         let mean_0 = class_0.iter().copied().sum::<f64>() / class_0.len() as f64;
         let mean_1 = class_1.iter().copied().sum::<f64>() / class_1.len() as f64;
     
-        if mean_0<min_mean_value && mean_1<min_mean_value { return 2 }
-    
-
+        if mean_0<min_mean_value && mean_1<min_mean_value { return (2_u8, 2.0) }
     
         // Combine both classes with their labels
         let mut combined: Vec<(f64, u8)> = class_0
@@ -283,110 +281,140 @@ impl Data {
     
         let normal_dist = Normal::new(0.0, 1.0).unwrap();
         let p_value = 2.0 * (1.0 - normal_dist.cdf(z.abs())); // Two-tailed p-value
-    
         // Interpretation
         if p_value < max_p_value {
             if mean_0 > mean_1 {
-                0
+                (0_u8, p_value)
             } else {
-                1
+                (1_u8, p_value)
             }
         } else {
-            2
+            (2_u8, p_value)
         }
     }
     
-    fn compare_classes_bayesian_fisher(&self, j: usize, min_absolute_log_factor: f64, min_prevalence: f64, min_mean_value: f64) -> u8 {
+    fn compare_classes_bayesian_fisher(&self, j: usize, min_absolute_log_factor: f64, min_prevalence: f64, min_mean_value: f64) -> (u8, f64) {
         let mut class_0_present: u32 = 0;
         let mut class_0_absent: u32 = 0;
         let mut class_1_present: u32 = 0;
         let mut class_1_absent: u32 = 0;
 
+        let mut class_0_values: Vec<f64> = Vec::new();
+        let mut class_1_values: Vec<f64> = Vec::new();
+
         for i in 0..self.sample_len {
             if self.y[i] == 0 {
-                if self.X.contains_key(&(i, j)) && self.X[&(i, j)] >= min_mean_value {
+                if self.X.contains_key(&(i, j)) && self.X[&(i, j)] >= 0.0 {
                     class_0_present += 1;
+                    class_0_values.push(self.X[&(i, j)]);
                 } else {
                     class_0_absent += 1;
                 }
             } else if self.y[i] == 1 {
-                if self.X.contains_key(&(i, j)) && self.X[&(i, j)] >= min_mean_value {
+                if self.X.contains_key(&(i, j)) && self.X[&(i, j)] >= 0.0 {
                     class_1_present += 1;
+                    class_1_values.push(self.X[&(i, j)]);
                 } else {
                     class_1_absent += 1;
-                };
-            }};
-
-        if (class_0_present as f64) < min_prevalence && (class_1_present as f64) < min_prevalence {
-            return 2;
+                }
+            }
         }
+
+        let mean_0 = class_0_values.iter().sum::<f64>() / class_0_values.len() as f64;
+        let mean_1 = class_1_values.iter().sum::<f64>() / class_1_values.len() as f64;
+
+        if mean_0 < min_mean_value && mean_1 < min_mean_value { return (2_u8, 0.0); }
 
         let fisher_test = fishers_exact(&[class_0_present, class_1_present, class_0_absent, class_1_absent]).unwrap();
         let bayes_factor = fisher_test.greater_pvalue / fisher_test.less_pvalue;
 
         if bayes_factor.log10().abs() >= min_absolute_log_factor {
             if bayes_factor < 1.0 {
-                    0
+                    (0_u8, bayes_factor.log10().abs())
             } else {
-                    1
+                    (1_u8, bayes_factor.log10().abs())
                 }
             } 
         else {
-                2
+                (2_u8, 0.0)
             }
         }
 
     /// Fill feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
-    pub fn select_features(&mut self, param:&Param) {
+    pub fn select_features(&mut self, param: &Param) {
         self.feature_selection = Vec::new();
         self.feature_class = HashMap::new();
-
+    
         let pool = ThreadPoolBuilder::new()
             .num_threads(param.general.thread_number)
             .build()
             .unwrap();
-
-        let results: Vec<(usize, u8)> = pool.install(|| {
+    
+        let mut results: Vec<(usize, u8, f64)> = pool.install(|| {
             (0..self.feature_len)
                 .into_par_iter()
                 .map(|j| {
-                    let class = if param.data.feature_selection_method == "studentt" {
-                        self.compare_classes_studentt(
+                    let (class, value) = match param.data.feature_selection_method.as_str() {
+                        "studentt" => self.compare_classes_studentt(
                             j,
                             param.data.feature_maximal_pvalue,
                             param.data.feature_minimal_prevalence_pct as f64 / 100.0,
                             param.data.feature_minimal_feature_value,
-                        )
-                    } else if param.data.feature_selection_method == "bayesian_fisher"{
-                        self.compare_classes_bayesian_fisher(
+                        ),
+                        "bayesian_fisher" => self.compare_classes_bayesian_fisher(
                             j,
                             param.data.feature_minimal_log_abs_bayes_factor,
                             param.data.feature_minimal_prevalence_pct as f64 / 100.0,
                             param.data.feature_minimal_feature_value,
-                        )
-                    } else {
-                        self.compare_classes_wilcoxon(
+                        ),
+                        _ => self.compare_classes_wilcoxon(
                             j,
                             param.data.feature_maximal_pvalue,
                             param.data.feature_minimal_prevalence_pct as f64 / 100.0,
                             param.data.feature_minimal_feature_value,
                         )
                     };
-
-
-                    (j, class)
+                    (j, class, value)
                 })
                 .collect()
         });
+
+        if param.data.feature_selection_method == "bayesian_fisher" {
+            results.sort_by(|a, b| {
+                match b.2.partial_cmp(&a.2) {
+                    Some(ordering) => ordering,
+                    None => std::cmp::Ordering::Equal
+                }
+            });
+        } else {
+            results.sort_by(|a, b| {
+                match a.2.partial_cmp(&b.2) {
+                    Some(ordering) => ordering,
+                    None => std::cmp::Ordering::Equal
+                }
+            });
+        }
         
-        for (j, class) in results {
-            if class != 2 {
-                self.feature_class.insert(j, class);
-                self.feature_selection.push(j);
-            }
+        let mut class_0_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 0).collect();
+        let mut class_1_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 1).collect();
+
+        if  param.data.features_maximal_number_per_class != 0 && class_0_features.len() <  param.data.features_maximal_number_per_class {
+            warn!("Class {:?} has only {} significant features ! All features kept for this class.", self.classes[0], class_0_features.len());
+        } else if   param.data.features_maximal_number_per_class != 0 && class_0_features.len() >=  param.data.features_maximal_number_per_class {
+            class_0_features.truncate(param.data.features_maximal_number_per_class);
+        } 
+        if  param.data.features_maximal_number_per_class != 0 && class_1_features.len() <  param.data.features_maximal_number_per_class {
+            warn!("Class {:?} has only {} significant features ! All features kept for this class.", self.classes[1], class_1_features.len());
+        } else if   param.data.features_maximal_number_per_class != 0 && class_1_features.len() >=  param.data.features_maximal_number_per_class {
+            class_1_features.truncate(param.data.features_maximal_number_per_class);
         }
 
+        for (j, class, _) in class_0_features.into_iter().chain(class_1_features.into_iter()) {
+            self.feature_class.insert(j, class);
+            self.feature_selection.push(j);
+        }
     }
+        
 
     /// filter Data for some samples (represented by a Vector of indices)
     pub fn subset(&self, samples: Vec<usize>) -> Data {
@@ -558,35 +586,35 @@ impl fmt::Debug for Data {
         fn test_compare_classes_studentt_test_class_0() {
             let data = create_test_data();
             let result = data.compare_classes_studentt(0, 1.0, 0.0, 0.0);
-            assert_eq!(result, 0, "test feature 0 should be significantly associated with class 0");
+            assert_eq!(result, (0_u8, 0.20893746598423224), "test feature 0 should be significantly associated with class 0");
         }
 
         #[test]
         fn test_compare_classes_studentt_test_class_1() {
             let data = create_test_data();
             let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.0);
-            assert_eq!(result, 1, "test feature 1 should be significantly associated with class 1");
+            assert_eq!(result, (1_u8, 0.12215172301873412), "test feature 1 should be significantly associated with class 1");
         }
 
         #[test]
         fn test_compare_classes_studentt_test_class_2_low_mean() {
             let data = create_test_data();
             let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.95);
-            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
+            assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
         }
 
         #[test]
         fn test_compare_classes_studentt_test_class_2_low_prev() {
             let data = create_test_data();
             let result = data.compare_classes_studentt(1, 1.0, 0.95, 0.0);
-            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
+            assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
         }
 
         #[test]
         fn test_compare_classes_studentt_test_class_2_high_pval() {
             let data = create_test_data();
             let result = data.compare_classes_studentt(1, 0.00001, 0.0, 0.0);
-            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
+            assert_eq!(result, (2, 0.12215172301873412), "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
         }
 
         //#[test]
@@ -601,36 +629,35 @@ impl fmt::Debug for Data {
         fn test_compare_classes_wilcoxon_class_0() {
             let data = create_test_data();
             let result = data.compare_classes_wilcoxon(0, 1.0, 0.0, 0.0);
-            assert_eq!(result, 0, "test feature 0 should be significantly associated with class 0");
+            assert_eq!(result, (0_u8, 0.8057327908484386), "test feature 0 should be significantly associated with class 0");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_1() {
             let data = create_test_data();
             let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.0);
-            assert_eq!(result, 1, "test feature 1 should be significantly associated with class 1");
+            assert_eq!(result, (1_u8, 0.3475580367718807), "test feature 1 should be significantly associated with class 1");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_2_low_mean() {
             let data = create_test_data();
             let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.95);
-            println!("{:?}", result);
-            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
+            assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_2_low_prev() {
             let data = create_test_data();
             let result = data.compare_classes_wilcoxon(1, 1.0, 0.95, 0.0);
-            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
+            assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
         }
 
         #[test]
         fn test_compare_classes_wilcoxon_class_2_high_pval() {
             let data = create_test_data();
             let result = data.compare_classes_wilcoxon(1, 0.00001, 0.0, 0.0);
-            assert_eq!(result, 2, "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
+            assert_eq!(result, (2, 0.3475580367718807), "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
         }
 
         //#[test]
@@ -641,7 +668,45 @@ impl fmt::Debug for Data {
         //}
 
     // tests for select_features
-    // need to explore ga.rs before
+    #[test]
+    fn test_select_features() {
+        let mut data = Data::new();
+        let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv");
+        let mut param = param::get("param.yaml".to_string()).unwrap();
+
+        // Test with Bayesian Fisher
+        param.data.feature_selection_method = "bayesian_fisher".to_string();
+        param.data.feature_minimal_log_abs_bayes_factor = 2.0;
+
+        data.select_features(&param);
+        assert_eq!(data.feature_selection.len(), 316, "The bayesian method should identify 316 significant features for feature_minimal_log_abs_bayes_factor=2");
+        
+        // Test reduced number
+        param.data.features_maximal_number_per_class = 1;
+        data.select_features(&param);
+        assert_eq!(data.feature_selection.len(), 2, "Incorrect number of selected features : select only one feature per class should lead to 2 selected features");
+        assert_eq!(data.feature_selection, vec![473, 1313], "Incorrect selected features : the result differs from the past and from the original script result.");
+
+        // Test with Studentt
+        param.data.feature_selection_method = "studentt".to_string();
+        param.data.features_maximal_number_per_class = 0;
+        param.data.feature_maximal_pvalue = 0.05;
+        param.data.feature_minimal_feature_value = 0.0001;
+        param.data.feature_minimal_prevalence_pct = 0.0;
+
+        data.select_features(&param);
+        assert_eq!(data.feature_selection.len(), 195, "The student-based preselection method should identify 316 significant features for feature_minimal_log_abs_bayes_factor=2");
+
+        // Test with Wilcoxon
+        param.data.feature_selection_method = "wilcoxon".to_string();
+        param.data.features_maximal_number_per_class = 0;
+        param.data.feature_maximal_pvalue = 0.05;
+        param.data.feature_minimal_feature_value = 0.0001;
+        param.data.feature_minimal_prevalence_pct = 0.0;
+
+        data.select_features(&param);
+        assert_eq!(data.feature_selection.len(), 348, "The wilcoxon-based preselection should identify 348 significant features for feature_minimal_log_abs_bayes_factor=2");
+    }
 
     // tests for subset
     #[test]

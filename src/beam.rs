@@ -149,36 +149,20 @@ fn select_features_from_best(best_pop: &Population, very_best_pop: &Population, 
     features
 }
 
-pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, language:u8, data_type:u8, param: &Param) -> Individual {
-    let mut feature_counts = HashMap::new();
-
-    for (&(sample_idx, feature_idx), &value) in &data.X {
-        if !significant_features.contains(&feature_idx) {
-            continue;
-        }
-
-        let response = match data.y.get(sample_idx) {
-            Some(0) => 0,
-            Some(1) => 1,
-            _ => continue,
-        };
-
-        let entry = feature_counts.entry(feature_idx).or_insert([0.0, 0.0]);
-        entry[response] += value;
-    }
-
+pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Param) -> Individual {
     let mut features = HashMap::new();
-
-    for (&feature_idx, &counts) in &feature_counts {
-        if counts[0] > counts[1] && language != 0 {
-            features.insert(feature_idx, -1);
-        } else if counts[1] > counts[0] || language == 0 {
-            features.insert(feature_idx, 1);
-        } else {
-            features.insert(feature_idx, 0);
+    for &feature_idx in &data.feature_selection {
+        if let Some(&feature_class) = data.feature_class.get(&feature_idx) {
+            let coefficient = if feature_class == 0 {
+                if language != 0 { -1 } else { 0 }
+            } else {
+                1
+            };
+            
+            features.insert(feature_idx, coefficient);
         }
     }
-
+    
     Individual {
         features: features.clone(),
         auc: 0.0,
@@ -193,7 +177,7 @@ pub fn generate_individual(data: &Data, significant_features: &Vec<usize>, langu
         data_type: data_type,
         hash: 0,
         data_type_minimum: param.general.data_type_epsilon,
-        parents : None
+        parents: None
     }
 }
 
@@ -229,12 +213,10 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
     // Feature preselection
     data.select_features(&param);
-    let features_index = data.feature_selection.clone();
-
     let languages: Vec<u8> = param.general.language.split(",").map(language).collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
 
-    let initial_combinations = generate_combinations(&features_index, param.beam.kmin);
+    let initial_combinations = generate_combinations(&data.feature_selection, param.beam.kmin);
     let mut combinations = initial_combinations.clone();
 
     let mut pop = Population::new();
@@ -244,7 +226,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         // Ignore pow2 language as beam algorithm has not (yet?) the ability to explore coefficient
         if *language != 2 as u8 {
             for data_type in &data_types {
-                let ind = generate_individual(&data, &features_index, *language, *data_type, &param);
+                let ind = generate_individual(&data, *language, *data_type, &param);
                 lang_and_type_pop.individuals.push(ind);
             }
         }
@@ -277,10 +259,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         } 
     }  else {
         debug!("Computing penalized AUC...");
-        pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
-        if param.ga.keep_all_generations {
-            pop.compute_all_metrics(&data);
-        }
+        pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.ga.keep_all_generations);
     }
 
     pop = pop.sort();
@@ -351,10 +330,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                 } 
             }  else {
                 debug!("Computing penalized AUC...");
-                pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number);
-                if param.ga.keep_all_generations {
-                    pop.compute_all_metrics(&data);
-                }
+                pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.ga.keep_all_generations);
             }
 
             debug!("Sorting population...");

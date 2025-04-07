@@ -9,8 +9,6 @@ use std::mem;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use std::cmp::max;
-use std::collections::HashMap;
-use log::debug;
 
 pub struct Population {
     pub individuals: Vec<Individual>
@@ -93,7 +91,7 @@ impl Population {
     }
     
 
-    pub fn auc_fit(&mut self, data: &Data, k_penalty: f64, thread_number: usize) {
+    pub fn auc_fit(&mut self, data: &Data, k_penalty: f64, thread_number: usize, compute_metrics: bool) {
         // Create a custom thread pool with 4 threads
         let pool = ThreadPoolBuilder::new()
             .num_threads(thread_number)
@@ -105,13 +103,18 @@ impl Population {
             self.individuals
                 .par_iter_mut()
                 .for_each(|i| {
-                    i.fit = i.compute_auc(data) - i.k as f64 * k_penalty;
+                    if compute_metrics {
+                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics(&data);
+                    } else {
+                        let auc = i.compute_auc(data);
+                    }
+                    i.fit = i.auc - i.k as f64 * k_penalty;
                 });
         });
     }
     
     pub fn auc_nooverfit_fit(& mut self, data: &Data, k_penalty: f64, test_data: &Data, overfit_penalty: f64,
-            thread_number: usize) {
+            thread_number: usize, compute_metrics: bool) {
         // Create a custom thread pool with 4 threads
         let pool = ThreadPoolBuilder::new()
             .num_threads(thread_number)
@@ -123,9 +126,13 @@ impl Population {
             self.individuals
                 .par_iter_mut()
                 .for_each(|i| {
-                    let test_auc = i.compute_auc(test_data);
-                    let auc= i.compute_auc(data);
-                    i.fit = auc - i.k as f64 * k_penalty - (auc-test_auc).abs() * overfit_penalty;
+                    let test_auc = i.compute_new_auc(test_data);
+                    if compute_metrics {
+                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics(&data);
+                    } else {
+                        let auc = i.compute_auc(data);
+                    }
+                    i.fit = i.auc - i.k as f64 * k_penalty - (i.auc-test_auc).abs() * overfit_penalty;
                 });
         });
     }
@@ -293,41 +300,6 @@ impl Population {
             .find_any(|ind| ind.hash == hash)
     }
 
-    pub fn get_genealogy(ind: Individual, collection: &Vec<Population>, current_genealogy: Option<HashMap<(u64, Option<Vec<u64>>), usize>>, max_depth:usize) -> HashMap<(u64, Option<Vec<u64>>), usize> {
-        // This function requires the epoch to be computationally feasible.
-        // It returns a HashMap composed of elements like this: (Ind.hash, Vec(Ind.parents.hash)), n
-        // Here, n represents the distance from the source Individual.
-        // Important: If an individual is both the grandparent and the parent of the source, n will be the larger value (so here, n=2).
-        let mut genealogy = current_genealogy.unwrap_or_else(|| {
-            let mut map = HashMap::new();
-            map.insert((ind.hash, ind.parents.clone()), 0);
-            debug!("Computing genealogy (maximum depth = {:?})...", max_depth);
-            map
-        });
-    
-
-        if let Some(parents) = &ind.parents {
-            let oldest_gen = *genealogy.get(&(ind.hash, ind.parents.clone())).unwrap_or(&0) + 1;
-
-            for parent_hash in parents {
-                // An ancestor can not be from the future (normally)
-                for population in &collection[0..ind.epoch] {
-                    if let Some(ancestor) = population.get_ind_from_hash(*parent_hash) {
-                        if !genealogy.contains_key(&(ancestor.hash, ancestor.parents.clone())) {
-                            genealogy.insert((ancestor.hash, ancestor.parents.clone()), oldest_gen);
-                            if oldest_gen+1 <= max_depth {
-                                genealogy = Population::get_genealogy(ancestor.clone(), collection, Some(genealogy), max_depth);
-                            }
-                            break
-                        }   
-                    }
-                }
-            }
-        }
-    
-        genealogy
-    }
-
 }
 
 use std::fmt;
@@ -475,8 +447,8 @@ mod tests {
         let mut pop_1ind = Population::new();
         pop_1ind.individuals.push(pop.individuals[0].clone());
 
-        pop.auc_fit(&data, 10.0, 4);
-        pop_clone.auc_fit(&data, 10.0, 1);
+        pop.auc_fit(&data, 10.0, 4, false);
+        pop_clone.auc_fit(&data, 10.0, 1, false);
         
         for i in 0..pop.individuals.len(){
             assert_eq!(pop.individuals[i].compute_auc(&data)- pop.individuals[i].k as f64 * 10.0, pop.individuals[i].fit, 
@@ -485,7 +457,7 @@ mod tests {
             "mono- and multi- thread should lead to the same final result");
         }
         
-        pop_1ind.auc_fit(&data, 10.0, 4);
+        pop_1ind.auc_fit(&data, 10.0, 4, false);
         assert_eq!(pop_1ind.individuals[0].fit, pop.individuals[0].fit, 
         "fitting should work for a Population composed of only one Individual");
     }
@@ -499,8 +471,8 @@ mod tests {
         let mut pop_1ind = Population::new();
         pop_1ind.individuals.push(pop.individuals[0].clone());
 
-        pop.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 4);
-        pop_clone.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 1);
+        pop.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 4, false);
+        pop_clone.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 1, false);
         
         for i in 0..pop.individuals.len(){
             assert_eq!(pop.individuals[i].compute_auc(&data_disc) - pop.individuals[i].k as f64 * 10.0 - (pop.individuals[i].compute_auc(&data_disc) - pop.individuals[i].compute_auc(&data_valid)).abs() * 20.0,
@@ -509,7 +481,7 @@ mod tests {
             "mono- and multi- thread should lead to the same final result");
         }
         
-        pop_1ind.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 1);
+        pop_1ind.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 1, false);
         assert_eq!(pop_1ind.individuals[0].fit, pop.individuals[0].fit, 
         "fitting should work for a Population composed of only one Individual");
     }
@@ -521,8 +493,8 @@ mod tests {
         let mut pop1 = create_test_population();
         let mut pop2 = create_test_population();
 
-        pop1.auc_fit(&data_disc, 10.0, 4);
-        pop2.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 4);
+        pop1.auc_fit(&data_disc, 10.0, 4, false);
+        pop2.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 4, false);
 
         for i in 1..pop1.individuals.len(){
             assert!(pop1.individuals[i].fit >= pop2.individuals[i].fit, "reducing the overfit should lead to better fit")
@@ -735,155 +707,4 @@ mod tests {
         let pop = create_test_population();
         assert_eq!(pop.get_ind_from_hash(3).unwrap().hash, 3, "Wrong individual selected");
     }
-
-    #[test]
-    fn test_get_genealogy() {
-        // This function should return this tree:
-        //         10
-        //         / \
-        //        1   2
-        //       / \   \
-        //      3   4   5
-        //     /   / \ 
-        //    6   7   8
-        //   /
-        //  9
-
-        let mut real_tree: HashMap<(u64, Option<Vec<u64>>), usize> = HashMap::new();
-        real_tree.insert((10, Some(vec![1, 2])), 0);
-        real_tree.insert((1, Some(vec![3, 4])), 1);
-        real_tree.insert((2, Some(vec![5])), 1);
-        real_tree.insert((3, Some(vec![6])), 2);
-        real_tree.insert((4, Some(vec![7, 8])), 2);
-        real_tree.insert((5, None), 2);
-        real_tree.insert((6, Some(vec![9])), 3);
-        real_tree.insert((7, None), 3);
-        real_tree.insert((8, None), 3);
-        real_tree.insert((9, None), 4);
-        
-        let mut pop: Population = create_test_population();
-        let mut gen_0 = Population::new();
-        let mut gen_1  = Population::new();
-        let mut gen_2  = Population::new();
-        let mut gen_3  = Population::new();
-        let mut gen_4  = Population::new();
-        pop.individuals[0].hash = 10;
-        pop.individuals[0].parents = Some(vec![1, 2]);
-        pop.individuals[1].parents = Some(vec![3, 4]);
-        pop.individuals[2].parents = Some(vec![5]);
-        pop.individuals[3].parents = Some(vec![6]);
-        pop.individuals[4].parents = Some(vec![7, 8]);
-        pop.individuals[6].parents = Some(vec![9]);
-
-        for (i, epoch) in [4, 3, 3, 2, 2, 2, 1, 1, 1, 0].iter().enumerate() {
-            pop.individuals[i].epoch = *epoch;
-        }
-        gen_0.individuals = vec![pop.individuals[9].clone()];
-        gen_1.individuals = vec![pop.individuals[6].clone(), pop.individuals[7].clone(), pop.individuals[8].clone()];
-        gen_2.individuals = vec![pop.individuals[5].clone(), pop.individuals[4].clone(), pop.individuals[3].clone()];
-        gen_3.individuals = vec![pop.individuals[2].clone(), pop.individuals[1].clone()]; 
-        gen_4.individuals = vec![pop.individuals[0].clone()]; 
-
-        let collection = vec![gen_0, gen_1, gen_2, gen_3, gen_4];
-        assert_eq!(Population::get_genealogy(collection[4].individuals[0].clone(), &collection, None, 15), real_tree, "Generated tree is broken");
-
-        // Same but with real hash
-        let mut real_tree2: HashMap<(u64, Option<Vec<u64>>), usize> = HashMap::new();
-        real_tree2.insert((13776636996568204467, Some(vec![8310551554976651538, 15701002319609139959])), 0);
-        real_tree2.insert((8310551554976651538, Some(vec![8712745243790315600, 5577107020388865403])), 1);
-        real_tree2.insert((15701002319609139959, Some(vec![573762283934476040])), 1);
-        real_tree2.insert((8712745243790315600, Some(vec![8225502949628013706])), 2);
-        real_tree2.insert((5577107020388865403, Some(vec![212344198819259482, 16067238433084305925])), 2);
-        real_tree2.insert((573762283934476040, None), 2);
-        real_tree2.insert((8225502949628013706, Some(vec![9859973499533993323])), 3);
-        real_tree2.insert((212344198819259482, None), 3);
-        real_tree2.insert((16067238433084305925, None), 3);
-        real_tree2.insert((9859973499533993323, None), 4);
-
-        let mut pop2 = create_test_population();
-        pop2.compute_hash();
-        pop2.individuals[0].parents = Some(vec![8310551554976651538, 15701002319609139959]);
-        pop2.individuals[1].parents = Some(vec![8712745243790315600, 5577107020388865403]);
-        pop2.individuals[2].parents = Some(vec![573762283934476040]);
-        pop2.individuals[3].parents = Some(vec![8225502949628013706]);
-        pop2.individuals[4].parents = Some(vec![212344198819259482, 16067238433084305925]);
-        pop2.individuals[6].parents = Some(vec![9859973499533993323]);
-
-        for (i, epoch) in [4, 3, 3, 2, 2, 2, 1, 1, 1, 0].iter().enumerate() {
-            pop2.individuals[i].epoch = *epoch;
-        }
-        let mut gen_0 = Population::new();
-        let mut gen_1  = Population::new();
-        let mut gen_2  = Population::new();
-        let mut gen_3  = Population::new();
-        let mut gen_4  = Population::new();
-        gen_0.individuals = vec![pop2.individuals[9].clone()];
-        gen_1.individuals = vec![pop2.individuals[6].clone(), pop2.individuals[7].clone(), pop2.individuals[8].clone()];
-        gen_2.individuals = vec![pop2.individuals[5].clone(), pop2.individuals[4].clone(), pop2.individuals[3].clone()];
-        gen_3.individuals = vec![pop2.individuals[2].clone(), pop2.individuals[1].clone()];
-        gen_4.individuals = vec![pop2.individuals[0].clone()];
-
-        let collection = vec![gen_0, gen_1, gen_2, gen_3, gen_4];
-        assert_eq!(Population::get_genealogy(collection[4].individuals[0].clone(), &collection, None, 15), real_tree2, "Generated tree is broken");
-
-        // What about consanguinity?
-        // This function should return this tree:
-        //         10
-        //         / \
-        // 11,7,8---1   2
-        //  &/   / \ / \
-        //  |   3   4   5---
-        //  |  / \ / \ /    \
-        //  | 6   7   8      \ 
-        //  |/                \
-        //  9                  9               
-        let mut real_tree: HashMap<(u64, Option<Vec<u64>>), usize> = HashMap::new();
-        real_tree.insert((10, Some(vec![1, 2])), 0);
-        real_tree.insert((1, Some(vec![3, 4, 7, 8, 9, 11])), 1);
-        real_tree.insert((2, Some(vec![4, 5])), 1);
-        real_tree.insert((3, Some(vec![6, 7])), 2);
-        real_tree.insert((4, Some(vec![7, 8])), 2);
-        real_tree.insert((5, Some(vec![8, 9])), 2);
-        real_tree.insert((6, Some(vec![9])), 3);
-        real_tree.insert((7, None), 3);
-        real_tree.insert((8, None), 3);
-        real_tree.insert((9, None), 4);  // both parent of 1 and grand-grand-parent of 1 -> oldest generation is returned
-        real_tree.insert((11, None), 2); // parent of 1
-        
-        let mut pop: Population = create_test_population();
-        let mut gen_0 = Population::new();
-        let mut gen_1  = Population::new();
-        let mut gen_2  = Population::new();
-        let mut gen_3  = Population::new();
-        let mut gen_4  = Population::new();
-        pop.individuals[0].hash = 10;
-        pop.individuals[0].parents = Some(vec![1, 2]);
-        pop.individuals[1].parents = Some(vec![3, 4, 7, 8, 9, 11]);
-        pop.individuals[2].parents = Some(vec![4, 5]);
-        pop.individuals[3].parents = Some(vec![6, 7]);
-        pop.individuals[4].parents = Some(vec![7, 8]);
-        pop.individuals[5].parents = Some(vec![8, 9]);
-        pop.individuals[6].parents = Some(vec![9]);
-
-        for (i, epoch) in [4, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0].iter().enumerate() {
-            pop.individuals[i].epoch = *epoch;
-        }
-        pop.individuals[10].hash = 11;
-        gen_0.individuals = vec![pop.individuals[9].clone(), pop.individuals[10].clone()];
-        gen_1.individuals = vec![pop.individuals[6].clone(), pop.individuals[7].clone(), pop.individuals[8].clone()];
-        gen_2.individuals = vec![pop.individuals[5].clone(), pop.individuals[4].clone(), pop.individuals[3].clone()];
-        gen_3.individuals = vec![pop.individuals[2].clone(), pop.individuals[1].clone()]; 
-        gen_4.individuals = vec![pop.individuals[0].clone()]; 
-
-        let collection = vec![gen_0, gen_1, gen_2, gen_3, gen_4];
-        assert_eq!(Population::get_genealogy(collection[4].individuals[0].clone(), &collection, None, 15), real_tree, "Generated tree is broken");
-
-        // Max depth test
-        let mut real_tree: HashMap<(u64, Option<Vec<u64>>), usize> = HashMap::new();
-        real_tree.insert((10, Some(vec![1, 2])), 0);
-        real_tree.insert((1, Some(vec![3, 4, 7, 8, 9, 11])), 1);
-        real_tree.insert((2, Some(vec![4, 5])), 1);
-        assert_eq!(Population::get_genealogy(collection[4].individuals[0].clone(), &collection, None, 1), real_tree, "Max_depth should limit the ancestors");
-    }
-
 }

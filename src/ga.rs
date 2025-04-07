@@ -66,7 +66,7 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                 }
             }
         } else {
-            warn!("Something is broken with GA no-overfit AUC");
+            warn!("Be careful: Train AUC is currently wrong calculated when overfit_penalty>0.0 in GA.");
             let t_assay = test_assay.as_ref().unwrap();
             let test_data = test_data.as_mut().unwrap();
             let scores:Vec<f64> = assay.compute_scores(&pop.individuals, param.general.data_type_epsilon as f32)
@@ -119,10 +119,11 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
         }
     }
     else {
+
         if param.general.overfit_penalty == 0.0 {
             match param.general.fit {
                 FitFunction::auc => {
-                    pop.auc_fit(data, param.general.k_penalty, param.general.thread_number);
+                    pop.auc_fit(data, param.general.k_penalty, param.general.thread_number, param.ga.keep_all_generations);
                 },
                 FitFunction::sensitivity => {
                     pop.objective_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
@@ -135,10 +136,11 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
             } 
         } 
         else {
+            warn!("Be careful: Train AUC is currently wrong calculated when overfit_penalty>0.0 in GA.");
             let test_data = test_data.as_mut().unwrap();
             match param.general.fit {
                 FitFunction::auc => {
-                    pop.auc_nooverfit_fit(data, param.general.k_penalty, test_data, param.general.overfit_penalty, param.general.thread_number);
+                    pop.auc_nooverfit_fit(data, param.general.k_penalty, test_data, param.general.overfit_penalty, param.general.thread_number, param.ga.keep_all_generations);
                 },
                 FitFunction::sensitivity => {
                     pop.objective_nooverfit_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
@@ -303,6 +305,7 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
 
     let elapsed = time.elapsed();
         info!("Genetic algorithm computed {:?} generations in {:.2?}", populations.len(), elapsed);
+
     populations
     
 }
