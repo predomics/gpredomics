@@ -65,6 +65,8 @@ pub struct Data {
     pub Xtest: String,
     #[serde(default = "empty_string")]                     
     pub ytest: String,
+    #[serde(default = "features_maximal_number_per_class_default")]                      
+    pub features_maximal_number_per_class: usize,
     #[serde(default = "feature_selection_method_default")]                      
     pub feature_selection_method: String,
     #[serde(default = "feature_minimal_prevalence_pct_default")]                     
@@ -191,6 +193,7 @@ fn empty_string() -> String { "".to_string() }
 fn min_epochs_default() -> usize { 10 }
 fn max_age_best_model_default() -> usize { 10 }
 fn algorithm_default() -> String { "ga".to_string() }
+fn features_maximal_number_per_class_default() -> usize { 0 }
 fn feature_selection_method_default() -> String { "wilcoxon".to_string() }
 fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
 fn feature_maximal_pvalue_default() -> f64 { 0.5 }
