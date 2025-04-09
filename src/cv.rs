@@ -109,7 +109,7 @@ impl CV {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{SeedableRng};
+    use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
     use std::collections::HashMap;
 

@@ -67,8 +67,8 @@ fn main() {
     info!("Signal handler thread started. Send `kill -1 {}` to stop the application.", std::process::id());
     info!("Signal registration state is {}",running_clone.load(Ordering::Relaxed));
 
-    if param.ga.keep_all_generations {
-        warn!("Metrics computation and conservation for GpredomicsR while fitting on sensitivity/specificity is not implemented yet.")
+    if param.general.keep_all_generations {
+        warn!("Metrics computation for GpredomicsR while fitting on sensitivity/specificity is not implemented yet.")
     }
 
     let sub_thread = thread::spawn(move || {

@@ -16,6 +16,7 @@ general:
   display_colorful: true                     # should the terminal results be coloured to make them easier to read?  
   log_level: debug                           # possible values are trace, debug, info, warning or error 
   #log_base: "log_file_name"                 # uncomment to print log and results in log_file_name
+  keep_all_generations: false                 # keep this setting to false when using gpredomics as a binary
 
 cv:
   fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
@@ -27,7 +28,7 @@ data:
   ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
   features_maximal_number_per_class: 0       # 0: all significant features ; else first X significant features (per class!) sorted according to their pvalue/log_abs_bayes_factor
   feature_selection_method: wilcoxon         # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
-  feature_minimal_prevalence_pct: 10          # per class, e.g. features are retained if any of the class reaches this level
+  feature_minimal_prevalence_pct: 10         # per class, e.g. features are retained if any of the class reaches this level
   feature_maximal_pvalue: 0.05               # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_feature_value: 0.0001      # features which mean is below that value are discarded
   feature_minimal_log_abs_bayes_factor: 2    # features with a fewer log absolute bayes factor will be removed (bayesian method only)
@@ -50,8 +51,7 @@ ga:
   mutated_features_pct: 10                   # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
   mutation_non_null_chance_pct: 20           # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
   feature_importance_permutations: 100       # not used in ga (used in experimental "don't use me" "ga+cv" algorithm)
-  keep_all_generations: true                 # keep this setting to false when using gpredomics as a binary
-
+  
 beam:
   method: exhaustive                         # exhaustive: generate all combinations (k out of features_to_keep). extend: increment each extendable_models of each 1 feature from features_to_keep.
   kmin: 1                                    # the number of variables used in the initial population
@@ -59,4 +59,5 @@ beam:
   best_models_ci_alpha: 1e-10                # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
   features_importance_minimal_pct: 10.0      # the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch
   very_best_models_pct: 10.0                 # the % of best models where all variables are features_to_keep 
-  extendable_models: 100                     # best_models number to increment with each feature_to_keep in extend mode.
+  max_nb_of_models: 5000                     # (exhaustive mode) limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance)
+  extendable_models: 100                     # (extend mode) best_models number to increment with each feature_to_keep

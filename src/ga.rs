@@ -36,7 +36,7 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                             .par_iter_mut()
                             .enumerate()
                             .for_each(|(n,i)| {
-                                if param.ga.keep_all_generations {
+                                if param.general.keep_all_generations {
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
                                 } else {
                                     i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
@@ -81,7 +81,7 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
                             .enumerate()
                             .for_each(|(n,i)| {
                                 let test_auc = i.compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
-                                if param.ga.keep_all_generations {
+                                if param.general.keep_all_generations {
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
                                 } else {
                                     i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
@@ -123,7 +123,7 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
         if param.general.overfit_penalty == 0.0 {
             match param.general.fit {
                 FitFunction::auc => {
-                    pop.auc_fit(data, param.general.k_penalty, param.general.thread_number, param.ga.keep_all_generations);
+                    pop.auc_fit(data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
                 },
                 FitFunction::sensitivity => {
                     pop.objective_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
@@ -140,7 +140,7 @@ fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data>, g
             let test_data = test_data.as_mut().unwrap();
             match param.general.fit {
                 FitFunction::auc => {
-                    pop.auc_nooverfit_fit(data, param.general.k_penalty, test_data, param.general.overfit_penalty, param.general.thread_number, param.ga.keep_all_generations);
+                    pop.auc_nooverfit_fit(data, param.general.k_penalty, test_data, param.general.overfit_penalty, param.general.thread_number, param.general.keep_all_generations);
                 },
                 FitFunction::sensitivity => {
                     pop.objective_nooverfit_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
@@ -293,7 +293,7 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
         }
         new_pop.add(children);
 
-        if param.ga.keep_all_generations {
+        if param.general.keep_all_generations {
             populations.push(pop);
         }
         else {
