@@ -821,6 +821,11 @@ impl Individual {
     pub fn get_genealogy(&self, collection: &Vec<Population>, max_depth: usize) -> HashMap<(u64, Option<Vec<u64>>), HashSet<usize>> {
         let mut genealogy: HashMap<(u64, Option<Vec<u64>>), HashSet<usize>> = HashMap::with_capacity(max_depth * 2);
         let mut initial_set = HashSet::new();
+
+        if collection.is_empty() {
+            return genealogy
+        }
+
         initial_set.insert(0);
         genealogy.insert((self.hash, self.parents.clone()), initial_set);
         
@@ -1806,6 +1811,7 @@ mod tests {
         assert_eq!(collection[4].individuals[0].get_genealogy(&collection, 1), real_tree, "Max_depth should limit ancestors");
     }
 
+    #[test]
     fn test_get_genealogy_edge_cases() {
         // Empty population
         let mut empty_population: Vec<Population> = Vec::new();
@@ -1832,6 +1838,7 @@ mod tests {
         assert!(genealogy.is_empty(), "Genealogy should be empty for max_depth set to 0");
     }
 
+    #[test]
     fn test_get_genealogy_complex() {
         // Deep Tree
         let mut deep_tree: HashMap<(u64, Option<Vec<u64>>), HashSet<usize>> = HashMap::new();

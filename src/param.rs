@@ -54,7 +54,9 @@ pub struct General {
     #[serde(default = "display_level_default")] 
     pub display_level: usize,
     #[serde(default = "display_colorful_default")] 
-    pub display_colorful: bool
+    pub display_colorful: bool,
+    #[serde(default = "feature_keep_all_generations_default")]   
+    pub keep_all_generations: bool
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,7 +81,6 @@ pub struct Data {
     pub feature_minimal_log_abs_bayes_factor: f64, 
     #[serde(default = "class_names_default")]                      
     pub classes: Vec<String>, 
-
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -103,9 +104,6 @@ pub struct GA {
     pub mutation_non_null_chance_pct: f64,    // Chance pct that a mutation gives an non null value
     #[serde(default = "feature_importance_permutations_default")]    
     pub feature_importance_permutations: usize,
-    #[serde(default = "feature_keep_all_generations_default")]   
-    pub keep_all_generations: bool,
-
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -117,13 +115,15 @@ pub struct BEAM {
     #[serde(default = "feature_kminkmax_default")]  
     pub kmax: usize,                           // Maximum value of k
     #[serde(default = "best_models_ci_alpha_default")]
-    pub best_models_ci_alpha: f64,              // Number of very best models 
+    pub best_models_ci_alpha: f64,              
     #[serde(default = "very_best_models_pct_default")]
-    pub very_best_models_pct: f64,                   // Number of best models 
+    pub very_best_models_pct: f64,                  
     #[serde(default = "features_importance_minimal_pct_default")]
-    pub features_importance_minimal_pct: f64,                   // Number of best models 
+    pub features_importance_minimal_pct: f64,                   
+    #[serde(default = "max_nb_of_models_default")]
+    pub max_nb_of_models: u64,                   
     #[serde(default = "extendable_models_default")]
-    pub extendable_models: usize,                   // Number of best models 
+    pub extendable_models: usize,                  
 }
 
 
@@ -221,5 +221,6 @@ fn beam_method_default() -> String { "exhaustive".to_string() }
 fn best_models_ci_alpha_default() -> f64 { 0.05 }
 fn very_best_models_pct_default() -> f64 { 0.1 }
 fn features_importance_minimal_pct_default() -> f64 { 0.1 }
+fn max_nb_of_models_default() -> u64 { 10000 }
 fn extendable_models_default() -> usize { 50 }
 fn class_names_default() -> Vec<String> { Vec::new() }

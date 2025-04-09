@@ -3,7 +3,6 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::fmt;
-use crate::param;
 use crate::param::Param;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
@@ -320,6 +319,10 @@ impl Data {
             }
         }
 
+        let prev0 = class_0_present as f64 / (class_0_present+class_0_absent) as f64;
+        let prev1 = class_1_present as f64 / (class_1_present+class_1_absent) as f64;
+        if prev0 < min_prevalence && prev1 < min_prevalence { return (2_u8, 2.0) }
+
         let mean_0 = class_0_values.iter().sum::<f64>() / class_0_values.len() as f64;
         let mean_1 = class_1_values.iter().sum::<f64>() / class_1_values.len() as f64;
 
@@ -340,11 +343,8 @@ impl Data {
             }
         }
 
-    /// Fill feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
-    pub fn select_features(&mut self, param: &Param) {
-        self.feature_selection = Vec::new();
-        self.feature_class = HashMap::new();
-    
+    // Dissociate this function from select_features to allow its use in beam algorithm
+    pub fn evaluate_features(&self, param: &Param) -> (Vec<(usize, u8, f64)>, Vec<(usize, u8, f64)>) {
         let pool = ThreadPoolBuilder::new()
             .num_threads(param.general.thread_number)
             .build()
@@ -397,24 +397,32 @@ impl Data {
         
         let mut class_0_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 0).collect();
         let mut class_1_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 1).collect();
-
-        if  param.data.features_maximal_number_per_class != 0 && class_0_features.len() <  param.data.features_maximal_number_per_class {
+        if param.data.features_maximal_number_per_class != 0 && class_0_features.len() < param.data.features_maximal_number_per_class {
             warn!("Class {:?} has only {} significant features ! All features kept for this class.", self.classes[0], class_0_features.len());
-        } else if   param.data.features_maximal_number_per_class != 0 && class_0_features.len() >=  param.data.features_maximal_number_per_class {
+        } else if  param.data.features_maximal_number_per_class != 0 && class_0_features.len() >=  param.data.features_maximal_number_per_class {
             class_0_features.truncate(param.data.features_maximal_number_per_class);
         } 
-        if  param.data.features_maximal_number_per_class != 0 && class_1_features.len() <  param.data.features_maximal_number_per_class {
+        if param.data.features_maximal_number_per_class != 0 && class_1_features.len() < param.data.features_maximal_number_per_class {
             warn!("Class {:?} has only {} significant features ! All features kept for this class.", self.classes[1], class_1_features.len());
-        } else if   param.data.features_maximal_number_per_class != 0 && class_1_features.len() >=  param.data.features_maximal_number_per_class {
+        } else if  param.data.features_maximal_number_per_class != 0 && class_1_features.len() >=  param.data.features_maximal_number_per_class {
             class_1_features.truncate(param.data.features_maximal_number_per_class);
         }
+
+        (class_0_features, class_1_features)
+    }
+        
+    /// Fill feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
+    pub fn select_features(&mut self, param: &Param) {
+        self.feature_selection = Vec::new();
+        self.feature_class = HashMap::new();
+
+        let (class_0_features, class_1_features) = self.evaluate_features(param);
 
         for (j, class, _) in class_0_features.into_iter().chain(class_1_features.into_iter()) {
             self.feature_class.insert(j, class);
             self.feature_selection.push(j);
         }
     }
-        
 
     /// filter Data for some samples (represented by a Vector of indices)
     pub fn subset(&self, samples: Vec<usize>) -> Data {
@@ -522,6 +530,7 @@ impl fmt::Debug for Data {
 #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::param;
         use sha2::{Sha256, Digest};
         use std::collections::{BTreeMap, HashMap};
 
@@ -673,11 +682,13 @@ impl fmt::Debug for Data {
         let mut data = Data::new();
         let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv");
         let mut param = param::get("param.yaml".to_string()).unwrap();
+        param.data.features_maximal_number_per_class = 0;
 
         // Test with Bayesian Fisher
         param.data.feature_selection_method = "bayesian_fisher".to_string();
         param.data.feature_minimal_log_abs_bayes_factor = 2.0;
 
+        param.data.feature_minimal_prevalence_pct = 0.0;
         data.select_features(&param);
         assert_eq!(data.feature_selection.len(), 316, "The bayesian method should identify 316 significant features for feature_minimal_log_abs_bayes_factor=2");
         
@@ -695,7 +706,7 @@ impl fmt::Debug for Data {
         param.data.feature_minimal_prevalence_pct = 0.0;
 
         data.select_features(&param);
-        assert_eq!(data.feature_selection.len(), 195, "The student-based preselection method should identify 316 significant features for feature_minimal_log_abs_bayes_factor=2");
+        assert_eq!(data.feature_selection.len(), 195, "The student-based preselection method should identify 195 significant features for feature_minimal_log_abs_bayes_factor=2");
 
         // Test with Wilcoxon
         param.data.feature_selection_method = "wilcoxon".to_string();

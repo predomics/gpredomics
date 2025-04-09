@@ -36,7 +36,7 @@ impl Population {
 
     pub fn display(&mut self, data: &Data, data_to_test: Option<&Data>, param: &Param) -> String {
         let limit:u32;
-        if (self.individuals.len() as u32) < param.general.nb_best_model_to_test {
+        if (self.individuals.len() as u32) < param.general.nb_best_model_to_test || param.general.nb_best_model_to_test == 0 {
             limit = self.individuals.len() as u32
         } else {
             limit = param.general.nb_best_model_to_test
@@ -44,7 +44,7 @@ impl Population {
 
         let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
         for i in 0..=(limit-1) as usize {
-            if param.ga.keep_all_generations == false {
+            if param.general.keep_all_generations == false {
                 (_, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_roc_and_metrics(data);
             }
             if param.general.display_colorful == true && param.general.log_base == "" {
@@ -106,7 +106,7 @@ impl Population {
                     if compute_metrics {
                         (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics(&data);
                     } else {
-                        let auc = i.compute_auc(data);
+                        let _auc = i.compute_auc(data);
                     }
                     i.fit = i.auc - i.k as f64 * k_penalty;
                 });
@@ -130,7 +130,7 @@ impl Population {
                     if compute_metrics {
                         (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics(&data);
                     } else {
-                        let auc = i.compute_auc(data);
+                        let _auc = i.compute_auc(data);
                     }
                     i.fit = i.auc - i.k as f64 * k_penalty - (i.auc-test_auc).abs() * overfit_penalty;
                 });

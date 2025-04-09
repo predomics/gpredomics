@@ -1,6 +1,9 @@
 // BE CAREFUL : the adaptation of the Predomics beam algorithm for Gpredomics is still under development
 use crate::cv::CV;
 use crate::gpu::GpuAssay;
+use crate::individual::BINARY_LANG;
+use crate::individual::RATIO_LANG;
+use crate::individual::TERNARY_LANG;
 use crate::population::Population;
 use crate::individual::language;
 use crate::individual::data_type;
@@ -10,7 +13,7 @@ use crate::param::Param;
 use crate::ga::remove_stillborn;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use log::{debug,info,warn};
+use log::{debug,info,warn,error};
 use std::sync::atomic::{AtomicBool, Ordering};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -71,21 +74,30 @@ fn combine_with_best(best_combinations: Vec<Vec<usize>>, features: &Vec<usize>) 
     unique_combinations.into_iter().collect()
 }
 
-// fn factorial(n: u64) -> u64 {
-//     if n == 0 {
-//         1
-//     } else {
-//         (1..=n).product()
-//     }
-// }
+fn binomial_coefficient(n: u64, k: u64) -> u64 {
+    if k > n {
+        return 0;
+    }
+    let k = if k > n / 2 { n - k } else { k };
+    
+    let mut result = 1u64;
+    for i in 0..k {
+        result = result * (n - i) / (i + 1);
+    }
+    result
+}
 
-// fn binomial_coefficient(n: u64, k: u64) -> u64 {
-//     if k > n {
-//         0
-//     } else {
-//         factorial(n) / (factorial(k) * factorial(n - k))
-//     }
-// }
+fn max_n_for_combinations(k: u64, target: u64) -> u64 {
+    let mut n = k;
+    loop {
+        let combinations = binomial_coefficient(n, k);
+        if combinations > target {
+            break;
+        }
+        n += 1;
+    }
+    n - 1
+}
 
 fn beam_pop_from_combinations(features_combination: Vec<Vec<usize>>, ind:Individual) -> Population {
     let ind_vec: Vec<Individual> = features_combination.into_par_iter()
@@ -213,7 +225,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
     // Feature preselection
     data.select_features(&param);
-    let languages: Vec<u8> = param.general.language.split(",").map(language).collect();
+    let mut languages: Vec<u8> = param.general.language.split(",").map(language).collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
 
     let initial_combinations = generate_combinations(&data.feature_selection, param.beam.kmin);
@@ -236,9 +248,13 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals)
     }
 
-    let n_unvalid = remove_stillborn(&mut pop) as usize;
-    if n_unvalid>0 { warn!("Some stillborn are presents: {}", n_unvalid) }
-
+    if param.beam.kmin == 1 && (!languages.contains(&BINARY_LANG)) {
+        warn!("Generating a population of non-binary Individuals with only one feature only results in stillborns. To prevent a panic, all Individuals will be retained for this iteration.")
+    } else {
+        let n_unvalid = remove_stillborn(&mut pop) as usize;
+        if n_unvalid>0 { warn!("{} stillborns removed", n_unvalid) }
+    }
+    
     // // Cross-validation initialisation
     // let (mut run_test_data, run_data): (Option<Data>,Option<Data>) = if param.general.overfit_penalty>0.0 {
     //     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
@@ -254,20 +270,19 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     if let Some(ref cv) = cv {
         debug!("Computing penalized AUC (with cross-validation)...");
         pop.fit_on_folds(&data, cv, &param);
-        if param.ga.keep_all_generations {
+        if param.general.keep_all_generations {
             pop.compute_all_metrics(&data);
         } 
     }  else {
         debug!("Computing penalized AUC...");
-        pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.ga.keep_all_generations);
+        pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
     }
 
     pop = pop.sort();
 
     pool.install(|| {
-
-        for ind_k in param.beam.kmin..param.beam.kmax {
-            pop.compute_hash();
+        for ind_k in param.beam.kmin+1..param.beam.kmax {
+            if param.general.keep_all_generations {pop.compute_hash()};
 
             info!("Generating models with {:?} features...", ind_k);
             debug!("[k={:?}] initial population length = {:?}", ind_k, pop.individuals.len());
@@ -277,25 +292,90 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             let best_pop = pop.select_best_population(param.beam.best_models_ci_alpha);
             let (very_best_pop, _) = best_pop.select_first_pct(param.beam.very_best_models_pct);
 
-            debug!("Kept {:?} individuals for k={:?} from the family of best models", best_pop.individuals.len(), ind_k);
-            debug!("Kept {:?} individuals for k={:?} from the family of very best models", very_best_pop.individuals.len(), ind_k);
+            debug!("Kept {:?} individuals from the family of best models of k={:?}", best_pop.individuals.len(), ind_k-1);
+            debug!("Kept {:?} individuals from the family of very best models of k={:?}", very_best_pop.individuals.len(), ind_k-1);
 
             // pertinent features to use for next combinations
-            let features_to_keep = select_features_from_best(&best_pop, &very_best_pop, param.beam.features_importance_minimal_pct);
+            let mut features_to_keep = select_features_from_best(&best_pop, &very_best_pop, param.beam.features_importance_minimal_pct);
 
             // Stop the loop to avoid a panic! if there is not enough features_to_keep
             if (features_to_keep.len() <= ind_k ) & (ind_k != 1) {
-                info!("\x1b[1;91mLimit reached : new model contains all pertinent features\x1b[0m");
+                info!("\x1b[1;91mLimit reached: new models contain all pertinent features\x1b[0m");
                 break;
             }
 
+            let (mut class_0_features, mut class_1_features) = data.evaluate_features(param);
+            class_0_features = class_0_features.iter().filter(|&&(index, _, _)| features_to_keep.contains(&index)).cloned().collect();
+            class_1_features = class_1_features.iter().filter(|&&(index, _, _)| features_to_keep.contains(&index)).cloned().collect();
+            let mut bin_combinations: Option<Vec<Vec<usize>>> = None; let mut possibilities=0;
             if param.beam.method == "exhaustive" {
                 // Generate all possible combinations between the features_to_keep
                 // Combinations are limited by features_to_keep (by param.beam.best_models_ci_alpha)
-                combinations = generate_combinations(&features_to_keep, ind_k);
+                // These features can be limited with param.beam.max_nb_of_models
+                let mut features_to_keep_neg: Vec<usize>=vec![]; let mut features_to_keep_pos: Vec<usize>=vec![]; let mut bin_features_to_keep: Vec<usize>=vec![]; 
+                possibilities = binomial_coefficient(features_to_keep.len() as u64, ind_k as u64);
+                if possibilities > param.beam.max_nb_of_models && param.beam.max_nb_of_models != 0 {
+                    let max_nb:usize = max_n_for_combinations(ind_k as u64, param.beam.max_nb_of_models as u64) as usize;
+                    features_to_keep = vec![];
+                    // For Binary languages, pick directly max_nb positive-associated features to avoid different ind_k within an iteration (like 10+10 features Ternary vs 10 features Binary for k=20)
+                    if languages.contains(&BINARY_LANG) {
+                        bin_features_to_keep = class_1_features.iter().take(max_nb).map(|&(index, _, _)| index).collect();
+                        if bin_features_to_keep.len() <= ind_k  {
+                            warn!("Limit reached for Binary: new Binary models contain all pertinent features. Binary removed for next iteration.");
+                            languages.retain(|&x| x != BINARY_LANG);
+                        }
+                    } 
+                    if languages.contains(&TERNARY_LANG) || languages.contains(&RATIO_LANG) {
+                        // ideal_nb conducts to rounding down
+                        // Always pick the higher feature count leading to stay under max_nb_of_models
+                        let ideal_nb = max_nb/2; let f0_nb = class_0_features.len() ; let f1_nb = class_1_features.len();
+                        if f0_nb < ideal_nb && f1_nb >= (ideal_nb + (ideal_nb - f0_nb)) {
+                            if max_nb > ideal_nb*2 && f1_nb >= (ideal_nb + 1 + (ideal_nb - f0_nb )){
+                                features_to_keep_neg = class_0_features.iter().take(f0_nb).map(|&(index, _, _)| index).collect();
+                                features_to_keep_pos = class_1_features.iter().take(ideal_nb + 1 + (ideal_nb - f0_nb)).map(|&(index, _, _)| index).collect();
+                            } else {
+                                features_to_keep_neg = class_0_features.iter().take(f0_nb).map(|&(index, _, _)| index).collect();
+                                features_to_keep_pos = class_1_features.iter().take(ideal_nb + (ideal_nb - f0_nb)).map(|&(index, _, _)| index).collect();
+                            }
+                        } else if f1_nb < ideal_nb && f0_nb >= (ideal_nb + (ideal_nb - f1_nb)) {
+                            if max_nb > ideal_nb*2 && f0_nb >= (ideal_nb + 1 + (ideal_nb - f1_nb)) {
+                                features_to_keep_neg = class_0_features.iter().take(ideal_nb + (ideal_nb + 1 - f1_nb)).map(|&(index, _, _)| index).collect();
+                                features_to_keep_pos = class_1_features.iter().take(f1_nb).map(|&(index, _, _)| index).collect();
+                            } else {
+                                features_to_keep_neg = class_0_features.iter().take(ideal_nb + (ideal_nb - f1_nb)).map(|&(index, _, _)| index).collect();
+                                features_to_keep_pos = class_1_features.iter().take(f1_nb).map(|&(index, _, _)| index).collect();
+                            }
+                        } else {
+                            // if ideal_nb can be reached by both or can't be, .take(ideal_nb) (if less take stops before)
+                            if max_nb > ideal_nb*2 {
+                                // if max_nb is odd, take one additionnal positive-associated feature 
+                                features_to_keep_neg = class_0_features.iter().take(ideal_nb).map(|&(index, _, _)| index).collect();
+                                features_to_keep_pos = class_1_features.iter().take(ideal_nb+1).map(|&(index, _, _)| index).collect();
+                            } else {
+                                features_to_keep_neg = class_0_features.iter().take(ideal_nb).map(|&(index, _, _)| index).collect();
+                                features_to_keep_pos = class_1_features.iter().take(ideal_nb).map(|&(index, _, _)| index).collect();
+                            }
+                        }
+                        features_to_keep = features_to_keep_neg.clone();
+                        features_to_keep.extend(features_to_keep_pos.clone()); 
+                        }
+                    if languages.contains(&BINARY_LANG) && (languages.contains(&TERNARY_LANG) || languages.contains(&RATIO_LANG)) {
+                        warn!("Too many features (leading to {} > {} models). Feature ideal count = {}. Keeping {}+{} features ({} {}-associated for Binary)", possibilities, param.beam.max_nb_of_models, max_nb, features_to_keep_neg.len(), features_to_keep_pos.len(), bin_features_to_keep.len(), data.classes[1]);
+                        combinations = generate_combinations(&features_to_keep, ind_k);
+                        bin_combinations = Some(generate_combinations(&bin_features_to_keep, ind_k));
+                    } else if languages.contains(&TERNARY_LANG) || languages.contains(&RATIO_LANG) { 
+                        warn!("Too many features (leading to {} > {} models). Feature ideal count = {}. Keeping only {}+{} features.", possibilities, param.beam.max_nb_of_models, max_nb, features_to_keep_neg.len(), features_to_keep_pos.len());
+                        combinations = generate_combinations(&features_to_keep, ind_k);
+                    } else {
+                        warn!("Too many features (leading to {} > {} models). Feature ideal count = {}. Keeping {} {}-associated features for Binary", possibilities, param.beam.max_nb_of_models, max_nb, bin_features_to_keep.len(), data.classes[1]); 
+                        bin_combinations = Some(generate_combinations(&bin_features_to_keep, ind_k));
+                    }
+                } else {
+                    combinations = generate_combinations(&features_to_keep, ind_k);
+                }
             } else if param.beam.method == "extend" {
                 // Generate new combinations Mk + 1 feature_to_keep for next step
-                // Combinations are limited both by Mk maximum (param.beam.extendable_models) and features_to_keep (param.beam.best_models_ci_alpha)
+                // Combinations are limited both by kept Mk maximum (param.beam.extendable_models) and features_to_keep (param.beam.best_models_ci_alpha)
                 // Combinations are currently generated at each epoch in each languages and data_type
                 debug!("Selecting best combinations...");
                 let mut reduced_best_pop = Population::new();
@@ -308,29 +388,43 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                 debug!("Computing new combinations with these features...");
                 combinations = combine_with_best(best_combinations.clone(), &features_to_keep);
             } else {
-                panic!("Unknown beam method");
+                error!("Unknown beam method");
             }
-            debug!("{:?} unique combinations generated (* {} language.data_type)", combinations.len(), lang_and_type_pop.individuals.len());
+            debug!("{:?} unique combinations generated (~* {} language.data_type)", combinations.len(), lang_and_type_pop.individuals.len());
 
             // Compute AUC for generated Population and sort it
             pop = Population::new();
 
             for ind in &lang_and_type_pop.individuals{
-                pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals)
+                if ind.language == BINARY_LANG && param.beam.method == "exhaustive" && possibilities > param.beam.max_nb_of_models && param.beam.max_nb_of_models != 0 {
+                    if (!bin_combinations.is_none()) && languages.contains(&BINARY_LANG){
+                        pop.individuals.extend(beam_pop_from_combinations(bin_combinations.clone().unwrap(), ind.clone()).individuals);
+                    } else {
+                        pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals);
+                    }}
+                else {
+                    pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals);
+                }
             }
-
-            let n_unvalid = remove_stillborn(&mut pop) as usize;
-            if n_unvalid>0 { warn!("Some stillborn are presents: {}", n_unvalid) }
+            
+            if param.beam.method == "exhaustive" && param.beam.max_nb_of_models != 0 && class_0_features.is_empty() {
+                if languages.contains(&TERNARY_LANG) || languages.contains(&RATIO_LANG) {
+                    warn!("All selected features are associated with class {}. Keeping stillborns to generate next iteration.", data.classes[1]);
+                }
+            } else {
+                let n_unvalid = remove_stillborn(&mut pop) as usize;
+                if n_unvalid>0 { warn!("{} stillborns removed", n_unvalid) }
+            }
 
             if let Some(ref cv) = cv {
                 debug!("Computing penalized AUC (with cross-validation)...");
                 pop.fit_on_folds(&data, cv, &param);
-                if param.ga.keep_all_generations {
+                if param.general.keep_all_generations {
                     pop.compute_all_metrics(&data);
                 } 
             }  else {
                 debug!("Computing penalized AUC...");
-                pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.ga.keep_all_generations);
+                pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
             }
 
             debug!("Sorting population...");
@@ -341,8 +435,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
             // in beam mode print every result
             collection.push(sorted_pop);
-
-            debug!("Best fit : {:?} | Associated AUC delta Train/Test : {:.6}", pop.individuals[0].fit, pop.individuals[0].auc-pop.individuals[0].compute_new_auc(&data_test));
+            debug!("Best fit : {:?} | Best AUC : {:.6}  | Delta Train/Test : {:.6}", pop.individuals[0].fit, pop.individuals[0].auc, pop.individuals[0].auc-pop.individuals[0].compute_new_auc(&data_test));
 
             // Stop the loop if someone kill the program
             if !running.load(Ordering::Relaxed) {
@@ -351,7 +444,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         }
 
         let elapsed = time.elapsed();
-        info!("Beam algorithm in {} mode computed {:?} generations in {:.2?}", param.beam.method, collection.len(), elapsed);
+        info!("Beam algorithm ({} mode) computed {:?} generations in {:.2?}", param.beam.method, collection.len(), elapsed);
 
         // Print final best models
         let mut final_pop = Population::new();
@@ -378,7 +471,7 @@ fn keep_n_best_model_within_collection(collection:&Vec<Population>, param:&Param
     all_models = all_models.sort();
 
     let best_n_pop;
-    if all_models.individuals.len() > param.general.nb_best_model_to_test as usize {
+    if all_models.individuals.len() > param.general.nb_best_model_to_test as usize && param.general.nb_best_model_to_test as usize != 0 {
         best_n_pop = Population { individuals : all_models.individuals.clone()[..param.general.nb_best_model_to_test as usize].to_vec() }
     } else {
         best_n_pop = all_models 
