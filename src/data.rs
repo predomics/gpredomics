@@ -114,8 +114,10 @@ impl Data {
         self.y = self
             .samples
             .iter()
-            .map(|sample_name| *y_map.get(sample_name).unwrap_or(&0))
-            .collect();
+            .map(|sample_name| *y_map.get(sample_name).unwrap_or_else(|| {
+                warn!("No y value available for {}. Setting y to 0 for this sample.", sample_name);
+                &0 
+            })).collect();
 
         self.feature_len = self.features.len();
         self.sample_len = self.samples.len();
