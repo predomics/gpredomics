@@ -10,6 +10,7 @@ pub struct Param {
     pub ga: GA,
     pub beam: BEAM,
     pub cv: CV,
+    pub mcmc: MCMC,
 }
 
 #[derive(Debug,Serialize,Deserialize,Clone)]
@@ -120,6 +121,17 @@ pub struct CV {
     pub fold_number: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MCMC {
+    #[serde(default = "n_iter_default")]  
+    pub n_iter: usize,
+    #[serde(default = "n_burn_default")]
+    pub n_burn: usize,
+    #[serde(default = "lmbd_default")]
+    pub lmbd: f64,
+    #[serde(default = "nmin_default")]
+    pub nmin: u32,
+}
 
 impl Default for General {
     fn default() -> Self {
@@ -202,3 +214,7 @@ fn nb_best_model_to_test_default() -> u32 { 10 }
 fn feature_select_niche_pct_default() -> f64 { 0.0 }
 fn false_default() -> bool { false }
 fn class_names_default() -> Vec<String> { Vec::new() }
+fn n_iter_default() -> usize { 10_000 }
+fn n_burn_default() -> usize { 5_000 }
+fn lmbd_default() -> f64 { 0.001 }
+fn nmin_default() -> u32 { 10 }

@@ -9,6 +9,7 @@ pub mod population;
 mod ga;
 mod cv;
 pub mod gpu;
+mod bayesian_mcmc;
 
 pub use beam::run_beam;
 use data::Data;
@@ -24,6 +25,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
+
+use polars::prelude::*;
+use DataType::UInt32;
+// use serde_derive::{Deserialize, Serialize};
+use std::fs;
+use std::time::Instant;
+use std::ops::Not;
+
 
 /// a very basic use
 pub fn basic_test(param: &Param) {
@@ -376,4 +385,195 @@ pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
 
 }
 
+//Code de Vadim
+
+
+// #[derive(Serialize, Deserialize, Debug)]
+// struct ParamsMCMC {
+//     path_to_x: String,
+//     path_to_y: String,
+//     outdir: String,
+//     n_iter: usize,
+//     n_burn: usize,
+//     lmbd: f64,
+//     nmin: u32,
+//     language: String
+// }
+
+struct SequentialBackwardSelection {
+    x: DataFrame, 
+    y: DataFrame, 
+    outdir: String,
+    n_iter: usize,
+    n_burn: usize,
+    lmbd: f64,
+    nmin: u32,
+    nsigs: f64
+}
+ 
+impl SequentialBackwardSelection {
+    fn run_sbs(&self, seed: u64) -> DataFrame {
+        let mut x_train = self.x.clone();
+        let nmax = self.x.height() as u32;
+        let mut post_mean = Vec::new();
+        let mut msp_names = Vec::new();
+        let mut msp_to_drop: String;
+        for n in (self.nmin..=nmax).rev() {
+            println!("\nn = {}, (#MSPs, #samples) = {:?}", n, x_train.shape());
+
+            let now = Instant::now();
+            let bp = bayesian_mcmc::BayesPred::new(&x_train, &self.y, self.lmbd); //initializing mcmc data structure        
+            let res = bayesian_mcmc::run_mcmc(&bp, self.n_iter, self.n_burn, false, seed);
+
+            // let outdir_n = self.outdir.clone().to_owned() + &format!("n{}/", n);
+            // fs::create_dir_all(&outdir_n).expect("Failed to create output directory");
+            // let p_mean = res.save_trace(&bp,&outdir_n);
+            let elapsed = now.elapsed();
+            println!("Elapsed: {:.2?}", elapsed);
+
+            post_mean.push(res.post_mean);
+
+            // index of feature with greatest SIG0
+            let idx: Option<usize> = res.p_sig0
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(index, _)| index);
+            let Some(idx) = idx else {panic!("Note Some()")};
+            let AnyValue::String(v1) = x_train["msp_name"].get(idx).unwrap() else {panic!("Not AnyValue()")};
+            msp_to_drop = v1.into();
+
+            // let max_row = p_mean
+            //     .lazy()
+            //     .filter(col("SIG0").eq(max("SIG0")))
+            //     .collect()
+            //     .unwrap();
+            // let v = max_row.column("msp_name").unwrap().get(0).unwrap();
+            // let Some(v1) = v.get_str() else {panic!("Not Some()")};
+            // msp_to_drop = v1.into();
+            let s = Series::new("a".into(), [msp_to_drop.clone()]);
+            let mask = is_in(x_train["msp_name"].as_series().unwrap(), &s).unwrap().not();
+            x_train = x_train.filter(&mask).unwrap();
+            println!("dropping {:?}", msp_to_drop);
+            msp_names.push(msp_to_drop)
+        }
+
+        let nn: Vec<u32> = (self.nmin..=nmax).rev().collect::<Vec<_>>();
+        let log_post_mean: Vec<f64> = post_mean.iter().map(|v| v.log10()).collect();
+        let log_evidence: Vec<f64> = (self.nmin..=nmax).rev().
+            zip(log_post_mean.iter()).
+            map(|v| v.1 - (v.0 as f64) * self.nsigs.log10()).collect();
+
+        let c1 = Column::new("nfeat".into(), nn);
+        let c2 = Column::new("Posterior mean".into(), &post_mean);
+        let c3 = Column::new("Log Posterior mean".into(), &log_post_mean);
+        let c4 = Column::new("Log Evidence".into(), &log_evidence);
+        let c5 = Column::new("MSP to drop".into(), &msp_names);
+        let df_post = DataFrame::new(vec![c1, c2, c3, c4, c5]).unwrap();
+        df_post
+    }
+
+    fn best_full_trace(&self, df_post: &DataFrame, seed: u64) {
+        //find best model
+        let best_evidence = df_post.clone()
+            .lazy()
+            .filter(col("Log Evidence").eq(max("Log Evidence")))
+            .collect()
+            .unwrap();
+
+        let n_best = if let AnyValue::UInt32(b) = best_evidence.column("nfeat").unwrap().get(0).unwrap() {b} else {panic!("OOPS!!!")};
+
+        //compile list of msps to drop
+        let df_tmp =df_post
+            .clone()
+            .lazy()
+            .filter(col("nfeat").gt(n_best))
+            .collect()
+            .unwrap();
+
+        let msps_to_drop = df_tmp
+            .column("MSP to drop")
+            .unwrap()
+            .as_materialized_series()
+            .clone();
+
+        let mask = is_in(self.x["msp_name"].as_series().unwrap(), &msps_to_drop).unwrap().not();
+        let x_train = self.x.filter(&mask).unwrap();
+
+        println!("\nBest model: n = {}, x_train.shape = {:?}", n_best, x_train.shape());
+        let outdir_best = self.outdir.clone().to_owned() + "best_full_trace/";
+        fs::create_dir_all(&outdir_best).expect("Failed to create output directory");
+
+        let now = Instant::now();
+        let bp = bayesian_mcmc::BayesPred::new(&x_train, &self.y, self.lmbd); //initializing mcmc data structure        
+        let res = bayesian_mcmc::run_mcmc(&bp, self.n_iter, self.n_burn, true, seed);
+        res.save_trace(&bp,&outdir_best);
+        let elapsed = now.elapsed();
+        println!("Elapsed: {:.2?}", elapsed);
+    }
+}
+
+pub fn mcmc(param: &Param, running: Arc<AtomicBool>) {
+    //Reading parameters from a json
+    // let filepath = "./src/params.json";
+    // let params_str = fs::read_to_string(filepath).expect("Unable to read a file");
+    // let params: ParamsMCMC = serde_json::from_str(&params_str).expect("Couldn't parse JSON");
+    // println!("{:?}", params);
+
+    // Preparing training data
+    let parse = CsvParseOptions::default().with_separator(b'\t'); // set tub as delimiter
+
+    // read abundance data from path
+    let mut x = CsvReadOptions::default()
+        .with_has_header(true)
+        .with_parse_options(parse.clone())
+        .try_into_reader_with_file_path(Some(param.data.X.clone().into()))
+        .unwrap()
+        .finish()
+        .unwrap();
+
+    let old_name = &x.get_column_names_owned()[0]; // rename first column
+    let _ = x.rename(old_name, "msp_name".into());
+
+    // read response variable values
+    let myschema = Schema::from_iter(vec![
+        Field::new("Sample".into(), DataType::String),
+        Field::new("status".into(), DataType::Float64)
+    ]);
+    let y0 = CsvReadOptions::default()
+        .with_skip_lines(1)
+        .with_has_header(false)
+        .with_schema(Arc::new(myschema).into())
+        .with_parse_options(parse)
+        .try_into_reader_with_file_path(Some(param.data.y.clone().into()))
+        .unwrap()
+        .finish()
+        .unwrap();
+
+    let y = DataFrame::new(vec![y0["Sample"].clone(), y0.column("status").unwrap().cast(&UInt32).unwrap()]).unwrap();
+
+    // ------------------------------------------------------------------------
+    //Sequential backward elimination
+    let sbs = SequentialBackwardSelection {
+        x: x.clone(), 
+        y: y.clone(),
+        outdir: "".to_string(), 
+        n_iter: param.mcmc.n_iter, 
+        n_burn: param.mcmc.n_burn, 
+        lmbd: param.mcmc.lmbd,
+        nmin: param.mcmc.nmin,
+        nsigs: 3.0
+    };
+    let mut df_post = sbs.run_sbs(param.general.seed);
+    println!("Posterior summary: {:?}", df_post);
+    
+    let df_post_path = "Post_mean.tsv";
+    let mut file = fs::File::create(&df_post_path).expect("could not create file");
+    CsvWriter::new(&mut file)
+        .include_header(true)
+        .with_separator(b'\t')
+        .finish(&mut df_post).expect("couldn't write to file");
+
+    sbs.best_full_trace(&df_post, param.general.seed)
+}
 

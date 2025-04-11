@@ -1,7 +1,7 @@
 # unless specifically indicated all field accept a single value
 general:
   seed: 41                                   # used in parent selection, child conception (cross over) and mutation, all of which is single thread
-  algo: ga                                   # use ga only for now
+  algo: mcmc                                   # use ga only for now
   thread_number: 8                           # the number of thread used in feature selection and fit computation
   log_level: debug                           # possible values are trace, debug, info, warning or error
   language: ter,bin,ratio,pow2               # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
@@ -18,10 +18,10 @@ cv:
   fold_number: 10                           # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.
 
 data:
-  X: "samples/Qin2014/Xtrain.tsv"            # the features of the train data set 
-  y: "samples/Qin2014/Ytrain.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
-  Xtest: "samples/Qin2014/Xtest.tsv"         # the features of the test data set
-  ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
+  X: "samples/Qin2014_presence_bf/Xtrain.tsv"            # the features of the train data set 
+  y: "samples/Qin2014_presence_bf/Ytrain.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
+  Xtest: "samples/Qin2014_presence_bf/Xtest.tsv"         # the features of the test data set
+  ytest: "samples/Qin2014_presence_bf/Ytest.tsv"         # the class description of the test data set 
   feature_selection_method: wilcoxon   # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
   feature_minimal_prevalence_pct: 0         # per class, e.g. features are retained if any of the class reaches this level
   feature_maximal_pvalue: 0.5               # features with differences less significant (p value above that threshold) than this will be removed
@@ -55,3 +55,9 @@ beam:
   nb_very_best_models: 50 # the number of best models where all variables are directly kept for next epoch (recommanded : 1% of max_nb_of_models)
   nb_best_models: 500 # the number of used best models to calculate the feature importance (recommanded : 10% of max_nb_of_models)
   features_importance_minimal_pct: 10 # the minimum prevalence percentage among best_models required for a variable to be kept for next epoch
+
+mcmc:
+ n_iter: 100 #number of MCMC (Markov Chain Monte Carlo) iterations
+ n_burn: 50 #number of MCMC iterations ignored (typically first half of all iterations)
+ lmbd: 0.001 #Bayesian prior parameter for coefficients a, b, c
+ nmin: 10 #minimum number of features in a model after feature elimination
