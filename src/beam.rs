@@ -1,5 +1,6 @@
 // BE CAREFUL : the adaptation of the Predomics beam algorithm for Gpredomics is still under development
 use crate::cv::CV;
+use crate::ga;
 use crate::gpu::GpuAssay;
 use crate::individual::BINARY_LANG;
 use crate::individual::RATIO_LANG;
@@ -74,20 +75,30 @@ fn combine_with_best(best_combinations: Vec<Vec<usize>>, features: &Vec<usize>) 
     unique_combinations.into_iter().collect()
 }
 
-fn binomial_coefficient(n: u64, k: u64) -> u64 {
+fn binomial_coefficient(n: u128, k: u128) -> u128 {
     if k > n {
         return 0;
     }
     let k = if k > n / 2 { n - k } else { k };
     
-    let mut result = 1u64;
+    let mut result = 1u128;
     for i in 0..k {
-        result = result * (n - i) / (i + 1);
+        let numerator = n - i;
+        let denominator = i + 1;
+
+        if let Some(new_result) = result.checked_mul(numerator) {
+            result = new_result / denominator;
+        } else {
+            error!("Error: Arithmetic overflow in binomial coefficient calculation (there are more than 2e128-1 possible combinations !) \
+                \nSuggestions: Reduce k_max, make the preselection criteria for features considerably stricter, or even better, set a max_nb_of_models");
+            panic!();
+        }
+        
     }
     result
 }
 
-fn max_n_for_combinations(k: u64, target: u64) -> u64 {
+fn max_n_for_combinations(k: u128, target: u128) -> u128 {
     let mut n = k;
     loop {
         let combinations = binomial_coefficient(n, k);
@@ -193,46 +204,19 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
     }
 }
 
-pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {
+    // _no_overfit_data is not currently implemented
+
     let time = Instant::now();
-
-    let mut data = Data::new();
-    let mut data_test = Data::new();
-    let _ = data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
-    let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
-    data.set_classes(param.data.classes.clone());
-    data_test.set_classes(param.data.classes.clone());
-
-    // GPU assay
-    // let gpu_assay = Some(None);
-
-    // Cross-validation initialization
-    let mut cv: Option<CV> = None;
-    if param.cv.fold_number > 1 {
-        info!("Learning on {:?}-folds.", param.cv.fold_number);
-        let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-        cv = Some(CV::new(&data, param.cv.fold_number, &mut rng));
-    }
-    
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(param.general.thread_number)
-        .build()
-        .expect("Failed to build thread pool");
-
     info!("\x1b[1;96mLaunching Beam algorithm for a feature interval [{}, {}]\x1b[0m", param.beam.kmin, param.beam.kmax);
 
     let mut collection: Vec<Population> = vec![];
-
-    // Feature preselection
+    let mut pop = Population::new();
     data.select_features(&param);
+
+    // Building lang_and_type_pop population 
     let mut languages: Vec<u8> = param.general.language.split(",").map(language).collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
-
-    let initial_combinations = generate_combinations(&data.feature_selection, param.beam.kmin);
-    let mut combinations = initial_combinations.clone();
-
-    let mut pop = Population::new();
-
     let mut lang_and_type_pop = Population::new();
     for language in &languages {
         // Ignore pow2 language as beam algorithm has not (yet?) the ability to explore coefficient
@@ -244,6 +228,65 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         }
     }
 
+    // Cross-validation initialization
+    let mut cv: Option<CV> = None;
+    if param.general.overfit_penalty != 0.0 {
+        let folds_nb = if param.cv.fold_number > 1 { param.cv.fold_number } else { 3 };
+        info!("Learning on {:?}-folds.", folds_nb);
+        let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+        cv = Some(CV::new(&data, folds_nb, &mut rng));
+    }
+
+    // Building the GPU assay and checking the prerequisites
+    let gpu_assay = if param.general.gpu  {
+        if param.cv.fold_number <= 1 && param.general.overfit_penalty == 0.0 {
+            let buffer_binding_size = 134217728/2; 
+            let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
+
+            let assay = if param.beam.method == "exhaustive" && param.beam.max_nb_of_models == 0 {
+                warn!("GPU requires a maximum number of models. \
+                \nAccording to your configuration, this number should be {} for one language-data_type pair to prevent crashes. \
+                \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models);
+                None
+            } else if param.beam.method == "exhaustive" && param.beam.max_nb_of_models != 0 && (param.beam.max_nb_of_models as usize)*lang_and_type_pop.individuals.len() > gpu_max_nb_models {
+                warn!("GPU requires a maximum number of models that you exceed. \
+                \nAccording to your configuration, this number should be {} for one language-data_type pair to prevent crashes \
+                \n(or {} considering all the possible pairs following your input parameters). \
+                \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models, gpu_max_nb_models/lang_and_type_pop.individuals.len());
+                None
+            } else if param.beam.method == "extend" && param.beam.extendable_models*data.feature_selection.len()*lang_and_type_pop.individuals.len() > gpu_max_nb_models {
+                let max_features = if gpu_max_nb_models/param.beam.extendable_models/lang_and_type_pop.individuals.len() > 1 {
+                    format!(" or tighten up the criteria for pre-selecting features in order to have a maximum of {} features",
+                    gpu_max_nb_models/param.beam.extendable_models/lang_and_type_pop.individuals.len())
+                } else { format!("") };
+
+                warn!("GPU requires a maximum number of models that you exceed. \
+                \nAccording to your configuration, this number should be {} for one language-data_type pair to prevent crashes \
+                \n(or {} considering all the possible pairs following your input parameters). \
+                \nPlease considers reducing extendable_models to {}{}. \
+                \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models, 
+                gpu_max_nb_models/lang_and_type_pop.individuals.len(), 
+                gpu_max_nb_models/data.feature_selection.len()/lang_and_type_pop.individuals.len(), max_features);
+                None
+            } else {
+                let max_nb = match param.beam.method.as_str() {
+                    "exhaustive" => {(param.beam.max_nb_of_models as usize) * lang_and_type_pop.individuals.len()}
+                    "extend" => {param.beam.extendable_models * data.feature_selection.len() * lang_and_type_pop.individuals.len()}
+                    _ => {gpu_max_nb_models}
+                };
+                Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, max_nb))
+            }; 
+            assay
+        } else {
+            warn!("Beam algorithm cannot be started with GPU if overfit_penalty>0.0 currently. \
+            \nThis Gpredomics session will therefore be launched without a GPU.");
+            None
+        }
+    } else { None };
+
+    // Starting beam algorithm for initial k
+    let initial_combinations = generate_combinations(&data.feature_selection, param.beam.kmin);
+    let mut combinations = initial_combinations.clone();
     for ind in &lang_and_type_pop.individuals{
         pop.individuals.extend(beam_pop_from_combinations(combinations.clone(), ind.clone()).individuals)
     }
@@ -254,19 +297,9 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         let n_unvalid = remove_stillborn(&mut pop) as usize;
         if n_unvalid>0 { warn!("{} stillborns removed", n_unvalid) }
     }
-    
-    // // Cross-validation initialisation
-    // let (mut run_test_data, run_data): (Option<Data>,Option<Data>) = if param.general.overfit_penalty>0.0 {
-    //     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-    //     let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
-    //     (Some(cv.folds.remove(0)),Some(cv.datasets.remove(0)))
-    // } else { (None,None) };
-    // let cv_assay = if param.general.gpu && param.general.overfit_penalty>0.0 {
-    //     let cv_data = cv_data.as_mut().unwrap();
-    //     Some(GpuAssay::new(&cv_data.X, &data.feature_selection, cv_data.sample_len, param.ga.population_size as usize))
-    // } else { None };
 
     // Fitting first Population composed of all k_start combinations
+    let test_assay: Option<GpuAssay> = None;
     if let Some(ref cv) = cv {
         debug!("Computing penalized AUC (with cross-validation)...");
         pop.fit_on_folds(&data, cv, &param);
@@ -274,11 +307,17 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             pop.compute_all_metrics(&data);
         } 
     }  else {
-        debug!("Computing penalized AUC...");
-        pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
+        debug!("Fitting population...");
+        ga::fit_fn(&mut pop, data, &mut None, &gpu_assay, &test_assay, param);
+        //pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
     }
 
     pop = pop.sort();
+
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(param.general.thread_number)
+        .build()
+        .expect("Failed to build thread pool");
 
     pool.install(|| {
         for ind_k in param.beam.kmin+1..param.beam.kmax {
@@ -313,9 +352,9 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                 // Combinations are limited by features_to_keep (by param.beam.best_models_ci_alpha)
                 // These features can be limited with param.beam.max_nb_of_models
                 let mut features_to_keep_neg: Vec<usize>=vec![]; let mut features_to_keep_pos: Vec<usize>=vec![]; let mut bin_features_to_keep: Vec<usize>=vec![]; 
-                possibilities = binomial_coefficient(features_to_keep.len() as u64, ind_k as u64);
-                if possibilities > param.beam.max_nb_of_models && param.beam.max_nb_of_models != 0 {
-                    let max_nb:usize = max_n_for_combinations(ind_k as u64, param.beam.max_nb_of_models as u64) as usize;
+                possibilities = binomial_coefficient(features_to_keep.len() as u128, ind_k as u128);
+                if possibilities > param.beam.max_nb_of_models as u128 && param.beam.max_nb_of_models != 0 {
+                    let max_nb:usize = max_n_for_combinations(ind_k as u128, param.beam.max_nb_of_models as u128) as usize;
                     features_to_keep = vec![];
                     // For Binary languages, pick directly max_nb positive-associated features to avoid different ind_k within an iteration (like 10+10 features Ternary vs 10 features Binary for k=20)
                     if languages.contains(&BINARY_LANG) {
@@ -396,7 +435,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             pop = Population::new();
 
             for ind in &lang_and_type_pop.individuals{
-                if ind.language == BINARY_LANG && param.beam.method == "exhaustive" && possibilities > param.beam.max_nb_of_models && param.beam.max_nb_of_models != 0 {
+                if ind.language == BINARY_LANG && param.beam.method == "exhaustive" && possibilities > param.beam.max_nb_of_models as u128 && param.beam.max_nb_of_models != 0 {
                     if (!bin_combinations.is_none()) && languages.contains(&BINARY_LANG){
                         pop.individuals.extend(beam_pop_from_combinations(bin_combinations.clone().unwrap(), ind.clone()).individuals);
                     } else {
@@ -407,10 +446,8 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                 }
             }
             
-            if param.beam.method == "exhaustive" && param.beam.max_nb_of_models != 0 && class_0_features.is_empty() {
-                if languages.contains(&TERNARY_LANG) || languages.contains(&RATIO_LANG) {
-                    warn!("All selected features are associated with class {}. Keeping stillborns to generate next iteration.", data.classes[1]);
-                }
+            if class_0_features.is_empty() && (languages.contains(&TERNARY_LANG) || languages.contains(&RATIO_LANG)) {
+                warn!("All selected features are associated with class {}. Keeping stillborns to generate next iteration.", data.classes[1]);
             } else {
                 let n_unvalid = remove_stillborn(&mut pop) as usize;
                 if n_unvalid>0 { warn!("{} stillborns removed", n_unvalid) }
@@ -423,8 +460,9 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                     pop.compute_all_metrics(&data);
                 } 
             }  else {
-                debug!("Computing penalized AUC...");
-                pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
+                debug!("Fitting population...");
+                ga::fit_fn(&mut pop, data, &mut None, &gpu_assay, &test_assay, param);
+                //pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
             }
 
             debug!("Sorting population...");
@@ -433,35 +471,34 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
             let mut sorted_pop = Population::new();
             sorted_pop.individuals = pop.individuals.clone();
 
-            // in beam mode print every result
             collection.push(sorted_pop);
-            debug!("Best fit : {:?} | Best AUC : {:.6}  | Delta Train/Test : {:.6}", pop.individuals[0].fit, pop.individuals[0].auc, pop.individuals[0].auc-pop.individuals[0].compute_new_auc(&data_test));
+
+            let best_model = &pop.individuals[0];
+            debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}", 
+                best_model.auc,
+                best_model.get_language(),
+                best_model.get_data_type(),
+                best_model.fit, 
+                best_model.specificity,
+                best_model.sensitivity,
+                &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/pop.individuals.len() as f64,
+                &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/pop.individuals.len() as f64
+            );
 
             // Stop the loop if someone kill the program
             if !running.load(Ordering::Relaxed) {
                 break;
             }
-        }
+        }});
 
         let elapsed = time.elapsed();
         info!("Beam algorithm ({} mode) computed {:?} generations in {:.2?}", param.beam.method, collection.len(), elapsed);
 
-        // Print final best models
-        let mut final_pop = Population::new();
-        final_pop.individuals = collection.last_mut().unwrap().individuals.clone();
-        info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
-        info!("{}", final_pop.display(&data, Some(&data_test), param));
-
-        info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
-        let mut top_ten_pop = keep_n_best_model_within_collection(&collection, param);
-        info!("{}", top_ten_pop.display(&data, Some(&data_test), param));
-
-        (collection, data, data_test)
-    })
+        collection
 }
 
 // Function to extract best models among all epochs, not necessarily having k_max features
-fn keep_n_best_model_within_collection(collection:&Vec<Population>, param:&Param) -> Population {
+pub fn keep_n_best_model_within_collection(collection:&Vec<Population>, param:&Param) -> Population {
     let mut all_models = Population::new();
     for population in collection {
         for individual in population.individuals.clone() {
@@ -580,6 +617,5 @@ mod tests {
             ind_features.sort();
             assert!(features.contains(&ind_features), "Wrong generated population : {:?} does not contain {:?}", features, &ind_features);
         }
-
     }
 }

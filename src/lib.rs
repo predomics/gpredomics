@@ -10,7 +10,6 @@ mod ga;
 mod cv;
 pub mod gpu;
 
-pub use beam::run_beam;
 use data::Data;
 use individual::Individual;
 use population::Population;
@@ -18,7 +17,7 @@ use rand_chacha::ChaCha8Rng;
 use rand::prelude::*;
 use param::Param;
 
-use log::{debug, info, warn, error};
+use log::{debug, info, warn};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -282,6 +281,28 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
 
 }
 
+pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+    let mut data = Data::new();
+    let mut data_test = Data::new();
+    let _ = data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
+    let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
+    data.set_classes(param.data.classes.clone());
+    data_test.set_classes(param.data.classes.clone());
+
+    let mut collection = beam::beam(&mut data, &mut None, param, running);
+    
+    // Print final best models
+    let mut final_pop = Population::new();
+    final_pop.individuals = collection.last_mut().unwrap().individuals.clone();
+    info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
+    info!("{}", final_pop.display(&data, Some(&data_test), param));
+
+    info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
+    let mut top_ten_pop = beam::keep_n_best_model_within_collection(&collection, param);
+    info!("{}", top_ten_pop.display(&data, Some(&data_test), param));
+
+    (collection, data, data_test)
+}
 
 /// the Genetic Algorithm test with Crossval (not useful but test CV)
 pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {

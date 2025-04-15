@@ -1,4 +1,4 @@
-use log::{info, error, warn};
+use log::{info, error};
 use gpredomics::{param, basic_test, random_run, run_ga, gacv_run, gpu_random_run, run_beam};
 use std::process;
 use flexi_logger::{Logger, WriteMode, FileSpec};
@@ -66,10 +66,6 @@ fn main() {
     flag::register(SIGHUP, Arc::clone(&running_clone)).expect("Failed to register SIGHUP handler");
     info!("Signal handler thread started. Send `kill -1 {}` to stop the application.", std::process::id());
     info!("Signal registration state is {}",running_clone.load(Ordering::Relaxed));
-
-    if param.general.keep_all_generations {
-        warn!("Metrics computation for GpredomicsR while fitting on sensitivity/specificity is not implemented yet.")
-    }
 
     let sub_thread = thread::spawn(move || {
         match param.general.algo.as_str() {
