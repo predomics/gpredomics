@@ -16,7 +16,7 @@ general:
   display_colorful: true                     # should the terminal results be coloured to make them easier to read?  
   log_level: debug                           # possible values are trace, debug, info, warning or error 
   #log_base: "log_file_name"                 # uncomment to print log and results in log_file_name
-  keep_all_generations: false                 # keep this setting to false when using gpredomics as a binary
+  keep_all_generations: false                # keep this setting to false when using gpredomics as a binary
 
 cv:
   fold_number: 10                            # used only if overfit_penalty is not null. used also in the not recommanded experimental (YOLO) 'ga+cv' algo.

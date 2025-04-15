@@ -1,3 +1,4 @@
+use crate::param::FitFunction;
 use crate::utils::conf_inter_binomial;
 use crate::cv::CV;
 use crate::data::Data;
@@ -45,7 +46,11 @@ impl Population {
         let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
         for i in 0..=(limit-1) as usize {
             if param.general.keep_all_generations == false {
-                (_, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_roc_and_metrics(data);
+                match param.general.fit {
+                    FitFunction::sensitivity =>  {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![param.general.fr_penalty, 1.0]));},
+                    FitFunction::specificity => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![1.0, param.general.fr_penalty]));},
+                    _ => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, None);}
+                }
             }
             if param.general.display_colorful == true && param.general.log_base == "" {
                 str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
@@ -104,9 +109,9 @@ impl Population {
                 .par_iter_mut()
                 .for_each(|i| {
                     if compute_metrics {
-                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics(&data);
+                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = i.compute_roc_and_metrics(&data, None);
                     } else {
-                        let _auc = i.compute_auc(data);
+                        i.auc = i.compute_auc(data);
                     }
                     i.fit = i.auc - i.k as f64 * k_penalty;
                 });
@@ -128,17 +133,18 @@ impl Population {
                 .for_each(|i| {
                     let test_auc = i.compute_new_auc(test_data);
                     if compute_metrics {
-                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_roc_and_metrics(&data);
+                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = i.compute_roc_and_metrics(&data, None);
                     } else {
-                        let _auc = i.compute_auc(data);
+                        i.auc = i.compute_auc(data);
                     }
                     i.fit = i.auc - i.k as f64 * k_penalty - (i.auc-test_auc).abs() * overfit_penalty;
                 });
         });
     }
 
+    // Do we need to write it directly in FitFunction as another fit method? or factorise others?
     pub fn objective_fit(&mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64, k_penalty: f64,
-                            thread_number: usize) 
+                            thread_number: usize, compute_metrics: bool) 
     {
             // Create a custom thread pool with 4 threads
             let pool = ThreadPoolBuilder::new()
@@ -151,13 +157,20 @@ impl Population {
                 self.individuals
                     .par_iter_mut()
                     .for_each(|i| {
-                        i.fit = i.maximize_objective(data, fpr_penalty, fnr_penalty) - i.k as f64 * k_penalty;
+                        let objective;
+                        if compute_metrics {
+                            (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics(&data, Some(&vec![fpr_penalty, fnr_penalty]));
+                        } else {
+                            objective = i.maximize_objective(data, fpr_penalty, fnr_penalty)
+                        }
+                        i.fit = objective - i.k as f64 * k_penalty;        
                     });
             });
     }
 
     pub fn objective_nooverfit_fit(& mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64, 
-                                    k_penalty: f64, test_data: &Data, overfit_penalty: f64, thread_number: usize) {
+                                    k_penalty: f64, test_data: &Data, overfit_penalty: f64, thread_number: usize,
+                                    compute_metrics: bool) {
         // Create a custom thread pool with 4 threads
         let pool = ThreadPoolBuilder::new()
         .num_threads(thread_number)
@@ -169,8 +182,13 @@ impl Population {
             self.individuals
                 .par_iter_mut()
                 .for_each(|i| {
+                    let objective;
                     let test_objective = i.maximize_objective(test_data, fpr_penalty, fnr_penalty);
-                    let objective= i.maximize_objective(data, fpr_penalty, fnr_penalty);
+                    if compute_metrics {
+                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics(&data, Some(&vec![fpr_penalty, fnr_penalty]));
+                    } else {
+                        objective = i.maximize_objective(data, fpr_penalty, fnr_penalty)
+                    }
                     i.fit = objective - i.k as f64 * k_penalty - (objective-test_objective).abs() * overfit_penalty;
                 });
         });
@@ -288,7 +306,7 @@ impl Population {
         self.individuals
             .par_iter_mut()
             .for_each(|ind| {
-                (ind.auc, ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity) = ind.compute_roc_and_metrics(data);
+                (ind.auc, ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity, _) = ind.compute_roc_and_metrics(data, None);
             });
     }
 
@@ -509,17 +527,17 @@ mod tests {
         let mut pop_1ind = Population::new();
         pop_1ind.individuals.push(pop.individuals[0].clone());
 
-        pop.objective_fit(&data, 1.0, 1.0, 10.0, 4);
-        pop_clone.objective_fit(&data, 1.0, 1.0, 10.0, 1);
+        pop.objective_fit(&data, 1.0, 1.0, 10.0, 4, false);
+        pop_clone.objective_fit(&data, 1.0, 1.0, 10.0, 1, false);
         
         for i in 0..pop.individuals.len(){
-            assert_eq!(pop.individuals[i].maximize_objective(&data, 1.0, 1.0)- pop.individuals[i].k as f64 * 10.0, pop.individuals[i].fit, 
+            assert_eq!(pop.individuals[i].maximize_objective(&data, 1.0, 1.0) - pop.individuals[i].k as f64 * 10.0, pop.individuals[i].fit, 
             "bad calculation for objective_fit()");
             assert_eq!(pop.individuals[i].fit, pop_clone.individuals[i].fit, 
             "mono- and multi- thread should lead to the same final result");
         }
         
-        pop_1ind.objective_fit(&data, 1.0, 1.0, 10.0, 4);
+        pop_1ind.objective_fit(&data, 1.0, 1.0, 10.0, 4, false);
         assert_eq!(pop_1ind.individuals[0].fit, pop.individuals[0].fit, 
         "fitting should work for a Population composed of only one Individual");
     }
@@ -533,8 +551,8 @@ mod tests {
         let mut pop_1ind = Population::new();
         pop_1ind.individuals.push(pop.individuals[0].clone());
 
-        pop.objective_nooverfit_fit(&data_disc, 10.0, 1.0, 10.0, &data_valid, 20.0, 4);
-        pop_clone.objective_nooverfit_fit(&data_disc, 10.0, 1.0, 10.0, &data_valid, 20.0, 1);
+        pop.objective_nooverfit_fit(&data_disc, 10.0, 1.0, 10.0, &data_valid, 20.0, 4, false);
+        pop_clone.objective_nooverfit_fit(&data_disc, 10.0, 1.0, 10.0, &data_valid, 20.0, 1, false);
         
         for i in 0..pop.individuals.len(){
             //the below test should work ?
@@ -544,7 +562,7 @@ mod tests {
             "mono- and multi- thread should lead to the same final result");
         }
         
-        pop_1ind.objective_nooverfit_fit(&data_disc, 10.0, 1.0, 10.0, &data_valid, 20.0, 1);
+        pop_1ind.objective_nooverfit_fit(&data_disc, 10.0, 1.0, 10.0, &data_valid, 20.0, 1, false);
         assert_eq!(pop_1ind.individuals[0].fit, pop.individuals[0].fit, 
         "fitting should work for a Population composed of only one Individual");
     }
@@ -556,15 +574,15 @@ mod tests {
         let mut pop1 = create_test_population();
         let mut pop2 = create_test_population();
 
-        pop1.objective_fit(&data_disc, 1.0, 1.0, 10.0, 4);
-        pop2.objective_nooverfit_fit(&data_disc, 1.0, 1.0, 10.0, &data_valid, 20.0, 4);
+        pop1.objective_fit(&data_disc, 1.0, 1.0, 10.0, 4, false);
+        pop2.objective_nooverfit_fit(&data_disc, 1.0, 1.0, 10.0, &data_valid, 20.0, 4, false);
 
         for i in 1..pop1.individuals.len(){
             assert!(pop1.individuals[i].fit >= pop2.individuals[i].fit, "reducing the overfit should lead to better fit")
         }
     }
 
-    // more smaller, more better ? 
+    // smaller, better ? 
     #[test]
     fn test_sort() {
         let mut pop = create_test_population();

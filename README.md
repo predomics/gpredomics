@@ -25,7 +25,7 @@ gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version
   - `prevalence` : or presence/absence, features above data_type_minimum are 1 others are 0,
   - `log` : features are now equal to their log (`feature.ln()` in Rust). Features below data_type_minimum are set to this value before log transformation.
 
-- the Beam Algorithm is in beta version and fit on AUC. This beta version is not compatible yet with Pow2 language. Two submethods are currently available : 
+- the Beam Algorithm is in beta version. This beta version is not compatible yet with Pow2 language. Two submethods are currently available : 
 
   - `exhaustive` generates all the possible combinations of features selected at each epoch (an epoch is a population of individuals of size k) which is equivalent of terBeam in Predomics terms. 
   - `extend` adds each of the features selected to each of the best extendable_models at each epoch.
