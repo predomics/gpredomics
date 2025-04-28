@@ -477,3 +477,63 @@ pub fn run_mcmc(bp: &BayesPred, n_iter: usize, n_burn: usize, keep_trace: bool, 
     res_mcmc.finalize(n_iter, n_burn);
     res_mcmc
 }
+
+//-----------------------------------------------------------------------------
+// structure for making predictions 
+
+pub struct BayesianFormula {
+    models: Array2<f64>,
+    betas: Array2<f64>,
+    msps: Series,
+    n_iter: f64,
+}
+
+impl BayesianFormula {
+    pub fn new(models: &mut DataFrame, betas: &mut DataFrame) -> BayesianFormula {
+        let msps = Series::new("msp_name".into(), &models.get_column_names_str());
+        BayesianFormula {
+            models: models.to_ndarray::<Float64Type>(IndexOrder::C).unwrap(),
+            betas: betas.to_ndarray::<Float64Type>(IndexOrder::C).unwrap(),
+            msps: msps,
+            n_iter: models.height() as f64,
+        }
+    }
+
+    fn predict_proba_1sample(&self, x_smpl: &Series) -> Column {
+        let mut probs = [0_f64, 0_f64];
+        for (beta, model) in zip(self.betas.rows(), self.models.rows()) {
+            let mut sig1: f64 = 0.0;
+            let mut sig2: f64 = 0.0;
+            for (v, m) in zip(x_smpl.f64().unwrap().iter(), model.iter()) {
+                match *m {
+                    1.0 => sig1 += v.unwrap(),
+                    -1.0 => sig2 += v.unwrap(),
+                    _ => (),
+                }
+            }
+            let b_z: f64 = beta.iter().zip([sig1, sig2, 1.]).map(|(a, b)| a * b).sum();
+            probs[0] += logistic(-b_z);
+            probs[1] += logistic(b_z);
+        }
+        probs[0] /= self.n_iter;
+        probs[1] /= self.n_iter;
+        let probs = Column::new(x_smpl.name().clone(), &probs);
+        // let probs = Column::new(x_smpl.name().clone(), [0_f64, 1_f64]);
+        probs
+    }
+
+    pub fn predict_proba_multisample(&self, x: &mut DataFrame) -> DataFrame {
+        let mask = is_in(x["msp_name"].as_series().unwrap(), &self.msps).unwrap();
+        let x1 = x.filter(&mask).unwrap();
+        let mut probs = Vec::new();
+        for x_smpl in x1.drop("msp_name").unwrap().iter() {
+            probs.push(self.predict_proba_1sample(x_smpl));
+        }
+        let mut probs = DataFrame::new(probs)
+            .unwrap()
+            .transpose(Some("Sample"), None)
+            .unwrap();
+        let _ = probs.set_column_names(["Sample", "P0", "P1"]);
+        probs
+    }
+}

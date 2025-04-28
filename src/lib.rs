@@ -544,7 +544,7 @@ pub fn mcmc(param: &Param, running: Arc<AtomicBool>) {
         .with_skip_lines(1)
         .with_has_header(false)
         .with_schema(Arc::new(myschema).into())
-        .with_parse_options(parse)
+        .with_parse_options(parse.clone())
         .try_into_reader_with_file_path(Some(param.data.y.clone().into()))
         .unwrap()
         .finish()
@@ -574,6 +574,62 @@ pub fn mcmc(param: &Param, running: Arc<AtomicBool>) {
         .with_separator(b'\t')
         .finish(&mut df_post).expect("couldn't write to file");
 
-    sbs.best_full_trace(&df_post, param.general.seed)
+    sbs.best_full_trace(&df_post, param.general.seed);
+
+    // ------------------------------------------------------------------------
+    //Making predictions for test data
+    println!("\nPredicting for test data");
+
+    // loading models
+    let path_to_models = "./best_full_trace/models.tsv";
+    let mut models = CsvReadOptions::default()
+        // .with_skip_lines(1)
+        .with_has_header(true)
+        .with_parse_options(parse.clone())
+        .try_into_reader_with_file_path(Some(path_to_models.into()))
+        .unwrap()
+        .finish()
+        .unwrap();
+
+    // loading betas
+    let path_to_betas = "./best_full_trace/betas.tsv";
+    let mut betas = CsvReadOptions::default()
+        // .with_skip_lines(1)
+        .with_has_header(true)
+        .with_parse_options(parse.clone())
+        .try_into_reader_with_file_path(Some(path_to_betas.into()))
+        .unwrap()
+        .finish()
+        .unwrap();
+
+    let mut xtest = CsvReadOptions::default()
+        // .with_skip_lines(1)
+        .with_has_header(true)
+        .with_parse_options(parse.clone())
+        .try_into_reader_with_file_path(Some(param.data.Xtest.clone().into()))
+        .unwrap()
+        .finish()
+        .unwrap();
+
+    let old_name = &xtest.get_column_names_owned()[0]; // rename first column
+    let _ = xtest.rename(old_name, "msp_name".into());
+
+    xtest = xtest.drop_nulls::<String>(None).unwrap();
+
+    // println!("{:?}", xtest);
+
+    let now = Instant::now();
+    let bf = bayesian_mcmc::BayesianFormula::new(&mut models, &mut betas);
+    let mut df_probs = bf.predict_proba_multisample(&mut xtest);
+    println!("{:?}", df_probs);
+    let elapsed = now.elapsed();
+    println!("Elapsed: {:.2?}", elapsed);
+
+    let probs_path = "./Probs.tsv";
+    let mut file = fs::File::create(&probs_path).expect("could not create file");
+    CsvWriter::new(&mut file)
+        .include_header(true)
+        .with_separator(b'\t')
+        .finish(&mut df_probs).expect("couldn't write to file");
 }
 
