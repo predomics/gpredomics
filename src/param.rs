@@ -10,6 +10,7 @@ pub struct Param {
     pub ga: GA,
     pub beam: BEAM,
     pub cv: CV,
+    pub gpu: GPU
 }
 
 #[derive(Debug,Serialize,Deserialize,Clone)]
@@ -19,6 +20,13 @@ pub enum FitFunction {
     sensitivity    
 }
 
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum GpuMemoryPolicy {
+    Strict,
+    Adaptive,
+    Performance,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct General {
@@ -55,8 +63,8 @@ pub struct General {
     pub display_level: usize,
     #[serde(default = "display_colorful_default")] 
     pub display_colorful: bool,
-    #[serde(default = "feature_keep_all_generations_default")]   
-    pub keep_all_generations: bool
+    #[serde(default = "feature_keep_trace_default")]   
+    pub keep_trace: bool
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -102,8 +110,6 @@ pub struct GA {
     pub mutated_children_pct: f64,        // Mutated individuals percentage
     pub mutated_features_pct: f64,           // Mutated features percentage
     pub mutation_non_null_chance_pct: f64,    // Chance pct that a mutation gives an non null value
-    #[serde(default = "feature_importance_permutations_default")]    
-    pub feature_importance_permutations: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -126,11 +132,31 @@ pub struct BEAM {
     pub extendable_models: usize,                  
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GPU {
+    #[serde(default = "memory_policy_default")]  
+    pub memory_policy: GpuMemoryPolicy,
+    #[serde(default = "max_total_memory_mb_default")]  
+    pub max_total_memory_mb: u64,                           
+    #[serde(default = "max_buffer_size_mb_default")]  
+    pub max_buffer_size_mb: u32,                           
+    #[serde(default = "fallback_to_cpu_default")]
+    pub fallback_to_cpu: bool,              
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CV {
     #[serde(default = "fold_number_default")]  
     pub fold_number: usize,
+    #[serde(default = "cv_best_models_ci_alpha_default")]  
+    pub cv_best_models_ci_alpha: f64,
+    #[serde(default = "n_permutations_oob_default")]  
+    pub n_permutations_oob: usize,
+    #[serde(default = "scaled_importance_default")]  
+    pub scaled_importance: bool,
+    #[serde(default = "importance_aggregation_default")]  
+    pub importance_aggregation: String,
+
 }
 
 
@@ -162,6 +188,19 @@ impl Default for BEAM {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
+}
+
+impl Default for GPU {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap_or_else(|_| {
+            GPU {
+                    memory_policy: memory_policy_default(),
+                    max_total_memory_mb: max_total_memory_mb_default(),
+                    max_buffer_size_mb: max_buffer_size_mb_default(),
+                    fallback_to_cpu: fallback_to_cpu_default(),
+                }
+            })
+        }
 }
 
 impl Default for Param {
@@ -198,18 +237,21 @@ fn feature_selection_method_default() -> String { "wilcoxon".to_string() }
 fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
 fn feature_maximal_pvalue_default() -> f64 { 0.5 }
 fn feature_minimal_log_abs_bayes_factor_default() -> f64 { 2.0 }
-fn feature_importance_permutations_default() -> usize { 10 }
 fn feature_minimal_feature_value_default() -> f64 { 0.0 }
 fn language_default() -> String { "binary".to_string() }
 fn data_type_default() -> String { "raw".to_string() }
 fn data_type_epsilon_default() -> f64 { 1e-5 }
 fn thread_number_default() -> usize { 1 }
 fn feature_kminkmax_default() -> usize { 0 }
-fn feature_keep_all_generations_default() -> bool { true }
+fn feature_keep_trace_default() -> bool { true }
 fn log_base_default() -> String { "".to_string() }
 fn log_suffix_default() -> String { "log".to_string() }
 fn log_level_default() -> String { "info".to_string() }
 fn fold_number_default() -> usize { 5 }
+fn cv_best_models_ci_alpha_default() -> f64 { 0.05 }
+fn n_permutations_oob_default() -> usize { 100 }
+fn scaled_importance_default() -> bool { false }
+fn importance_aggregation_default() -> String { "mean".to_string() }
 fn penalty_default() -> f64 { 0.0 }
 fn fit_default() -> FitFunction { FitFunction::auc }
 fn nb_best_model_to_test_default() -> u32 { 10 }
@@ -224,3 +266,7 @@ fn features_importance_minimal_pct_default() -> f64 { 0.1 }
 fn max_nb_of_models_default() -> u64 { 10000 }
 fn extendable_models_default() -> usize { 50 }
 fn class_names_default() -> Vec<String> { Vec::new() }
+fn memory_policy_default() -> GpuMemoryPolicy { GpuMemoryPolicy::Adaptive }
+fn max_total_memory_mb_default() -> u64 { 256 }
+fn max_buffer_size_mb_default() -> u32 { 128 }
+fn fallback_to_cpu_default() -> bool { true }

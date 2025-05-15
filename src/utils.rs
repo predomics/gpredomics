@@ -73,7 +73,7 @@ pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f6
     assert!(accuracy >= 0.0 && accuracy <= 1.0, "confInterBinomial: accuracy should not be lower than 0 or greater than 1");
     assert!(alpha >= 0.0 && alpha <= 1.0, "confInterBinomial: alpha should not be lower than 0 or greater than 1");
 
-    let normal = Normal::new(0.0, 1.0).unwrap_or_else(|e| panic!("Normal distribution creation failed: {}", e));
+    let normal = Normal::new(0.0, 1.0).unwrap_or_else(|e| panic!("confInterBinomial : normal distribution creation failed: {}", e));
     let z_value = -normal.inverse_cdf(alpha / 2.0);
     let std_error = ((accuracy * (1.0 - accuracy)) / n as f64).sqrt();
     

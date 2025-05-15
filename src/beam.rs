@@ -239,8 +239,8 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
 
     // Building the GPU assay and checking the prerequisites
     let gpu_assay = if param.general.gpu  {
-        if param.cv.fold_number <= 1 && param.general.overfit_penalty == 0.0 {
-            let buffer_binding_size = 134217728/2; 
+        if param.general.overfit_penalty == 0.0 {
+            let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
             let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
 
             let assay = if param.beam.method == "exhaustive" && param.beam.max_nb_of_models == 0 {
@@ -274,7 +274,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
                     "extend" => {param.beam.extendable_models * data.feature_selection.len() * lang_and_type_pop.individuals.len()}
                     _ => {gpu_max_nb_models}
                 };
-                Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, max_nb))
+                Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, max_nb, &param.gpu))
             }; 
             assay
         } else {
@@ -303,13 +303,13 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
     if let Some(ref cv) = cv {
         debug!("Computing penalized AUC (with cross-validation)...");
         pop.fit_on_folds(&data, cv, &param);
-        if param.general.keep_all_generations {
+        if param.general.keep_trace {
             pop.compute_all_metrics(&data);
         } 
     }  else {
         debug!("Fitting population...");
         ga::fit_fn(&mut pop, data, &mut None, &gpu_assay, &test_assay, param);
-        //pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
+        //pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_trace);
     }
 
     pop = pop.sort();
@@ -321,7 +321,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
 
     pool.install(|| {
         for ind_k in param.beam.kmin+1..param.beam.kmax {
-            if param.general.keep_all_generations {pop.compute_hash()};
+            if param.general.keep_trace {pop.compute_hash()};
 
             info!("Generating models with {:?} features...", ind_k);
             debug!("[k={:?}] initial population length = {:?}", ind_k, pop.individuals.len());
@@ -456,13 +456,13 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
             if let Some(ref cv) = cv {
                 debug!("Computing penalized AUC (with cross-validation)...");
                 pop.fit_on_folds(&data, cv, &param);
-                if param.general.keep_all_generations {
+                if param.general.keep_trace {
                     pop.compute_all_metrics(&data);
                 } 
             }  else {
                 debug!("Fitting population...");
                 ga::fit_fn(&mut pop, data, &mut None, &gpu_assay, &test_assay, param);
-                //pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
+                //pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_trace);
             }
 
             debug!("Sorting population...");
@@ -494,11 +494,16 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
         let elapsed = time.elapsed();
         info!("Beam algorithm ({} mode) computed {:?} generations in {:.2?}", param.beam.method, collection.len(), elapsed);
 
+        if param.general.algo=="beam+cv" {
+            // To enable cross-validation, best models in the collection are returned as the last population.
+            collection.push(keep_n_best_model_within_collection(&collection, 20000));
+        }
+        
         collection
 }
 
 // Function to extract best models among all epochs, not necessarily having k_max features
-pub fn keep_n_best_model_within_collection(collection:&Vec<Population>, param:&Param) -> Population {
+pub fn keep_n_best_model_within_collection(collection:&Vec<Population>, n:usize) -> Population {
     let mut all_models = Population::new();
     for population in collection {
         for individual in population.individuals.clone() {
@@ -508,8 +513,8 @@ pub fn keep_n_best_model_within_collection(collection:&Vec<Population>, param:&P
     all_models = all_models.sort();
 
     let best_n_pop;
-    if all_models.individuals.len() > param.general.nb_best_model_to_test as usize && param.general.nb_best_model_to_test as usize != 0 {
-        best_n_pop = Population { individuals : all_models.individuals.clone()[..param.general.nb_best_model_to_test as usize].to_vec() }
+    if all_models.individuals.len() > n as usize && n as usize != 0 {
+        best_n_pop = Population { individuals : all_models.individuals.clone()[..n as usize].to_vec() }
     } else {
         best_n_pop = all_models 
     }

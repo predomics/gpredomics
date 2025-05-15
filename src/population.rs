@@ -1,16 +1,20 @@
+use serde::{Serialize, Deserialize};
 use crate::param::FitFunction;
-use crate::utils::conf_inter_binomial;
+use crate::utils::{conf_inter_binomial,shuffle_row};
 use crate::cv::CV;
 use crate::data::Data;
 use crate::individual::Individual;
 use crate::param::Param;
+use rand::RngCore;
+use rand::SeedableRng;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use std::mem;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use std::cmp::max;
-
+use std::collections::{HashMap, HashSet};
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Population {
     pub individuals: Vec<Individual>
 }
@@ -45,7 +49,7 @@ impl Population {
 
         let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
         for i in 0..=(limit-1) as usize {
-            if param.general.keep_all_generations == false {
+            if param.general.keep_trace == false {
                 match param.general.fit {
                     FitFunction::sensitivity =>  {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![param.general.fr_penalty, 1.0]));},
                     FitFunction::specificity => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![1.0, param.general.fr_penalty]));},
@@ -205,7 +209,7 @@ impl Population {
         
         self.individuals.par_chunks_mut(chunk_size).for_each(|chunk| {
             for individual in chunk {
-                let (auc_sum, auc_squared_sum) = cv.folds.par_iter()
+                let (auc_sum, auc_squared_sum) = cv.validation_folds.par_iter()
                     .map(|fold| {
                         let auc = individual.compute_new_auc(fold);
                         (auc, auc * auc)
@@ -217,7 +221,7 @@ impl Population {
                         }
                     );
     
-                let num_folds = cv.folds.len() as f64;
+                let num_folds = cv.validation_folds.len() as f64;
                 let average_auc = auc_sum / num_folds;
                 let variance = (auc_squared_sum / (num_folds - 1.0)) - (average_auc * average_auc);
                 individual.auc = individual.compute_auc(&data);
@@ -318,6 +322,108 @@ impl Population {
             .find_any(|ind| ind.hash == hash)
     }
 
+    /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
+    /// uses mean decreased AUC
+    pub fn compute_pop_oob_feature_importance(
+        &mut self, 
+        data: &Data, 
+        permutations: usize, 
+        main_rng: &mut ChaCha8Rng, 
+        aggregation_method: &String,
+        scaled_importance: bool
+    ) -> HashMap<usize, f64> {
+        let mut all_features: Vec<usize> = self.individuals
+            .iter()
+            .flat_map(|ind| ind.features_index())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        all_features.sort_unstable();
+        
+        let mut feature_seeds: HashMap<usize, Vec<u64>> = HashMap::new();
+        for &feature_idx in &all_features {
+            let seeds: Vec<u64> = (0..permutations)
+                .map(|_| main_rng.next_u64())
+                .collect();
+            feature_seeds.insert(feature_idx, seeds);
+        }
+        
+        self.individuals.sort_by_key(|ind| ind.hash);
+        
+        let individual_results: Vec<Vec<(usize, f64)>> = self.individuals
+            .par_iter_mut()
+            .map(|ind| {
+                let baseline_auc = ind.compute_new_auc(data);
+                
+                let mut model_features = ind.features_index();
+                model_features.sort_unstable(); 
+                
+                model_features.iter().map(|&feature_idx| {
+                    let seeds = &feature_seeds[&feature_idx];
+                    
+                    let permuted_auc_sum: f64 = seeds.iter().take(permutations)
+                        .map(|&seed| {
+                            let mut permutation_rng = ChaCha8Rng::seed_from_u64(seed);
+                            
+                            let mut X_permuted = data.X.clone();
+                            shuffle_row(&mut X_permuted, data.sample_len, feature_idx, &mut permutation_rng);
+                            
+                            ind.compute_auc_from_features(&X_permuted, data.sample_len, &data.y)
+                        })
+                        .sum();
+                    
+                    let mean_permuted_auc = permuted_auc_sum / permutations as f64;
+                    let importance = baseline_auc - mean_permuted_auc;
+                    
+                    (feature_idx, importance)
+                }).collect()
+            })
+            .collect();
+        
+        let mut feature_importances: HashMap<usize, Vec<f64>> = HashMap::new();
+        let mut feature_counts: HashMap<usize, usize> = HashMap::new();
+        
+        for importance_list in individual_results {
+            for (feature_idx, importance) in importance_list {
+                feature_importances.entry(feature_idx)
+                    .or_insert_with(Vec::new)
+                    .push(importance);
+                
+                *feature_counts.entry(feature_idx).or_insert(0) += 1;
+            }
+        }
+        
+        let mut result = HashMap::new();
+        for (feature_idx, values) in feature_importances {
+            let aggregated_value = match aggregation_method.as_str() {
+                "mean" => values.iter().sum::<f64>() / values.len() as f64,
+                "median" => {
+                    let mut v = values.clone();
+                    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    if v.len() % 2 == 1 {
+                        v[v.len() / 2]
+                    } else {
+                        (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
+                    }
+                },
+                _ => values.iter().sum::<f64>() / values.len() as f64
+            };
+            
+            let final_value = if scaled_importance {
+                let prevalence = feature_counts[&feature_idx] as f64 / self.individuals.len() as f64;
+                aggregated_value * prevalence
+            } else {
+                aggregated_value
+            };
+            
+            result.insert(feature_idx, final_value);
+        }
+        
+        result
+    }
+    
+    
+    
 }
 
 use std::fmt;
@@ -333,6 +439,7 @@ impl fmt::Debug for Population {
 mod tests {
     use super::*;
     use rand::SeedableRng;
+    use wgpu::naga::proc::index::access_needs_check;
     use std::{collections::HashMap, f64::MAX};
     use crate::individual::{DEFAULT_MINIMUM, RAW_TYPE, TERNARY_LANG};
 
@@ -725,4 +832,44 @@ mod tests {
         let pop = create_test_population();
         assert_eq!(pop.get_ind_from_hash(3).unwrap().hash, 3, "Wrong individual selected");
     }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_reproductibility() {
+        let mut pop = create_test_population();
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut data = create_test_data_disc();
+    
+        let mut expected_map: HashMap<usize, f64> = HashMap::new();
+        expected_map.insert(0, -0.061363636363636315);
+        expected_map.insert(1, 0.13484848484848488);
+        expected_map.insert(2, 3.027880976250427e-17);
+        expected_map.insert(3, 3.027880976250427e-17);
+    
+        let result_map = pop.compute_pop_oob_feature_importance(&data, 10, &mut rng, &"mean".to_string(), false);
+    
+        // Tiny variations can be observed due to floating point and depending on the execution order of the threads
+        let tolerance = 1e-10;
+        for (key, expected_value) in &expected_map {
+            let result_value = result_map.get(key).unwrap_or(&0.0);
+            assert!((expected_value - result_value).abs() < tolerance,
+                    "Mismatch at key {} indicating a reproducibility problem: expected = {}, found = {}", key, expected_value, result_value);
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_basic() {
+        let mut population = create_test_population();
+        
+        let data = create_test_data_disc();
+        let mut rng = ChaCha8Rng::seed_from_u64(42); // Seed fixe pour reproductibilité
+        
+        let importance = population.compute_pop_oob_feature_importance(&data, 10, &mut rng, &"mean".to_string(), false);
+        println!("{:?}", importance);
+        assert!(importance.contains_key(&0));
+        assert!(importance.contains_key(&1));
+        assert!(importance.contains_key(&2));
+        assert!(importance.contains_key(&3));
+        assert!(importance.values().any(|&val| val != 0.0));
+    }
+
 }
