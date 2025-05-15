@@ -161,7 +161,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
     my_data.set_classes(param.data.classes.clone());
     info!("\x1b[2;97m{:?}\x1b[0m", my_data);  
-    let has_auc = true;
+    //let has_auc = true;
 
     let (mut run_test_data, run_data): (Option<Data>,Option<Data>) = if param.general.overfit_penalty>0.0 {
         let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);

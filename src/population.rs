@@ -439,7 +439,6 @@ impl fmt::Debug for Population {
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use wgpu::naga::proc::index::access_needs_check;
     use std::{collections::HashMap, f64::MAX};
     use crate::individual::{DEFAULT_MINIMUM, RAW_TYPE, TERNARY_LANG};
 
@@ -837,7 +836,7 @@ mod tests {
     fn test_compute_pop_oob_feature_importance_reproductibility() {
         let mut pop = create_test_population();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let mut data = create_test_data_disc();
+        let data = create_test_data_disc();
     
         let mut expected_map: HashMap<usize, f64> = HashMap::new();
         expected_map.insert(0, -0.061363636363636315);
