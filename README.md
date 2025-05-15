@@ -14,11 +14,8 @@ gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version
 (a small test to compare some AUCs with scikit-learn show that values convergent - for some model, a small divergence (less than 0.5%) can appear). The base fit function can be nudged by several useful penalties:
 
   - k_penalty: a penalty that is deduced from fit multiplied by the number of non nul coefficients,
-  - fnr_penalty: a penalty useful when fit is `specificity` to constraint  for some sensitivity as well,
-  - fpr_penalty: a penalty useful when fit is `sensitivity` to constraint  for some specificity as well,
-  - overfit_penalty: when this penalty is added, a part of the train data is removed, a fold as a test (the number of folds is in `cv.fold_number`), the real test being called then the holdout, and the base fit function is evaluated on test each time, the difference between train and test is deduced from the base fit function multiplied by this coefficient (thus it should be different from 1/cv.fold_number otherwise the penalty does nothing) 
+  - fr_penalty: a penalty used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit
 
-- feature importance is estimated by OOB algorithm using mean decreased AUC,
 - several data_type are implemented (`general.data_type` and `general.data_type_minimum`): 
 
   - `raw` : features are taken as they are (default),
@@ -29,6 +26,8 @@ gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version
 
   - `exhaustive` generates all the possible combinations of features selected at each epoch (an epoch is a population of individuals of size k) which is equivalent of terBeam in Predomics terms. 
   - `extend` adds each of the features selected to each of the best extendable_models at each epoch.
+
+- the Cross-validation, also in beta version, is available since v0.5.8. Feature importance is estimated by OOB algorithm using mean decreased AUC.
 
 - lots of features are still not implemented.
 
@@ -95,49 +94,89 @@ RUSTFLAGS="-C target-cpu=native -C opt-level=3" cargo build --release
 ## some details about param.yaml
 
 Parameters are set in the `param.yaml` file, a short description of the meaning of the different lines is provided within the file.
-There are three sections, general, data and ga.
+There are six sections: general, data, cv, ga, beam & gpu.
 
 ### general
 
-- seed: gpredomics is fully determinist, re-running a computation with the same seed bear the same results, this should be a number,
-- algo: either `random` (not useful, for tests only), `ga` the basic genetic algorithm, `ga+cv` (experimental, uncomplete) the same algorithm but with a simple cross val scheme 
-- thread_number: the number of parallel threads used in feature selection and fit evaluation in `ga`, between different `ga` in `ga+cv`.
-- gpu: should be true whenever possible (that is almost always)
+- seed: gpredomics is fully determinist, re-running a computation with the same seed bear the same results, this should be a number.
+- algo: either `random` (not useful, for tests only), `ga` the basic genetic algorithm, `ga+cv`, the same algorithm but with a simple cross val scheme, `beam` the beam algorithm and `beam+cv` the same algorithm but with a simple cross val scheme.
+- thread_number: the number of parallel threads used in feature selection and fit evaluation. Note that for cross validation, each fold will be run on one or more threads, depending on avalability.
+- gpu: should be true whenever possible (that is almost always).
+
+The following parameter are for model characteristics:
+- language: one or more model languages separated by commas (more details above).
+- data_type: one or more model data types separated by commas (more details above).
+- data_type_minimum: each value equal to or less than this minimum will be converted to 0 (those above will be converted to 1 for data_type prevalence).
 
 The following parameter are for the fit function:
-- fit: the base parameter, define the base fit function, `auc`, `specificity` or `sensitivity`, the base fit is then modified by different penalty set below,
-- k_penalty: the penalty applied per number of feature in the model (be careful with large number of feature, don't set this too high),
+- fit: the base parameter, define the base fit function, `auc`, `specificity` or `sensitivity`, the base fit is then modified by different penalty set below.
+- k_penalty: the penalty applied per number of feature in the model (be careful with large number of feature, don't set this too high).
 - fr_penalty: false rate penalty: add a part of sensitivity when fitting on specificity or symetrically. When set to 1.0 it's roughly a fit on accuracy.
-- overfit_penalty: this one trigger the creation of an intermediate test set from the train set (a fold, taken after `cv.fold_number`). The difference of fit function on the test set vs the train set is then deduced from the initial fit function, multiplied by this parameter. This overfit penalty must be carefully balanced, typically fold_number is set to 10. Setting the overfit_penalty to 0.1 is like having included the fold in the train set (it has the weight equal to its size), so it does nothing, better to have 0 in that case (which is less costly). Setting the overfit_penalty to 0.3 or above will give the fold an high importance and is likely to trigger an overfit on the fold, which is likely worse than an overfit on the whole train. Good overfit penalty values should be slightly above 0.1 but not higher than 0.2. This sensitive penalty is likely not the first one to test, keep it to 0 at first.
+
+The following parameter are for logging:
+- nb_best_model_to_test: number of models to test and print in the last generation (0 means all models).
+- log_base: if specified, logs are saved in a file starting with log_base.
+- log_level: possible values are (complete log) trace > debug > info > warning > error (only error).
+- display_level: the level of precision in displaying the final results: 2: variable name, 1: variable index; 0: anonymised variables.
+- display_colorful: should the terminal results be coloured to make them easier to read?  
+
+Finally, this section also has a parameter that is essential for GpredomicsR to work properly, but which can slow down execution purely from Rust. If you are not using the R version of the programme, it is advisable to leave it to false:
+
+- keep_trace: compute metrics of every models. 
+
+### cv
+
+- fold_number: number of folds for cross-validation (k-folds strategy).
+- cv_best_models_ci_alpha: alpha for the family of best model confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
+- n_permutations_oob: number of permutations per feature for OOB importance.
+- scaled_importance: should importance be scaled by feature prevalence inside folds?
+- importance_aggregation: aggregation method for importances within a fold and between folds : "mean" or "median".     
 
 ### data
 
 - The name of the files are pretty obvious: X is the matrix of features, y the target vector.
-- Xtest and ytest are optional holdouts (that should not be included in X and y)
+- Xtest and ytest are optional holdouts (that should not be included in X and y).
+- features_maximal_number_per_class: 0: all significant features ; else first X significant features (per class!) sorted according to their pvalue/log_abs_bayes_factor.
+- feature_selection_method: possible values are wilcoxon (recommanded for sparse/log normal features), studentt (recommanded for features with normal distributions) and bayesian_fisher. wilcoxon is recommanded in most cases.
 - feature_minimal_prevalence_pct is a filter: this is the minimal % of sample non null for the feature in either class for the feature to be kept.
-- feature_minimal_feature_value is a filter on the average value of the feature (if either class is above, then the feature is not rejected),
-- feature_maximal_pvalue is a filter to remove features which average is not significantly different between the two classes.
-- pvalue_method is either studentt (recommanded for features with normal distributions) or wilcoxon (recommanded for sparse/log normal features)
+- feature_minimal_feature_value is a filter on the average value of the feature (if either class is above, then the feature is not rejected).
+- feature_maximal_pvalue is a filter to remove features which average is not significantly different between the two classes (non-Bayesian methods).
+- feature_minimal_log_abs_bayes_factor is a filter to remove features with a fewer log absolute bayes factor will be removed (Bayesian method only)
+- classes: the class names, for display in this order:
+  - name of the negative class (0),
+  - name of the positive class (1),
+  - name of the unknown class (2).
 
 ### ga
 
-- population_size: the number of model (a.k.a. Individual in the Rust code) per epoch,
-- max_epochs: the target number of epoch (an epoch is a generation in the Genetic Algorithm)
-- min_epochs: the minimal number of epoch befor trying to see if AUC are converging
-- max_age_best_model: when a best model reaches this age after min_epochs epochs, the ga algorithm is stopped,
-- select_elite_pct: the percentage of best N-1 individual selected as parents,
-- select_random_pct: the percentage of random N-1 individual selected as parents,
-- mutated_children_pct: the percentage of children mutated,
-- mutated_features_pct: the percentage of feature mutated in a mutated child,
+- population_size: the number of model (a.k.a. Individual in the Rust code) per epoch.
+- max_epochs: the target number of epoch (an epoch is a generation in the Genetic Algorithm).
+- min_epochs: the minimal number of epoch befor trying to see if AUC are converging.
+- max_age_best_model: when a best model reaches this age after min_epochs epochs, the ga algorithm is stopped.
+- select_elite_pct: the percentage of best N-1 individual selected as parents.
+- select_random_pct: the percentage of random N-1 individual selected as parents.
+- mutated_children_pct: the percentage of children mutated.
+- mutated_features_pct: the percentage of feature mutated in a mutated child.
 - mutation_non_null_chance_pct: the likeliness of "positive" mutation, e.g. a mutation that select a new feature in the model.
-- feature_importance_permutations: the number of permutations in OOB algorithm to compute feature importance
 
 ### beam
 
-- method: exhaustive or extend, more details above
-- kmin: the number of variables used in the initial population
-- kmax: the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
-- best_models_ci_alpha: alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range
-- features_importance_minimal_pct: the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch
-- very_best_models_pct: the percentage of best models where all variables are features_to_keep 
-- extendable_models: the number of models to increment with each feature_to_keep in extend mode
+- method: exhaustive or extend, more details above.
+- kmin: the number of variables used in the initial population.
+- kmax: the maximum number of variables to considere in a single model, the variable count limit for beam algorithm.
+- best_models_ci_alpha: alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
+- features_importance_minimal_pct: the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch.
+- very_best_models_pct: the percentage of best models where all variables are features_to_keep.
+- max_nb_of_models: limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance) (exhaustive mode).
+- extendable_models: the number of models to increment with each feature_to_keep (extend mode).
+
+### gpu
+
+Finally, some technical parameters are available for the gpu: 
+
+- memory_policy: Strict -> panic if below limits are not available | Adaptive -> adjusts below limits if not available | Performance -> uses all the available GPU memory regardless of below limits.
+- max_total_memory_mb:: limit in mb defining the maximum amount of GPU memory used by all buffers.
+- max_buffer_size_mb: limit in mb defining the maximum amount of GPU memory used by one buffer.
+- fallback_to_cpu: executes the code on the CPU if there is no GPU available.
+
+We recommend you to keep the default settings. Increasing these values is only useful if the number of models per stage (per GA generation or per k in BEAM) leads to a crash.

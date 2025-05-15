@@ -1,8 +1,10 @@
+use bincode::config;
 use wgpu::util::DeviceExt;
 use wgpu::{BindGroupEntry, BindingResource, CommandEncoderDescriptor, ComputePassDescriptor};
 use std::collections::HashMap;
 use bytemuck;
 use crate::individual::{Individual, RATIO_LANG,RAW_TYPE,LOG_TYPE,PREVALENCE_TYPE};
+use crate::param::{GpuMemoryPolicy, GPU};
 
 /// Convert a HashMap<(row, col), f64> to CSR format for an R x C matrix. 
 ///
@@ -210,6 +212,7 @@ struct MatrixMultParams {
 
 pub struct GpuAssay {
     // WGPU core
+    pub config: GPU,
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     pub device: wgpu::Device,
@@ -248,28 +251,133 @@ impl GpuAssay {
         x_map: &HashMap<(usize, usize), f64>,
         feature_selection: &Vec<usize>,
         samples: usize,
-        max_model_nb: usize
+        max_model_nb: usize,
+        config: &GPU
     ) -> Self {
         // Just call the async constructor in a pollster::block_on
-        pollster::block_on(Self::new_async(x_map, feature_selection, samples,max_model_nb))
+        pollster::block_on(Self::new_async(x_map, feature_selection, samples,max_model_nb, config))
     }
 
+    pub fn log_memory_status(&self) {
+        log::debug!(
+            "GPU Memory Policy: {:?} | Buffer: {}/{}MB | Total: {}/{}MB",
+            self.config.memory_policy,
+            self.device.limits().max_storage_buffer_binding_size / 1024 / 1024,
+            self.config.max_buffer_size_mb,
+            self.device.limits().max_buffer_size / 1024 / 1024,
+            self.config.max_total_memory_mb
+        );
+    }
 
     pub async fn new_async(
         x_map: &HashMap<(usize, usize), f64>,
         feature_selection: &Vec<usize>,
         samples: usize,
-        max_model_nb: usize
+        max_model_nb: usize,
+        config: &GPU,
     ) -> Self {
         
         // 1) Build wgpu
         let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await
-            .expect("Failed to find an adapter");
-        let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default(), None)
-            .await
-            .expect("Failed to create device");
+
+        // First, try to get an adapter without forcing CPU fallback
+        let adapter_result = instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }).await;
+
+        // Now we can match on the result
+        let adapter = match adapter_result {
+            Some(adapter) => {
+                // Control device type
+                let info = adapter.get_info();
+                
+                if !config.fallback_to_cpu && info.device_type == wgpu::DeviceType::Cpu {
+                    panic!("No compatible graphics card detected. The program requires a graphics card compatible with WGPU (Vulkan, Metal, DX12 or WebGPU) as the fallback_to_cpu option is disabled.");
+                }
+                
+                log::info!("\x1b[0;32mGPU adapter selected: {} ({:?})\x1b[0m", info.name, info.device_type);
+                adapter
+            },
+            None => {
+                if !config.fallback_to_cpu {
+                    panic!("No graphics adapter could be initialised and the fallback_to_cpu option is disabled.");
+                }
+                
+                // Try explicitly with CPU fallback
+                log::warn!("No compatible GPU found, trying with CPU fallback");
+                instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    force_fallback_adapter: true,
+                    compatible_surface: None,
+                }).await.expect("Unable to initialise even a spare CPU adapter")
+            }
+        };
+
+        // Get material constraints
+        // Perplexity said that a match should return the same type, let's see. 
+        let hardware_limits = adapter.limits();
+        let requested_total_size = config.max_total_memory_mb.saturating_mul(1024).saturating_mul(1024);
+        let requested_buffer_size = config.max_buffer_size_mb.saturating_mul(1024).saturating_mul(1024);
+
+        // Calcul des limites selon la politique choisie
+        let (final_total, final_buffer) = match config.memory_policy {
+            GpuMemoryPolicy::Strict => {
+                if requested_total_size > hardware_limits.max_buffer_size {
+                    panic!(
+                        "Strict mode: requested total memory ({} MB) exceeds hardware limit ({} MB)",
+                        config.max_total_memory_mb,
+                        hardware_limits.max_buffer_size / (1024 * 1024)
+                    );
+                } 
+                if requested_buffer_size > hardware_limits.max_storage_buffer_binding_size {
+                    panic!(
+                        "Strict mode: requested buffer size ({} MB) exceeds hardware limit ({} MB)",
+                        config.max_buffer_size_mb,
+                        hardware_limits.max_storage_buffer_binding_size / (1024 * 1024)
+                    );
+                }
+                (requested_total_size, requested_buffer_size)
+            },
+
+            GpuMemoryPolicy::Adaptive => (
+                requested_total_size.min(hardware_limits.max_buffer_size),
+                requested_buffer_size.min(hardware_limits.max_storage_buffer_binding_size)
+            ),
+            
+            GpuMemoryPolicy::Performance => (
+                hardware_limits.max_buffer_size,
+                hardware_limits.max_storage_buffer_binding_size
+            ),
+        };
+
+        let required_limits = wgpu::Limits {
+            max_storage_buffer_binding_size: final_buffer,
+            max_buffer_size: final_total,
+            max_storage_buffers_per_shader_stage: 8,
+            ..wgpu::Limits::downlevel_defaults()
+        };
+
+
+        let (device, queue) = match adapter.request_device(&wgpu::DeviceDescriptor {required_limits,..Default::default()}, None)
+        .await {
+            Ok(d) => d,
+            Err(e) if config.fallback_to_cpu => {
+                log::warn!("GPU initialization failed: {}. Falling back to CPU", e);
+                let cpu_adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    force_fallback_adapter: true,
+                    ..Default::default()
+                })
+                .await
+                .expect("Failed to create CPU fallback");
+                cpu_adapter.request_device(&wgpu::DeviceDescriptor::default(), None)
+                    .await
+                    .expect("CPU fallback failed")
+            }
+            Err(e) => panic!("GPU initialization failed: {}", e),
+        };
+
         let feature_map: HashMap<usize,usize> = feature_selection.iter().enumerate().map(|(index,feature)| {(*feature,index)}).collect();
 
         // 2) Create CSR for X
@@ -439,9 +547,8 @@ impl GpuAssay {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-
-
         Self {
+            config: config.clone(),
             instance,
             adapter,
             device,
@@ -596,5 +703,42 @@ impl GpuAssay {
             return result_vec;
         }
 
+    }
+
+    pub fn get_max_buffer_size(config: &GPU) -> u32 {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::default();
+            let adapter_future = instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            });
+            
+            let adapter = match adapter_future.await {
+                Some(a) => a,
+                None => {
+                    if !config.fallback_to_cpu {
+                        return 134217728/2;
+                    }
+                
+                    match instance.request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::LowPower,
+                        force_fallback_adapter: true,
+                        compatible_surface: None,
+                    }).await {
+                        Some(a) => a,
+                        None => return 134217728/2, 
+                    }
+                }
+            };
+            
+            let hardware_limits = adapter.limits();
+
+            match config.memory_policy {
+                GpuMemoryPolicy::Strict => config.max_buffer_size_mb.saturating_mul(1024 * 1024).min(hardware_limits.max_storage_buffer_binding_size),
+                GpuMemoryPolicy::Adaptive => hardware_limits.max_storage_buffer_binding_size.min(config.max_buffer_size_mb.saturating_mul(1024 * 1024)),
+                GpuMemoryPolicy::Performance => hardware_limits.max_storage_buffer_binding_size,
+            }
+        })
     }
 }

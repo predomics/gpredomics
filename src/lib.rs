@@ -14,6 +14,7 @@ use data::Data;
 use individual::Individual;
 use population::Population;
 use rand_chacha::ChaCha8Rng;
+use std::collections::HashMap;
 use rand::prelude::*;
 use param::Param;
 
@@ -21,8 +22,6 @@ use log::{debug, info, warn};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use rayon::ThreadPoolBuilder;
-use rayon::prelude::*;
 
 /// a very basic use
 pub fn basic_test(param: &Param) {
@@ -123,9 +122,9 @@ pub fn gpu_random_run(param: &Param) {
     let nb_individuals: usize = 1000;
 
 
-    let assay = gpu::GpuAssay::new(&my_data.X, &my_data.feature_selection, my_data.sample_len, nb_individuals as usize);
+    let assay = gpu::GpuAssay::new(&my_data.X, &my_data.feature_selection, my_data.sample_len, nb_individuals as usize, &param.gpu);
 
-    let mut individuals:Vec<Individual> = (0..nb_individuals).map(|i| {Individual::random(&my_data, &mut rng)}).collect();
+    let mut individuals:Vec<Individual> = (0..nb_individuals).map(|_i| {Individual::random(&my_data, &mut rng)}).collect();
     individuals = individuals.into_iter()
         .map(|i| {
             // we filter random features for selected features, not efficient but we do not care
@@ -161,13 +160,13 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     
     let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
     my_data.set_classes(param.data.classes.clone());
-    info!("{:?}", my_data); 
+    info!("\x1b[2;97m{:?}\x1b[0m", my_data);  
     let has_auc = true;
 
     let (mut run_test_data, run_data): (Option<Data>,Option<Data>) = if param.general.overfit_penalty>0.0 {
         let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
         let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
-        (Some(cv.folds.remove(0)),Some(cv.datasets.remove(0)))
+        (Some(cv.validation_folds.remove(0)),Some(cv.training_sets.remove(0)))
     } else { (None,None) };
 
     let mut populations = if let Some(mut this_data)=run_data {
@@ -230,16 +229,15 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     let generations = populations.len();
     let population= &mut populations[generations-1];
 
+        debug!("Length of population {}",population.individuals.len());
+        let nb_model_to_test = if param.general.nb_best_model_to_test>0 {param.general.nb_best_model_to_test as usize} else {population.individuals.len()};
+        debug!("Testing {} models",nb_model_to_test);
+
     let mut test_data=Data::new();
     if param.data.Xtest.len()>0 {
         let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
         test_data.set_classes(param.data.classes.clone());
         
-        debug!("Length of population {}",population.individuals.len());
-
-        let nb_model_to_test = if param.general.nb_best_model_to_test>0 {param.general.nb_best_model_to_test as usize} else {population.individuals.len()};
-        debug!("Testing {} models",nb_model_to_test);
-
         info!("{}", population.display(&my_data, Some(&test_data), param));
 
         // // Prepare the evaluation pool
@@ -266,15 +264,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         // });
     }
     else {
-        for (i,individual) in population.individuals[..10].iter_mut().enumerate() {
-            if has_auc {
-                (individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = 
-                    individual.compute_threshold_and_metrics(&test_data);
-            } else {
-                individual.compute_auc(&my_data);
-            }
-            info!("Model #{} [k={}] [gen:{}]: train AUC {:.3}",i+1,individual.k,individual.epoch,individual.auc);
-        }    
+        info!("{}", population.display(&my_data, None, param));
     }
 
     (populations,my_data,test_data) 
@@ -283,80 +273,292 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
 
 pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
     let mut data = Data::new();
-    let mut data_test = Data::new();
     let _ = data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
-    let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
     data.set_classes(param.data.classes.clone());
-    data_test.set_classes(param.data.classes.clone());
+    
+    info!("\x1b[2;97m{:?}\x1b[0m", data);  
 
     let mut collection = beam::beam(&mut data, &mut None, param, running);
     
-    // Print final best models
     let mut final_pop = Population::new();
     final_pop.individuals = collection.last_mut().unwrap().individuals.clone();
-    info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
-    info!("{}", final_pop.display(&data, Some(&data_test), param));
+    let mut top_ten_pop = beam::keep_n_best_model_within_collection(&collection, param.general.nb_best_model_to_test as usize);
+    
+    let mut data_test = Data::new();
+    if param.data.Xtest.len()>0 {
+        let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
+        data_test.set_classes(param.data.classes.clone());
+        info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
+        info!("{}", final_pop.display(&data, Some(&data_test), param));
+        info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
+        info!("{}", top_ten_pop.display(&data, Some(&data_test), param));
+    } else {
+        info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
+        info!("{}", final_pop.display(&data, None, param));
+        info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
+        info!("{}", top_ten_pop.display(&data, None, param));
+    }
 
-    info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
-    let mut top_ten_pop = beam::keep_n_best_model_within_collection(&collection, param);
-    info!("{}", top_ten_pop.display(&data, Some(&data_test), param));
 
     (collection, data, data_test)
 }
 
-/// the Genetic Algorithm test with Crossval (not useful but test CV)
-pub fn gacv_run(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
-    info!("                          GA CV TEST\n-----------------------------------------------------");
-    let mut my_data = Data::new();
+pub fn run_cv_ga(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
+    info!("Genetic algorithm with \x1b[1;93mCross-Validation\x1b[0m\n-----------------------------------------------------");
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-    
-    let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
-    my_data.set_classes(param.data.classes.clone());
-    info!("{:?}", my_data); 
+    let mut data = Data::new();
+    let _ = data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    data.set_classes(param.data.classes.clone());
+    info!("\x1b[2;97m{:?}\x1b[0m", data); 
 
-    let mut crossval = cv::CV::new(&my_data, 10, &mut rng);
-
+    // CV
+    let mut crossval = cv::CV::new(&data, param.cv.fold_number, &mut rng);
     let mut cv_param = param.clone();
-    cv_param.general.thread_number = 1;
+    cv_param.general.thread_number = param.general.thread_number/param.cv.fold_number; 
+    cv_param.general.gpu = false;
 
-    let results=crossval.pass(|d: &mut Data,p: &Param,r: Arc<AtomicBool>| 
-        { ga::ga(d,&mut None,p,r) }, &cv_param, param.general.thread_number, running);
+    if cv_param.general.thread_number>= param.cv.fold_number {
+        info!("\x1b[1;93mCross-validation parallelization using {} threads per fold\x1b[0m", cv_param.general.thread_number);
+    }
+
+    let results=crossval.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| 
+        { ga::ga(d,&mut None,p,r) }, &cv_param, cv_param.general.thread_number, running);
     
-    let mut test_data=Data::new();
-    if param.data.Xtest.len()>0 {
-        let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
-        test_data.set_classes(param.data.classes.clone());
+    let mut cv_fmb_pop = Population::new();
+
+    // Computing OOB with validation folds based on FBM
+    let mut importances: HashMap<usize, Vec<f64>> = HashMap::new();
+    let mut features_significant_observations: HashMap<usize, usize> = Default::default();
+    let mut features_classes: HashMap<usize, i8> = Default::default();
+    for (i,(mut fold_last_population, train, mut test)) in results.into_iter().enumerate() {
         
-        for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-            let holdout_auc=best_model.compute_auc(&test_data);
-            let (threshold, accuracy, sensitivity, specificity) = 
-                best_model.compute_threshold_and_metrics(&test_data);
-            info!("Model #{} [gen:{}] [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
-                        i+1,best_model.epoch,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
-            info!("Features importance on train+test... ");
-            info!("{}",
-                best_model.compute_oob_feature_importance(&my_data, param.ga.feature_importance_permutations,&mut rng)
-                    .into_iter()
-                    .map(|feature_importance| { format!("[{:.4}]",feature_importance) })
-                    .collect::<Vec<String>>()
-                    .join(" ")
-            );
-            info!("Features importance on holdout... ");
-            info!("{}",
-                best_model.compute_oob_feature_importance(&test_data, param.ga.feature_importance_permutations,&mut rng)
-                    .into_iter()
-                    .map(|feature_importance| { format!("[{:.4}]",feature_importance) })
-                    .collect::<Vec<String>>()
-                    .join(" ")
-            );
-        }    
-    }
-    else {
-        for (i,(best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-            warn!("Model #{} [gen:{}] [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.epoch,best_model.k,train_auc,test_auc,best_model);
-        }    
+        // Fit last population on validation folds instead of training folds in order to select the models most likely to generalize.
+        ga::fit_fn(&mut fold_last_population, &mut test, &mut None, &None, &None, &cv_param);
+
+        let mut fold_last_fbm = fold_last_population.select_best_population(param.cv.cv_best_models_ci_alpha);
+        fold_last_fbm = fold_last_fbm.sort();
+        
+        let fold_importances = fold_last_fbm.compute_pop_oob_feature_importance(&crossval.validation_folds[i], param.cv.n_permutations_oob, &mut rng, &param.cv.importance_aggregation, param.cv.scaled_importance);
+        for (key, value) in fold_importances.iter() {
+            importances.entry(*key).or_insert_with(Vec::new).push(*value);
+            if train.feature_class.contains_key(key) {
+                *features_significant_observations.entry(*key).or_insert(0) += 1;
+                let associated_class = train.feature_class[key];
+                if associated_class == 0 {
+                    *features_classes.entry(*key).or_insert(0) += -1;
+                } else if associated_class == 1 {
+                    *features_classes.entry(*key).or_insert(0) += 1;
+                }
+            }
+        }
+
+        cv_fmb_pop.individuals.extend(fold_last_fbm.individuals);
     }
 
-    (crossval,my_data,test_data) 
+    // Sort best models according to their fit on validation folds
+    // Display them and their metrics on data and potential data_test
+    cv_fmb_pop = cv_fmb_pop.sort();
+    
+    info!("\x1b[1;93mDisplaying best models according to their generalization on associated validation fold (fit). Metrics are calculated on the global training set (including training and validation folds) and, if supplied, on the additional test set.\x1b[0m");
+    cv_fmb_pop.compute_all_metrics(&data);
+    cv_fmb_pop.remove_clone();
+
+    let mut data_test = Data::new();
+    if param.data.Xtest.len()>0 {
+        let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
+        data_test.set_classes(param.data.classes.clone());
+        info!("{}", cv_fmb_pop.display(&data, Some(&data_test), param));
+    } else {
+        info!("{}", cv_fmb_pop.display(&data, None, param));
+    }
+
+    let mut final_importances: HashMap<usize, f64> = HashMap::new();
+
+    for (key, values) in &importances {
+        let agg = match param.cv.importance_aggregation.as_str() {
+           "median" => {
+                let mut v = values.clone();
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                if v.len() % 2 == 1 {
+                    v[v.len() / 2]
+                } else {
+                    (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
+                }
+            },
+            _ => {
+                let sum: f64 = values.iter().sum();
+                sum / values.len() as f64
+            }
+        };
+        final_importances.insert(*key, agg);
+    }
+
+    let mut importance_vec: Vec<(&usize, &f64)> = final_importances.iter().collect();
+    importance_vec.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let n = 150;
+    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m",  match param.cv.importance_aggregation.as_str() {"median" => "Importance (Median)", _ => "Importance (Mean)"}
+);
+    // Colouring if the feature is associated with the same class in all FBM models (or unassociated)
+    for (rank, (feature_idx, importance)) in importance_vec.iter().take(n).enumerate() {
+        if features_classes[*feature_idx] == -(features_significant_observations[*feature_idx] as i8)  {
+             info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[95m{}\x1b[0m\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+        } else if features_classes[*feature_idx] == features_significant_observations[*feature_idx] as i8 {
+            info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[96m{}\x1b[0m\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+        } else {
+            info!("\x1b[1;93m#{}\x1b[0m\t\t{}\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+        }
+    }
+
+    // if param.data.Xtest.len()>0 {
+    //     let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
+    //     test_data.set_classes(param.data.classes.clone());
+        
+    //     for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
+    //         let holdout_auc=best_model.compute_auc(&test_data);
+    //         let (threshold, accuracy, sensitivity, specificity) = 
+    //             best_model.compute_threshold_and_metrics(&test_data);
+    //         info!("Model #{} [gen:{}] [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
+    //                     i+1,best_model.epoch,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
+    //         info!("Features importance on train+test... ");
+    //         info!("{}",
+    //             best_model.compute_oob_feature_importance(&my_data, param.ga.feature_importance_permutations,&mut rng)
+    //                 .into_iter()
+    //                 .map(|feature_importance| { format!("[{:.4}]",feature_importance) })
+    //                 .collect::<Vec<String>>()
+    //                 .join(" ")
+    //         );
+    //         info!("Features importance on holdout... ");
+    //         info!("{}",
+    //             best_model.compute_oob_feature_importance(&test_data, param.ga.feature_importance_permutations,&mut rng)
+    //                 .into_iter()
+    //                 .map(|feature_importance| { format!("[{:.4}]",feature_importance) })
+    //                 .collect::<Vec<String>>()
+    //                 .join(" ")
+    //         );
+    //     }    
+    // }
+    // else {
+    //     for (i,(best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
+    //         warn!("Model #{} [gen:{}] [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.epoch,best_model.k,train_auc,test_auc,best_model);
+    //     }    
+    // }
+
+    (crossval,data,data_test) 
+
+}
+
+pub fn run_cv_beam(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
+    info!("Beam algorithm with \x1b[1;93mCross-Validation\x1b[0m\n-----------------------------------------------------");
+    let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+    let mut data = Data::new();
+    let _ = data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    data.set_classes(param.data.classes.clone());
+    info!("\x1b[2;97m{:?}\x1b[0m", data); 
+
+    let mut data_test = Data::new();
+    let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
+    data_test.set_classes(param.data.classes.clone());
+
+    // CV
+    let mut crossval = cv::CV::new(&data, param.cv.fold_number, &mut rng);
+    let mut cv_param = param.clone();
+    cv_param.general.thread_number = param.general.thread_number/param.cv.fold_number; 
+    cv_param.general.gpu = false;
+    
+    if cv_param.general.thread_number >= param.cv.fold_number {
+        info!("\x1b[1;93mCross-validation parallelization using {} thread per fold\x1b[0m", cv_param.general.thread_number);
+    }
+
+    let results=crossval.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| 
+        { beam::beam(d,&mut None,p,r) }, &cv_param, cv_param.general.thread_number, running);
+    
+    let mut cv_fmb_pop = Population::new();
+
+    // Computing OOB with validation folds based on FBM
+    let mut importances: HashMap<usize, Vec<f64>> = HashMap::new();
+    let mut features_significant_observations: HashMap<usize, usize> = Default::default();
+    let mut features_classes: HashMap<usize, i8> = Default::default();
+    for (i,(mut fold_last_population, train, mut test)) in results.into_iter().enumerate() {
+        
+        // Fit last population on validation folds instead of training folds in order to select the models most likely to generalize.
+        ga::fit_fn(&mut fold_last_population, &mut test, &mut None, &None, &None, &cv_param);
+
+        let mut fold_last_fbm = fold_last_population.select_best_population(param.cv.cv_best_models_ci_alpha);
+        fold_last_fbm = fold_last_fbm.sort();
+        
+        let fold_importances = fold_last_fbm.compute_pop_oob_feature_importance(&crossval.validation_folds[i], param.cv.n_permutations_oob, &mut rng, &param.cv.importance_aggregation, param.cv.scaled_importance);
+        for (key, value) in fold_importances.iter() {
+            importances.entry(*key).or_insert_with(Vec::new).push(*value);
+            if train.feature_class.contains_key(key) {
+                *features_significant_observations.entry(*key).or_insert(0) += 1;
+                let associated_class = train.feature_class[key];
+                if associated_class == 0 {
+                    *features_classes.entry(*key).or_insert(0) += -1;
+                } else if associated_class == 1 {
+                    *features_classes.entry(*key).or_insert(0) += 1;
+                }
+            }
+        }
+
+        cv_fmb_pop.individuals.extend(fold_last_fbm.individuals);
+    }
+
+    // Sort best models according to their fit on validation folds
+    // Display them and their metrics on data and potential data_test
+    cv_fmb_pop = cv_fmb_pop.sort();
+    
+    info!("\x1b[1;93mDisplaying best models according to their generalization on associated validation fold (fit). Metrics are calculated on the global training set (including training and validation folds) and, if supplied, on the additional test set.\x1b[0m");
+    cv_fmb_pop.compute_all_metrics(&data);
+    cv_fmb_pop.remove_clone();
+    
+    let mut data_test = Data::new();
+    if param.data.Xtest.len()>0 {
+        let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
+        data_test.set_classes(param.data.classes.clone());
+        info!("{}", cv_fmb_pop.display(&data, Some(&data_test), param));
+    } else {
+        info!("{}", cv_fmb_pop.display(&data, None, param));
+    }
+
+    let mut final_importances: HashMap<usize, f64> = HashMap::new();
+
+    for (key, values) in &importances {
+        let agg = match param.cv.importance_aggregation.as_str() {
+           "median" => {
+                let mut v = values.clone();
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                if v.len() % 2 == 1 {
+                    v[v.len() / 2]
+                } else {
+                    (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
+                }
+            },
+            _ => {
+                let sum: f64 = values.iter().sum();
+                sum / values.len() as f64
+            }
+        };
+        final_importances.insert(*key, agg);
+    }
+
+    let mut importance_vec: Vec<(&usize, &f64)> = final_importances.iter().collect();
+    importance_vec.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let n = 150;
+    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m",  match param.cv.importance_aggregation.as_str() {"median" => "Importance (Median)", _ => "Importance (Mean)"}
+);
+    // Colouring if the feature is associated with the same class in all FBM models (or unassociated)
+    for (rank, (feature_idx, importance)) in importance_vec.iter().take(n).enumerate() {
+        if features_classes[*feature_idx] == -(features_significant_observations[*feature_idx] as i8)  {
+             info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[95m{}\x1b[0m\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+        } else if features_classes[*feature_idx] == features_significant_observations[*feature_idx] as i8 {
+            info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[96m{}\x1b[0m\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+        } else {
+            info!("\x1b[1;93m#{}\x1b[0m\t\t{}\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+        }
+    }
+
+    (crossval,data,data_test) 
 
 }

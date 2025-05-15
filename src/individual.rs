@@ -1,3 +1,4 @@
+use serde::{Serialize, Deserialize};
 use crate::utils::{generate_random_vector,shuffle_row};
 use crate::data::Data;
 use rand::seq::SliceRandom; // Provides the `choose_multiple` method
@@ -11,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use crate::Population;
 use log::debug;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Individual {
     pub features: HashMap<usize,i8>, /// a vector of feature indices with their corresponding signs
     pub auc: f64, // accuracy of the model
@@ -169,9 +170,9 @@ impl Individual {
             } else {
                 str = data.features[*index].clone()
             }
-            if self.language == POW2_LANG && !(*coef == 1_i8) && self.language != LOG_TYPE {
+            if self.language == POW2_LANG && !(*coef == 1_i8) && self.data_type != LOG_TYPE {
                 str = format!("{}*{}", coef, str);
-            } else if self.language == POW2_LANG && !(*coef == 1_i8) && self.language == LOG_TYPE {
+            } else if self.language == POW2_LANG && !(*coef == 1_i8) && self.data_type == LOG_TYPE {
                 // b*ln(a) == ln(a^b)
                 str = format!("{}^{}", str, coef);
             }
@@ -193,9 +194,9 @@ impl Individual {
                 } else {
                     str = data.features[*index].clone()
                 }
-            if self.language == POW2_LANG && !(*coef == -1_i8) && self.language != LOG_TYPE {
-                str = format!("{}*{}", coef, str);
-            } else if self.language == POW2_LANG && !(*coef == -1_i8) && self.language == LOG_TYPE {
+            if self.language == POW2_LANG && !(*coef == -1_i8) && self.data_type != LOG_TYPE {
+                str = format!("{}*{}", coef.abs(), str);
+            } else if self.language == POW2_LANG && !(*coef == -1_i8) && self.data_type == LOG_TYPE {
                 // b*ln(a) == ln(a^b)
                 // absolute coeff as minus is before ln() -> ln(prod(pos)) - ln(prod(neg)) = threshold + ln(prod(data.type_minimum^coeff)
                 str = format!("{}^{}", str, coef.abs());
@@ -729,7 +730,7 @@ impl Individual {
     }    
 
     /// return the index of features used in the individual
-    fn features_index(&self) -> Vec<usize> {
+    pub fn features_index(&self) -> Vec<usize> {
         let mut features = self.features.keys().copied().collect::<Vec<usize>>();
         features.sort();
         features

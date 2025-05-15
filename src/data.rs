@@ -1,3 +1,4 @@
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
@@ -11,7 +12,7 @@ use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use fishers_exact::fishers_exact;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Data {
     pub X: HashMap<(usize,usize),f64>,         // Matrix for feature values
     pub y: Vec<u8>,              // Vector for target values

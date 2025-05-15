@@ -10,7 +10,6 @@ use rand::seq::index::sample;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use log::{debug,info,warn,error};
-use serde_json::error;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::mem;
@@ -37,7 +36,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .par_iter_mut()
                             .enumerate()
                             .for_each(|(n,i)| {
-                                if param.general.keep_all_generations {
+                                if param.general.keep_trace {
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, None);
                                 } else {
                                     i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
@@ -52,7 +51,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .enumerate()
                             .for_each(|(n,i)| {
                                 let objective;
-                                if param.general.keep_all_generations {
+                                if param.general.keep_trace {
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![param.general.fr_penalty, 1.0]));
                                 } else {
                                     objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0)
@@ -68,7 +67,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .enumerate()
                             .for_each(|(n,i)| {
                                 let objective;
-                                if param.general.keep_all_generations {
+                                if param.general.keep_trace {
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![1.0, param.general.fr_penalty]));
                                 } else {
                                     objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty)
@@ -95,7 +94,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .enumerate()
                             .for_each(|(n,i)| {
                                 let test_auc = i.compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
-                                if param.general.keep_all_generations {
+                                if param.general.keep_trace {
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, None);
                                 } else {
                                     i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
@@ -112,7 +111,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .for_each(|(n,i)| {
                                 let objective;
                                 let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, param.general.fr_penalty, 1.0);
-                                if param.general.keep_all_generations {
+                                if param.general.keep_trace {
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![param.general.fr_penalty, 1.0]));
                                 } else {
                                     objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0); 
@@ -129,7 +128,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .for_each(|(n,i)| {
                                 let objective;
                                 let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, 1.0, param.general.fr_penalty);
-                                if param.general.keep_all_generations {
+                                if param.general.keep_trace {
                                     (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![1.0, param.general.fr_penalty]));
                                 } else {
                                     objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty); 
@@ -145,15 +144,15 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
         if param.general.overfit_penalty == 0.0 {
             match param.general.fit {
                 FitFunction::auc => {
-                    pop.auc_fit(data, param.general.k_penalty, param.general.thread_number, param.general.keep_all_generations);
+                    pop.auc_fit(data, param.general.k_penalty, param.general.thread_number, param.general.keep_trace);
                 },
                 FitFunction::sensitivity => {
                     pop.objective_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
-                        param.general.thread_number, param.general.keep_all_generations);
+                        param.general.thread_number, param.general.keep_trace);
                 },
                 FitFunction::specificity => {
                     pop.objective_fit(data, 1.0,param.general.fr_penalty,param.general.k_penalty,
-                        param.general.thread_number, param.general.keep_all_generations);
+                        param.general.thread_number, param.general.keep_trace);
                 }
             } 
         } 
@@ -163,15 +162,15 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
             let test_data = test_data.as_mut().unwrap();
             match param.general.fit {
                 FitFunction::auc => {
-                    pop.auc_nooverfit_fit(data, param.general.k_penalty, test_data, param.general.overfit_penalty, param.general.thread_number, param.general.keep_all_generations);
+                    pop.auc_nooverfit_fit(data, param.general.k_penalty, test_data, param.general.overfit_penalty, param.general.thread_number, param.general.keep_trace);
                 },
                 FitFunction::sensitivity => {
                     pop.objective_nooverfit_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
-                        test_data, param.general.overfit_penalty, param.general.thread_number, param.general.keep_all_generations);
+                        test_data, param.general.overfit_penalty, param.general.thread_number, param.general.keep_trace);
                 },
                 FitFunction::specificity => {
                     pop.objective_nooverfit_fit(data, 1.0,param.general.fr_penalty,param.general.k_penalty,
-                        test_data, param.general.overfit_penalty, param.general.thread_number, param.general.keep_all_generations);
+                        test_data, param.general.overfit_penalty, param.general.thread_number, param.general.keep_trace);
                 }
             } 
         }
@@ -226,14 +225,14 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
         }
     }
 
-    info!("pop size {}, kmin {}, kmax {}",pop.individuals.len(),pop.individuals.iter().map(|i| {i.k}).min().unwrap_or(0),pop.individuals.iter().map(|i| {i.k}).max().unwrap_or(0));
+    info!("Population size: {}, kmin {}, kmax {}",pop.individuals.len(),pop.individuals.iter().map(|i| {i.k}).min().unwrap_or(0),pop.individuals.iter().map(|i| {i.k}).max().unwrap_or(0));
 
     let gpu_assay = if param.general.gpu {
-        Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, param.ga.population_size as usize))
+        Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, param.ga.population_size as usize, &param.gpu))
     } else { None };
     let test_assay = if param.general.gpu && param.general.overfit_penalty>0.0 {
         let test_data = test_data.as_mut().unwrap();
-        Some(GpuAssay::new(&test_data.X, &data.feature_selection, test_data.sample_len, param.ga.population_size as usize))
+        Some(GpuAssay::new(&test_data.X, &data.feature_selection, test_data.sample_len, param.ga.population_size as usize, &param.gpu))
     } else { None };
 
     fit_fn(&mut pop, data, test_data, &gpu_assay, &test_assay, param);
@@ -319,7 +318,7 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
         }
         new_pop.add(children);
 
-        if param.general.keep_all_generations {
+        if param.general.keep_trace {
             populations.push(pop);
         }
         else {
@@ -665,18 +664,18 @@ mod tests {
             let mut populations: Vec<Vec<Individual>> = vec![];
             param.general.fit = fit_method.clone();
             // gpu = false
-            param.general.keep_all_generations = true;
+            param.general.keep_trace = true;
             fit_fn(&mut pop, &mut data, &mut None, &None, &mut None, &param);
             populations.push(pop.individuals.clone());
-            param.general.keep_all_generations = false;
+            param.general.keep_trace = false;
             fit_fn(&mut pop, &mut data, &mut None, &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             // gpu = true
-            let gpu_assay = Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, pop.individuals.len() as usize));
-            param.general.keep_all_generations = true;
+            let gpu_assay = Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, pop.individuals.len() as usize, &param.gpu));
+            param.general.keep_trace = true;
             fit_fn(&mut pop, &mut data, &mut None, &gpu_assay, &mut None, &param);
             populations.push(pop.individuals.clone());
-            param.general.keep_all_generations = false;
+            param.general.keep_trace = false;
             fit_fn(&mut pop, &mut data, &mut None, &gpu_assay, &mut None, &param);
             populations.push(pop.individuals.clone());
             
@@ -708,19 +707,19 @@ mod tests {
             let mut populations: Vec<Vec<Individual>> = vec![];
             param.general.fit = fit_method.clone();
             // gpu = false
-            param.general.keep_all_generations = true;
+            param.general.keep_trace = true;
             fit_fn(&mut pop, &mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
             populations.push(pop.individuals.clone());
-            param.general.keep_all_generations = false;
+            param.general.keep_trace = false;
             fit_fn(&mut pop, &mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             // gpu = true
-            let gpu_assay = Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, pop.individuals.len() as usize));
-            let test_assay = Some(GpuAssay::new(&test_data.X, &test_data.feature_selection, test_data.sample_len, pop.individuals.len() as usize));
-            param.general.keep_all_generations = true;
+            let gpu_assay = Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, pop.individuals.len() as usize, &param.gpu));
+            let test_assay = Some(GpuAssay::new(&test_data.X, &test_data.feature_selection, test_data.sample_len, pop.individuals.len() as usize, &param.gpu));
+            param.general.keep_trace = true;
             fit_fn(&mut pop, &mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
             populations.push(pop.individuals.clone());
-            param.general.keep_all_generations = false;
+            param.general.keep_trace = false;
             fit_fn(&mut pop, &mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
             populations.push(pop.individuals.clone());
             

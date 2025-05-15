@@ -2,7 +2,6 @@ use rayon::prelude::*;
 use crate::data::Data;
 use crate::population::Population;
 use crate::param::Param;
-use crate::individual::Individual;
 use crate::utils;
 use std::sync::{Arc, Mutex};
 use rand_chacha::ChaCha8Rng;
@@ -10,17 +9,17 @@ use log::info;
 
 use std::sync::atomic::AtomicBool;
 
-/// This class implement Cross Validation dataset, e.g. split the Data in N folds and create N subset of Data each with its test subset.
+/// This class implement Cross Validation dataset, e.g. split the Data in N validation_folds and create N subset of Data each with its test subset.
 pub struct CV {
-    pub folds: Vec<Data>,
-    pub datasets: Vec<Data>
+    pub validation_folds: Vec<Data>,
+    pub training_sets: Vec<Data>
 }
 
 impl CV {
     pub fn new(data: &Data, fold_number: usize, rng: &mut ChaCha8Rng) -> CV {
-
         let mut indices_class0:Vec<usize> = Vec::new();
         let mut indices_class1:Vec<usize> = Vec::new();
+
         for (i,f) in data.y.iter().enumerate() {
             if *f==0 { indices_class0.push(i) } else if *f==1 { indices_class1.push(i) }
         }
@@ -28,28 +27,28 @@ impl CV {
         let indices_class0_folds = utils::split_into_balanced_random_chunks(indices_class0, fold_number, rng);
         let indices_class1_folds = utils::split_into_balanced_random_chunks(indices_class1, fold_number, rng);
 
-        let folds: Vec<Data>  = indices_class0_folds.into_iter().zip(indices_class1_folds.into_iter())
+        let validation_folds: Vec<Data>  = indices_class0_folds.into_iter().zip(indices_class1_folds.into_iter())
                     .map( |(i1,i2)| {i1.into_iter().chain(i2).collect::<Vec<usize>>()} )
                     .map( |i| { data.subset(i) } )
                     .collect();
 
-        let mut datasets: Vec<Data> = Vec::new();
+        let mut training_sets: Vec<Data> = Vec::new();
         for i in 0..fold_number {
-            let mut dataset: Data = if i==0 { folds[1].clone() } else { folds[0].clone() };
+            let mut dataset: Data = if i==0 { validation_folds[1].clone() } else { validation_folds[0].clone() };
 
             for j in 1..fold_number {
                 if j==i { continue }
                 else {
-                    dataset.add(&folds[j]);
+                    dataset.add(&validation_folds[j]);
                 }
             }
 
-            datasets.push(dataset);
+            training_sets.push(dataset);
         }
 
         CV {
-            folds: folds,
-            datasets: datasets
+            validation_folds: validation_folds,
+            training_sets: training_sets
         }
     }
 
@@ -59,7 +58,7 @@ impl CV {
         param: &Param,
         thread_number: usize,
         running: Arc<AtomicBool>
-    ) -> Vec<(Individual, f64, f64)>
+    ) -> Vec<(Population, Data, Data)>
     where F: Fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population> + std::marker::Send + std::marker::Sync, {
         // Configure the thread pool with the specified thread number
         let thread_pool = rayon::ThreadPoolBuilder::new()
@@ -71,21 +70,22 @@ impl CV {
         let results_per_fold = Arc::new(Mutex::new(Vec::new()));
 
         thread_pool.install(|| {
-            self.datasets
+            self.training_sets
                 .par_iter_mut()
-                .zip(self.folds.par_iter_mut())
+                .zip(self.validation_folds.par_iter_mut())
                 .enumerate()
                 .for_each(|(i, (train, test))| {
                     // Train and evaluate model
-                    info!("Completing fold...");
+                    info!("\x1b[1;93mCompleting fold #{}...\x1b[0m", i+1);
 
-                    let mut best_model: Individual =
-                        algo(train, param, Arc::clone(&running)).pop().unwrap().individuals.into_iter().take(1).next().unwrap();
+                    let last_generation: Population =
+                        algo(train, param, Arc::clone(&running)).pop().unwrap();
+                    let best_model = last_generation.clone().individuals.into_iter().take(1).next().unwrap();
                     let train_auc = best_model.auc;
-                    let test_auc = best_model.compute_auc(test);
+                    let test_auc = best_model.compute_new_auc(test);
 
                     info!(
-                        "Fold #{}  |  Train AUC: {:.3}  |  Test AUC: {:.3}",
+                        "\x1b[1;93mFold #{} completed | Best train AUC: {:.3} | Associated validation fold AUC: {:.3}\x1b[0m",
                         i+1, train_auc, test_auc
                     );
 
@@ -93,7 +93,7 @@ impl CV {
                     results_per_fold
                         .lock()
                         .unwrap()
-                        .push((best_model, train_auc, test_auc));
+                        .push((last_generation, train.clone(), test.clone()));
                 });
         });
 
@@ -152,8 +152,8 @@ mod tests {
         let data = create_test_data();
         let fold_number = 3;
         let cv = CV::new(&data, fold_number, &mut rng);
-        assert_eq!(cv.folds.len(), fold_number);
-        assert_eq!(cv.datasets.len(), fold_number);
+        assert_eq!(cv.validation_folds.len(), fold_number);
+        assert_eq!(cv.training_sets.len(), fold_number);
     }
 
     #[test]
@@ -165,15 +165,15 @@ mod tests {
 
         // Check that y are correctly splitted
         let expected_size = (data.y.len() + fold_number - 1) / fold_number;
-        for fold in &cv.folds {
+        for fold in &cv.validation_folds {
             let fold_size = fold.y.len();
             assert!((fold_size as isize - expected_size as isize).abs() <= 1);
         }
 
-        // Check that all data is preserved across all folds
+        // Check that all data is preserved across all validation_folds
         let mut real_y: Vec<usize> = data.y.iter().map(|&x| x as usize).collect();
         let mut collected_y = Vec::new();
-        for fold in &cv.folds {
+        for fold in &cv.validation_folds {
             collected_y.extend(fold.y.iter().map(|&x| x as usize));
         }
         real_y.sort();
@@ -208,21 +208,21 @@ mod tests {
         X3.insert((0, 0), 0.9);
         X3.insert((0, 1), 0.8);
 
-        assert_eq!(cv.folds[0].X, X1);
-        assert_eq!(cv.folds[1].X, X2);
-        assert_eq!(cv.folds[2].X, X3);
-        assert_eq!(cv.folds[0].y, [0, 1, 1]);
-        assert_eq!(cv.folds[1].y, [0, 1]);
-        assert_eq!(cv.folds[2].y, [1]);
+        assert_eq!(cv.validation_folds[0].X, X1);
+        assert_eq!(cv.validation_folds[1].X, X2);
+        assert_eq!(cv.validation_folds[2].X, X3);
+        assert_eq!(cv.validation_folds[0].y, [0, 1, 1]);
+        assert_eq!(cv.validation_folds[1].y, [0, 1]);
+        assert_eq!(cv.validation_folds[2].y, [1]);
 
-        assert_eq!(cv.folds[0].samples, ["sample3", "sample2", "sample5"]);
-        assert_eq!(cv.folds[1].samples, ["sample1", "sample4"]);
-        assert_eq!(cv.folds[2].samples, ["sample6"]);
-        assert_eq!(cv.folds[0].sample_len, 3);
-        assert_eq!(cv.folds[1].sample_len, 2);
-        assert_eq!(cv.folds[2].sample_len, 1);
+        assert_eq!(cv.validation_folds[0].samples, ["sample3", "sample2", "sample5"]);
+        assert_eq!(cv.validation_folds[1].samples, ["sample1", "sample4"]);
+        assert_eq!(cv.validation_folds[2].samples, ["sample6"]);
+        assert_eq!(cv.validation_folds[0].sample_len, 3);
+        assert_eq!(cv.validation_folds[1].sample_len, 2);
+        assert_eq!(cv.validation_folds[2].sample_len, 1);
 
-        for fold in &cv.folds {
+        for fold in &cv.validation_folds {
             assert_eq!(fold.features, ["feature1", "feature2"]);
             assert_eq!(fold.feature_len, 2);
         }

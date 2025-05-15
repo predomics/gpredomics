@@ -1,8 +1,10 @@
 use log::{info, error};
-use gpredomics::{param, basic_test, random_run, run_ga, gacv_run, gpu_random_run, run_beam};
+use gpredomics::{param, basic_test, random_run, run_ga, run_cv_ga, gpu_random_run, run_beam, run_cv_beam};
 use std::process;
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
+use std::fs;
+use toml::Value;
 
 use std::thread;
 use signal_hook::{iterator::Signals, consts::signal::*};
@@ -28,7 +30,17 @@ fn custom_format(
 
 
 fn main() {
+    let cargo_toml_content = fs::read_to_string("Cargo.toml").expect("Unable to read Cargo.toml");
+    let value: Value = cargo_toml_content.parse().expect("Unable to parse Cargo.toml");
+    let version = value["package"]["version"].as_str().expect("Unable to get version");
+
     let param= param::get("param.yaml".to_string()).unwrap();
+
+    if param.general.overfit_penalty != 0.0 {
+        error!("overfit_penalty parameter is deprecated, please set it to 0.");
+        panic!("overfit_penalty parameter is deprecated, please set it to 0.");
+    }
+
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
     // Initialize the logger
@@ -55,8 +67,9 @@ fn main() {
             .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e))
     };
 
-    info!("param.yaml");
-    info!("{:?}", &param);
+    info!("GPREDOMICS v{}", version);
+    info!("Loading param.yaml");
+    info!("\x1b[2;97m{:?}\x1b[0m", &param);
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
@@ -73,8 +86,9 @@ fn main() {
             "random" => random_run(&param),
             "testgpu" => gpu_random_run(&param),
             "ga"|"ga2"|"ga_no_overfit"|"ga2_no_overfit" => { run_ga(&param, running); },
-            "ga+cv"|"ga2+cv" => { gacv_run(&param, running); },
-            "beam" => { run_beam(&param, running); }
+            "ga+cv"|"ga2+cv" => { run_cv_ga(&param, running); },
+            "beam" => { run_beam(&param, running); },
+            "beam+cv" => { run_cv_beam(&param, running); }
             other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
         } 
     });
