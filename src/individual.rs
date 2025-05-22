@@ -26,7 +26,7 @@ pub struct Individual {
     pub language: u8, // binary (0,1), ternary (-1,0,1), pow2 (-4,-2,-1,0,1,2,4), ratio (-1,-1,-1,81)
     pub data_type: u8, // abundance (raw), prevalence (0,1), log
     pub hash: u64,
-    pub data_type_minimum: f64,
+    pub epsilon: f64,
     pub parents: Option<Vec<u64>>
 }
 
@@ -104,7 +104,7 @@ impl Individual {
             language: BINARY_LANG,
             data_type: RAW_TYPE,
             hash: 0,
-            data_type_minimum: DEFAULT_MINIMUM,
+            epsilon: DEFAULT_MINIMUM,
             parents: None
         }
     }
@@ -153,7 +153,7 @@ impl Individual {
         let mut negative_features: Vec<_> = sorted_features.iter().filter(|&&(_, &coef)| coef < 0).collect();
     
         positive_features.sort_by(|a, b| b.1.cmp(a.1));
-        negative_features.sort_by(|a, b| b.1.cmp(a.1));
+        negative_features.sort_by(|a, b| a.1.cmp(b.1));
     
         let mut positive_str: Vec<String> = positive_features.iter().enumerate().map(|(i, &&(index, coef))| {
             let mut str;
@@ -169,6 +169,9 @@ impl Individual {
                 str = format!("\x1b[96m{}\x1b[0m", data.features[*index])
             } else {
                 str = data.features[*index].clone()
+            }
+            if self.data_type == PREVALENCE_TYPE {
+                str = format!("{}⁰", str);
             }
             if self.language == POW2_LANG && !(*coef == 1_i8) && self.data_type != LOG_TYPE {
                 str = format!("{}*{}", coef, str);
@@ -194,6 +197,9 @@ impl Individual {
                 } else {
                     str = data.features[*index].clone()
                 }
+            if self.data_type == PREVALENCE_TYPE {
+                str = format!("{}⁰", str);
+            }
             if self.language == POW2_LANG && !(*coef == -1_i8) && self.data_type != LOG_TYPE {
                 str = format!("{}*{}", coef.abs(), str);
             } else if self.language == POW2_LANG && !(*coef == -1_i8) && self.data_type == LOG_TYPE {
@@ -205,15 +211,15 @@ impl Individual {
         }).collect();
     
         if self.language == RATIO_LANG {
-            negative_str.push("1e-12".to_string());
+            negative_str.push(format!("{:2e}", self.epsilon));
         }
 
         let threshold;
         let positive_str_joined;
         let negative_str_joined;
         if self.data_type == LOG_TYPE && self.language != RATIO_LANG {
-            // Calculate the product of data_type_minimum raised to the power of each coefficient
-            let product: f64 = self.features.values().map(|&coef| self.data_type_minimum.powi(coef as i32)).product();
+            // Calculate the product of epsilon raised to the power of each coefficient
+            let product: f64 = self.features.values().map(|&coef| self.epsilon.powi(coef as i32)).product();
             threshold = format!("{} (+ {})", self.threshold, product.ln());
             positive_str_joined = format!("ln({})", positive_str.join(" * "));
             negative_str_joined = format!("ln({})", negative_str.join(" * "));
@@ -238,13 +244,13 @@ impl Individual {
     
         let formatted_string;
         if self.language == BINARY_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {} <======> {} ≥ {}", metrics, predicted_class, positive_str_joined, threshold)
+            formatted_string = format!("{}\nClass {}: {} ≥ {}", metrics, predicted_class, positive_str_joined, threshold)
         } else if (self.language == TERNARY_LANG || self.language == POW2_LANG) && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {} <======> {} - {} ≥ {}", metrics, predicted_class, positive_str_joined, negative_str_joined, threshold)
+            formatted_string = format!("{}\nClass {}: {} - {} ≥ {}", metrics, predicted_class, positive_str_joined, negative_str_joined, threshold)
         } else if self.language == RATIO_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {} <======> {} / {} ≥ {}", metrics, predicted_class, positive_str_joined, negative_str_joined, threshold)
+            formatted_string = format!("{}\nClass {}: {} / {} ≥ {}", metrics, predicted_class, positive_str_joined, negative_str_joined, threshold)
         } else {
-            formatted_string = format!("{}\nClass {} <======> {:?} ≥ {}", metrics, predicted_class, self, threshold);
+            formatted_string = format!("{}\nClass {}: {:?} ≥ {}", metrics, predicted_class, self, threshold);
         };
     
         formatted_string
@@ -266,7 +272,7 @@ impl Individual {
         let mut i=Individual::new();
         i.language = main_parent.language;
         i.data_type = main_parent.data_type;
-        i.data_type_minimum = main_parent.data_type_minimum;
+        i.epsilon = main_parent.epsilon;
         i
     }
 
@@ -306,7 +312,7 @@ impl Individual {
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/(r[sample][1]+1e-12);
+                score[sample]=r[sample][0]/(r[sample][1]+self.epsilon);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
@@ -328,17 +334,17 @@ impl Individual {
             for (feature_index,coef) in self.features.iter() {
                 let part = if *coef>0 {0} else {1};
                 for sample in 0..sample_len {
-                    r[sample][part] += if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&self.data_type_minimum {1.0} else {0.0};
+                    r[sample][part] += if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&self.epsilon {1.0} else {0.0};
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/(r[sample][1]+1e-12);
+                score[sample]=r[sample][0]/(r[sample][1]+self.epsilon);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
                 let x_coef = *coef as f64;
                 for sample in 0..sample_len {
-                        score[sample] += if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&self.data_type_minimum {1.0} else {0.0} * x_coef;
+                        score[sample] += if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&self.epsilon {1.0} else {0.0} * x_coef;
                 }
             }
         }
@@ -355,19 +361,19 @@ impl Individual {
                 let part = if *coef>0 {0} else {1};
                 for sample in 0..sample_len {
                     if let Some(val)=X.get(&(sample,*feature_index)) {
-                        r[sample][part] += (val/self.data_type_minimum).ln() * coef.abs() as f64;
+                        r[sample][part] += (val/self.epsilon).ln() * coef.abs() as f64;
                     }
                 }
             }
             for sample in 0..sample_len {
-                score[sample]=r[sample][0]/(r[sample][1]+1e-12);
+                score[sample]=r[sample][0]/(r[sample][1]+self.epsilon);
             }
         } else {
             for (feature_index,coef) in self.features.iter() {
                 let x_coef = *coef as f64;
                 for sample in 0..sample_len {
                     if let Some(val)=X.get(&(sample,*feature_index)) {
-                        score[sample] += (val/self.data_type_minimum).ln() * x_coef ;
+                        score[sample] += (val/self.epsilon).ln() * x_coef ;
                     }
                 }
             }
@@ -596,7 +602,7 @@ impl Individual {
 
     /// randomly generated individual amoung the selected features
     pub fn random_select_k(kmin: usize, kmax:usize, feature_selection: &Vec<usize>, feature_class: &HashMap<usize,u8>, 
-                            language: u8, data_type: u8, data_type_minimum: f64, rng: &mut ChaCha8Rng) -> Individual {
+                            language: u8, data_type: u8, epsilon: f64, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
@@ -629,7 +635,7 @@ impl Individual {
         i.k = k;
         i.language = language;
         i.data_type = data_type;
-        i.data_type_minimum = data_type_minimum;
+        i.epsilon = epsilon;
         i
 
     }
@@ -977,13 +983,13 @@ mod tests {
     fn create_test_individual() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        data_type_minimum: f64::MIN_POSITIVE, parents: None}
+        epsilon: f64::MIN_POSITIVE, parents: None}
     }
 
     fn create_test_individual_n2() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 0.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        data_type_minimum: f64::MIN_POSITIVE, parents: None}
+        epsilon: f64::MIN_POSITIVE, parents: None}
     }
 
     fn create_test_data() -> Data {
@@ -1145,7 +1151,7 @@ mod tests {
         X.insert((1, 1), 5.0);
 
         ind.language = RATIO_LANG;
-        assert_eq!(ind.evaluate_raw(&X, 2), vec![2.0 / (3.0+1e-12), 4.0 / (5.0+1e-12)],
+        assert_eq!(ind.evaluate_raw(&X, 2), vec![2.0 / (3.0+ ind.epsilon), 4.0 / (5.0+ ind.epsilon)],
                                 "bad calculation for raw data scores with ratio Language");
         ind.language = TERNARY_LANG;
         assert_eq!(ind.evaluate_raw(&X, 2), vec![2.0 * 1.0 + 3.0 * -1.0, 4.0 * 1.0 + 5.0 * -1.0],
@@ -1202,7 +1208,7 @@ mod tests {
         X.insert((1, 1), 5.0);
 
         ind.language = RATIO_LANG;
-        assert_eq!(ind.evaluate_prevalence(&X, 2), vec![1.0 / (1.0+1e-12), 1.0 / (1.0+1e-12)],
+        assert_eq!(ind.evaluate_prevalence(&X, 2), vec![1.0 / (1.0+ ind.epsilon), 1.0 / (1.0+ ind.epsilon)],
                                 "bad calculation for prevalence data scores with ratio Language");
         ind.language = TERNARY_LANG;
         assert_eq!(ind.evaluate_prevalence(&X, 2), vec![1.0 - 1.0, 1.0 - 1.0],
@@ -1258,18 +1264,18 @@ mod tests {
 
         // Could be interesting to add a is_nan() or is_infinite() verification in evaluate_log        
         ind.language = RATIO_LANG;
-        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.data_type_minimum).ln() / ((0.75_f64 / ind.data_type_minimum).ln() +1e-12 ), (0.3_f64 / ind.data_type_minimum).ln() / ((0.9_f64 / ind.data_type_minimum).ln() + 1e-12)],
+        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.epsilon).ln() / ((0.75_f64 / ind.epsilon).ln() + ind.epsilon ), (0.3_f64 / ind.epsilon).ln() / ((0.9_f64 / ind.epsilon).ln() + ind.epsilon)],
                                 "bad calculation for log data scores with ratio language");
         ind.language = TERNARY_LANG;
-        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.data_type_minimum).ln() * 1.0 +(0.75_f64 / ind.data_type_minimum).ln() * -1.0, (0.3_f64 / ind.data_type_minimum).ln() * 1.0 + (0.9_f64 / ind.data_type_minimum).ln() * -1.0],
+        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.epsilon).ln() * 1.0 +(0.75_f64 / ind.epsilon).ln() * -1.0, (0.3_f64 / ind.epsilon).ln() * 1.0 + (0.9_f64 / ind.epsilon).ln() * -1.0],
                                 "bad calculation for log data scores with ter language");
         ind.features = vec![(0, 2), (1, -4)].into_iter().collect();
         ind.language = POW2_LANG;
-        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.data_type_minimum).ln() * 2.0 + (0.75_f64 / ind.data_type_minimum).ln() * -4.0, (0.3_f64 / ind.data_type_minimum).ln() * 2.0 + (0.9_f64 / ind.data_type_minimum).ln() * -4.0],
+        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.epsilon).ln() * 2.0 + (0.75_f64 / ind.epsilon).ln() * -4.0, (0.3_f64 / ind.epsilon).ln() * 2.0 + (0.9_f64 / ind.epsilon).ln() * -4.0],
                                 "bad calculation for log data scores with pow2 language");
                                 ind.features = vec![(0, 1), (1, 0)].into_iter().collect();
         ind.language = BINARY_LANG;
-        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.data_type_minimum).ln() * 1.0 + (0.75_f64 / ind.data_type_minimum).ln() * 0.0, (0.3_f64 / ind.data_type_minimum).ln() * 1.0 + (0.9_f64 / ind.data_type_minimum).ln() * 0.0],
+        assert_eq!(ind.evaluate_log(&X, 2), vec![(0.1_f64 / ind.epsilon).ln() * 1.0 + (0.75_f64 / ind.epsilon).ln() * 0.0, (0.3_f64 / ind.epsilon).ln() * 1.0 + (0.9_f64 / ind.epsilon).ln() * 0.0],
                                 "bad calculation for log data scores with bin language");         
     }
 
@@ -1297,8 +1303,8 @@ mod tests {
         X.insert((1, 1), 0.9);
 
         let scores = ind.evaluate_log(&X, 2);
-        assert_eq!(scores, vec![(0.1_f64 / ind.data_type_minimum).ln() * 1.0, 
-        (0.3_f64 / ind.data_type_minimum).ln() * 1.0 + (0.9_f64 / ind.data_type_minimum).ln() * -1.0], 
+        assert_eq!(scores, vec![(0.1_f64 / ind.epsilon).ln() * 1.0, 
+        (0.3_f64 / ind.epsilon).ln() * 1.0 + (0.9_f64 / ind.epsilon).ln() * -1.0], 
         "X missing value should be interpreted as coefficient 0");
         }
 
@@ -1411,7 +1417,7 @@ mod tests {
         assert!(ind_bin.features.iter().all(|(key, value)| feature_class.get(key) == Some(&(*value as u8))), "selected k features should be part of input feature_class");
         assert_eq!(ind_bin.language, BINARY_LANG, "input language should be respected");
         assert_eq!(ind_bin.data_type, RAW_TYPE, "input data_type should be respected");
-        assert_eq!(ind_bin.data_type_minimum, DEFAULT_MINIMUM, "input data_type_minimum should be respected"); 
+        assert_eq!(ind_bin.epsilon, DEFAULT_MINIMUM, "input epsilon should be respected"); 
         assert!(ind_bin.features.values().all(|&v| vec![0, 1].contains(&v)), "invalid coefficient for BINARY_LANG");
         assert!(ind_ter.features.values().all(|&v| vec![-1, 1].contains(&v)), "invalid coefficient for TERNARY_LANG");
         assert!(ind_ratio.features.values().all(|&v| vec![-1, 1].contains(&v)), "invalid coefficient for RATIO_LANG");
@@ -1628,10 +1634,10 @@ mod tests {
         let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv");
         let _ = data_test.load_data("samples/Qin2014/Xtest.tsv", "samples/Qin2014/Ytest.tsv");
 
-        // Set the language and data type
+        // Set the language and data type 
         individual.language = TERNARY_LANG;
         individual.data_type = LOG_TYPE;
-        individual.data_type_minimum = 1e-5;
+        individual.epsilon = 1e-5;
 
         // Set the feature indices and their signs
         let feature_indices = vec![
@@ -1657,7 +1663,7 @@ mod tests {
 
         // control both metrics and display
         let right_string = concat!("Ternary:Log [k=66] [gen:0] [fit:0.000] AUC 0.962/0.895 | accuracy 0.921/0.828 | sensitivity 0.937/0.867 | specificity 0.904/0.786\n",
-                            "Class cirrhosis <======> ln(msp_0010 * msp_0023 * msp_0024 * msp_0048 * msp_0106 * msp_0176 * msp_0196 * msp_0223 * msp_0224 * msp_0265",
+                            "Class cirrhosis: ln(msp_0010 * msp_0023 * msp_0024 * msp_0048 * msp_0106 * msp_0176 * msp_0196 * msp_0223 * msp_0224 * msp_0265",
                             " * msp_0275 * msp_0324 * msp_0329 * msp_0339 * msp_0364 * msp_0383 * msp_0493 * msp_0517 * msp_0570 * msp_0664 * msp_0692 * msp_0722",
                             " * msp_0832 * msp_0874 * msp_0881 * msp_0884 * msp_1127 * msp_1284 * msp_1325 * msp_1329 * msp_1479 * msp_1543 * msp_1660 * msp_1700",
                             " * msp_1748 * msp_1782 * msp_1785 * msp_1787 * msp_1788 * msp_1862 * msp_1942) - ln(msp_0025 * msp_0043 * msp_0058 * msp_0067 * msp_0073",
@@ -1715,7 +1721,7 @@ mod tests {
                 language: (i % 4) as u8,
                 data_type: (i % 3) as u8,
                 hash: i as u64,
-                data_type_minimum: f64::MIN_POSITIVE + (i as f64 * 0.001),
+                epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
                 parents : None
             };
             pop.individuals.push(ind);

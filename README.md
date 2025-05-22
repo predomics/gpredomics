@@ -16,15 +16,15 @@ gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version
   - k_penalty: a penalty that is deduced from fit multiplied by the number of non nul coefficients,
   - fr_penalty: a penalty used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit
 
-- several data_type are implemented (`general.data_type` and `general.data_type_minimum`): 
+- several data_type are implemented (`general.data_type` and `general.epsilon`): 
 
   - `raw` : features are taken as they are (default),
-  - `prevalence` : or presence/absence, features above data_type_minimum are 1 others are 0,
-  - `log` : features are now equal to their log (`feature.ln()` in Rust). Features below data_type_minimum are set to this value before log transformation.
+  - `prevalence` : or presence/absence, features above epsilon are 1 others are 0,
+  - `log` : features are now equal to their log (`feature.ln()` in Rust). Features below epsilon are set to this value before log transformation.
 
 - the Beam Algorithm is in beta version. This beta version is not compatible yet with Pow2 language. Two submethods are currently available : 
 
-  - `exhaustive` generates all the possible combinations of features selected at each epoch (an epoch is a population of individuals of size k) which is equivalent of terBeam in Predomics terms. 
+  - `combinatorial` generates all the possible combinations of features selected at each epoch (an epoch is a population of individuals of size k) which is equivalent of terBeam in Predomics terms. 
   - `extend` adds each of the features selected to each of the best extendable_models at each epoch.
 
 - the Cross-validation, also in beta version, is available since v0.5.8. Feature importance is estimated by OOB algorithm using mean decreased AUC.
@@ -106,7 +106,7 @@ There are six sections: general, data, cv, ga, beam & gpu.
 The following parameter are for model characteristics:
 - language: one or more model languages separated by commas (more details above).
 - data_type: one or more model data types separated by commas (more details above).
-- data_type_minimum: each value equal to or less than this minimum will be converted to 0 (those above will be converted to 1 for data_type prevalence).
+- epsilon: each value equal to or less than this minimum will be converted to 0 (those above will be converted to 1 for data_type prevalence).
 
 The following parameter are for the fit function:
 - fit: the base parameter, define the base fit function, `auc`, `specificity` or `sensitivity`, the base fit is then modified by different penalty set below.
@@ -161,22 +161,21 @@ Finally, this section also has a parameter that is essential for GpredomicsR to 
 
 ### beam
 
-- method: exhaustive or extend, more details above.
+- method: combinatorial or incremental, more details above.
 - kmin: the number of variables used in the initial population.
 - kmax: the maximum number of variables to considere in a single model, the variable count limit for beam algorithm.
 - best_models_ci_alpha: alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
 - features_importance_minimal_pct: the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch.
 - very_best_models_pct: the percentage of best models where all variables are features_to_keep.
-- max_nb_of_models: limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance) (exhaustive mode).
-- extendable_models: the number of models to increment with each feature_to_keep (extend mode).
+- max_nb_of_models: limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance) (combinatorial mode) | the number of models to increment with each feature_to_keep (incremental mode).
 
 ### gpu
 
 Finally, some technical parameters are available for the gpu: 
 
+- fallback_to_cpu: executes the code on the CPU if there is no GPU available.
 - memory_policy: Strict -> panic if below limits are not available | Adaptive -> adjusts below limits if not available | Performance -> uses all the available GPU memory regardless of below limits.
 - max_total_memory_mb:: limit in mb defining the maximum amount of GPU memory used by all buffers.
 - max_buffer_size_mb: limit in mb defining the maximum amount of GPU memory used by one buffer.
-- fallback_to_cpu: executes the code on the CPU if there is no GPU available.
 
 We recommend you to keep the default settings. Increasing these values is only useful if the number of models per stage (per GA generation or per k in BEAM) leads to a crash.

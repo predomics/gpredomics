@@ -9,8 +9,9 @@ pub struct Param {
     pub data: Data,                          // Nested struct for "data"
     pub ga: GA,
     pub beam: BEAM,
+    pub mcmc: MCMC,
     pub cv: CV,
-    pub gpu: GPU
+    pub gpu: GPU,
 }
 
 #[derive(Debug,Serialize,Deserialize,Clone)]
@@ -59,6 +60,8 @@ pub struct General {
     pub nb_best_model_to_test: u32,
     #[serde(default = "false_default")] 
     pub gpu: bool,
+    #[serde(default = "false_default")] 
+    pub cv: bool,
     #[serde(default = "display_level_default")] 
     pub display_level: usize,
     #[serde(default = "display_colorful_default")] 
@@ -121,16 +124,27 @@ pub struct BEAM {
     #[serde(default = "feature_kminkmax_default")]  
     pub kmax: usize,                           // Maximum value of k
     #[serde(default = "best_models_ci_alpha_default")]
-    pub best_models_ci_alpha: f64,              
-    #[serde(default = "very_best_models_pct_default")]
-    pub very_best_models_pct: f64,                  
-    #[serde(default = "features_importance_minimal_pct_default")]
-    pub features_importance_minimal_pct: f64,                   
+    pub best_models_ci_alpha: f64,                                 
     #[serde(default = "max_nb_of_models_default")]
-    pub max_nb_of_models: u64,                   
-    #[serde(default = "extendable_models_default")]
-    pub extendable_models: usize,                  
+    pub max_nb_of_models: usize,                                    
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MCMC {
+    // #[serde(default = "empty_string")]                      
+    // pub load_trace: String,
+    #[serde(default = "n_iter_default")]  
+    pub n_iter: usize,
+    #[serde(default = "n_burn_default")]
+    pub n_burn: usize,
+    #[serde(default = "lambda_default")]
+    pub lambda: f64,
+    #[serde(default = "nmin_default")]
+    pub nmin: u32,
+    #[serde(default = "empty_string")]                      
+    pub save_trace_outdir: String,
+}
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GPU {
@@ -185,6 +199,12 @@ impl Default for GA {
 }
 
 impl Default for BEAM {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for MCMC {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
@@ -259,14 +279,15 @@ fn feature_select_niche_pct_default() -> f64 { 0.0 }
 fn false_default() -> bool { false }
 fn display_level_default() -> usize { 2 }
 fn display_colorful_default() -> bool { false }
-fn beam_method_default() -> String { "exhaustive".to_string() }
+fn beam_method_default() -> String { "combinatorial".to_string() }
 fn best_models_ci_alpha_default() -> f64 { 0.05 }
-fn very_best_models_pct_default() -> f64 { 0.1 }
-fn features_importance_minimal_pct_default() -> f64 { 0.1 }
-fn max_nb_of_models_default() -> u64 { 10000 }
-fn extendable_models_default() -> usize { 50 }
+fn max_nb_of_models_default() -> usize { 10000 }
 fn class_names_default() -> Vec<String> { Vec::new() }
 fn memory_policy_default() -> GpuMemoryPolicy { GpuMemoryPolicy::Adaptive }
 fn max_total_memory_mb_default() -> u64 { 256 }
 fn max_buffer_size_mb_default() -> u32 { 128 }
 fn fallback_to_cpu_default() -> bool { true }
+fn n_iter_default() -> usize { 10_000 }
+fn n_burn_default() -> usize { 5_000 }
+fn lambda_default() -> f64 { 0.001 }
+fn nmin_default() -> u32 { 10 }

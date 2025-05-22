@@ -4,7 +4,8 @@ struct SpGemmParams {
     S: u32,     // #samples
     F: u32,     // #features
     M: u32,     // #models
-    threshold: f32  // 16-byte alignment
+    threshold: f32,  // 16-byte alignment
+    epsilon: f32 
 };
 
 // Bind group layout (indices) assumption:
@@ -42,6 +43,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let F = params.F;
     let M = params.M;
     let threshold = params.threshold;
+    let epsilon = params.epsilon;
     let logCorrection = log(1/threshold);
 
     // Out-of-bounds => skip
@@ -94,11 +96,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dt = dataType[col];
     //switch dt {
     //    case default: { SM[(row * M) + col] = sum; }
-    //    case 3u, 4u, 5u: { SM[(row * M) + col] = sum / (sumNeg + 1e-12); }
+    //    case 3u, 4u, 5u: { SM[(row * M) + col] = sum / (sumNeg + epsilon); }
     //}
     // In fact I need M x S (models in rows)
     switch dt {
         case default: { SM[row + (col * S)] = sum; }
-        case 3u, 4u, 5u: { SM[row + (col * S)] = sum / (sumNeg + 1e-12); }
+        case 3u, 4u, 5u: { SM[row + (col * S)] = sum / (sumNeg + epsilon); }
     }
 }
