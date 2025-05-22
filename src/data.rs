@@ -116,8 +116,8 @@ impl Data {
             .samples
             .iter()
             .map(|sample_name| *y_map.get(sample_name).unwrap_or_else(|| {
-                warn!("No y value available for {}. Setting y to 0 for this sample.", sample_name);
-                &0 
+                warn!("No y value available for {}. Setting y to 2 for this sample.", sample_name);
+                &2 
             })).collect();
 
         self.feature_len = self.features.len();
@@ -425,6 +425,8 @@ impl Data {
             self.feature_class.insert(j, class);
             self.feature_selection.push(j);
         }
+
+        info!("{} features selected", self.feature_selection.len());
     }
 
     /// filter Data for some samples (represented by a Vector of indices)
@@ -478,6 +480,19 @@ impl Data {
         self.sample_len += other.sample_len;
     }
 
+    pub fn remove_class(&mut self, class_to_remove: u8) -> Data {
+        let indices_to_keep: Vec<usize> = self.y.iter()
+            .enumerate()
+            .filter(|(_, &class)| class != class_to_remove)
+            .map(|(index, _)| index)
+            .collect();
+        
+        warn!("Removing class {:?} samples...", class_to_remove);
+
+        self.subset(indices_to_keep)
+    }
+
+
 }
 
 /// Implement a custom Debug trait for Data
@@ -519,6 +534,7 @@ impl fmt::Display for Data {
 
         Ok(())
     }
+    
 
 }
 

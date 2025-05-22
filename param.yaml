@@ -1,43 +1,44 @@
 # unless specifically indicated all field accept a single value
 general:
   seed: 42                                    # used in parent selection, child conception (cross over) and mutation, all of which is single thread
-  algo: ga                                    # ga for genetic algorithm and beam for beam algorithm
-  thread_number: 8                            # the number of thread used in feature selection and fit computation
+  algo: mcmc                                  # ga for genetic algorithm and beam for beam algorithm
+  cv: false                                    
+  thread_number: 32                           # the number of thread used in feature selection and fit computation
   gpu: true                                   # should Gpredomics use GPU ? (ga only)
-  language: ter,bin,ratio,pow2                # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
-  data_type: prev,raw,log                     # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
-  data_type_minimum: 1e-5                     # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
+  language: ter,pow2,ratio                    # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
+  data_type: prev,raw                         # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
+  epsilon: 1e-5                               # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
   fit: auc                                    # possible values are auc,specificity,sensitivity (classification), see README.md for details
-  k_penalty: 0.0001                           # this menalty is deduced from fit function multiplied by k, the number of variables used in the model
+  k_penalty: 0.0001                           # this penalty is deduced from fit function multiplied by k, the number of variables used in the model
   fr_penalty: 0.0                             # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
-  nb_best_model_to_test: 30                   # nb of models to test in the last generation (default to 10, 0 means all models)
-  #log_base: "log_file_name"                  # uncomment to print log and results in log_file_name
+  nb_best_model_to_test: 100                  # nb of models to test in the last generation (default to 10, 0 means all models)
+  #log_base: "dev_test_os"                    # uncomment to print log and results in log_file_name
   log_level: debug                            # possible values are trace, debug, info, warning or error 
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
-  keep_trace: false                           # keep this setting to false when using gpredomics as a binary
+  keep_trace: true                            # keep this setting to false when using gpredomics as a binary
 
 cv:
-  fold_number: 5                              # number of folds for cross-validation (k-folds strategy).
+  fold_number: 10                             # number of folds for cross-validation (k-folds strategy).
   cv_best_models_ci_alpha: 0.05               # alpha for the family of best model confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
-  n_permutations_oob: 100                     # number of permutations per feature for OOB importance.
-  scaled_importance: false                    # scale importance by feature prevalence inside folds.
+  n_permutations_oob: 500                     # number of permutations per feature for OOB importance.
+  scaled_importance: true                     # scale importance by feature prevalence inside folds.
   importance_aggregation: mean                # aggregation method for importances: "mean" or "median".     
 
 data:
-  X: "samples/Qin2014/Xtrain.tsv"             # the features of the train data set 
-  y: "samples/Qin2014/Ytrain.tsv"             # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
-  Xtest: "samples/Qin2014/Xtest.tsv"          # the features of the test data set
-  ytest: "samples/Qin2014/Ytest.tsv"          # the class description of the test data set 
+  X: "samples/Qin2014_presence_bf/Xtrain.tsv"            # the features of the train data set 
+  y: "samples/Qin2014_presence_bf/Ytrain.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
+  Xtest: "samples/Qin2014_presence_bf/Xtest.tsv"         # the features of the test data set
+  ytest: "samples/Qin2014_presence_bf/Ytest.tsv"         # the class description of the test data set 
   features_maximal_number_per_class: 0        # 0: all significant features ; else first X significant features (per class!) sorted according to their pvalue/log_abs_bayes_factor
-  feature_minimal_prevalence_pct: 10          # per class, e.g. features are retained if any of the class reaches this level
-  feature_minimal_feature_value: 0.0001       # features which mean is below that value are discarded
-  feature_selection_method: wilcoxon          # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
-  feature_maximal_pvalue: 0.05                # features with differences less significant (p value above that threshold) than this will be removed
+  feature_minimal_prevalence_pct: 15          # per class, e.g. features are retained if any of the class reaches this level
+  feature_minimal_feature_value: 1e-4         # features which mean is below that value are discarded
+  feature_selection_method: bayesian_fisher   # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
+  feature_maximal_pvalue: 0.1                 # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_log_abs_bayes_factor: 2     # features with a fewer log absolute bayes factor will be removed (bayesian method only)
   classes:
-    - "healthy"
-    - "cirrhosis"
+    - "OS12+"
+    - "OS12-"
     - "unknown"
 
 ga:
@@ -51,18 +52,22 @@ ga:
   select_niche_pct: 20                        # (optional default to 0) the % of best models of previous generation retained but split per language / data type (enable to maintain competition between language/data types)
   select_random_pct: 2                        # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
   mutated_children_pct: 80                    # the % of children submitted to mutation
-  mutated_features_pct: 10                    # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
+  mutated_features_pct: 20                    # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
   mutation_non_null_chance_pct: 20            # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
 
 beam:
-  method: exhaustive                          # exhaustive: generate all combinations (k out of features_to_keep). extend: increment each extendable_models of each 1 feature from features_to_keep.
+  method: combinatorial                       # combinatorial: generate all combinations (k out of features_to_keep). extend: increment each extendable_models of each 1 feature from features_to_keep.
   kmin: 1                                     # the number of variables used in the initial population
   kmax: 100                                   # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
   best_models_ci_alpha: 1e-20                 # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
-  features_importance_minimal_pct: 10.0       # the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch
-  very_best_models_pct: 1.0                   # the % of best models where all variables are features_to_keep 
-  max_nb_of_models: 20000                     # (exhaustive mode) limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance)
-  extendable_models: 100                      # (extend mode) best_models number to increment with each feature_to_keep
+  max_nb_of_models: 200000                    # (combinatorial mode) limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance)
+
+mcmc:
+  n_iter: 10000                               # number of MCMC (Markov Chain Monte Carlo) iterations
+  n_burn: 5000                                # number of MCMC iterations ignored (typically first half of all iterations)
+  lambda: 0.001                               # bayesian prior parameter for coefficients a, b, c 
+  nmin: 2                                     # minimum number of features in a model after feature elimination | 0 : keep all features (deactivate SBS search)
+  save_trace_outdir: "./"                     # outdir to save trace allowing to reproduce results
 
 gpu:
   fallback_to_cpu: true                       # executes the code on the CPU (integrated graphics) if there is no GPU available (recommanded)

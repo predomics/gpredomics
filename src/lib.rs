@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+pub mod bayesian_mcmc;
 pub mod beam;
 pub mod data;
 mod utils;
@@ -234,7 +235,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         debug!("Testing {} models",nb_model_to_test);
 
     let mut test_data=Data::new();
-    if param.data.Xtest.len()>0 {
+    if param.data.Xtest.len()>0 && param.data.ytest.len()>0  {
         let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
         test_data.set_classes(param.data.classes.clone());
         
@@ -285,7 +286,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     let mut top_ten_pop = beam::keep_n_best_model_within_collection(&collection, param.general.nb_best_model_to_test as usize);
     
     let mut data_test = Data::new();
-    if param.data.Xtest.len()>0 {
+    if param.data.Xtest.len()>0 && param.data.ytest.len()>0 {
         let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
         data_test.set_classes(param.data.classes.clone());
         info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
@@ -303,8 +304,9 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     (collection, data, data_test)
 }
 
-pub fn run_cv_ga(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
-    info!("Genetic algorithm with \x1b[1;93mCross-Validation\x1b[0m\n-----------------------------------------------------");
+pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+
+    info!("\x1b[1;93mCross-Validation\x1b[0m\n-----------------------------------------------------");
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
     let mut data = Data::new();
     let _ = data.load_data(param.data.X.as_str(),param.data.y.as_str());
@@ -321,13 +323,20 @@ pub fn run_cv_ga(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) 
         info!("\x1b[1;93mCross-validation parallelization using {} threads per fold\x1b[0m", cv_param.general.thread_number);
     }
 
-    let results=crossval.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| 
-        { ga::ga(d,&mut None,p,r) }, &cv_param, cv_param.general.thread_number, running);
+    let results = crossval.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
+        match param.general.algo.as_str() {
+            "ga" => ga::ga(d, &mut None, p, r),
+            "beam" => beam::beam(d, &mut None, p, r),
+            _ => panic!("Such algorithm is not available with cross-validation."),
+        }
+    }, &cv_param, cv_param.general.thread_number, running);
     
-    let mut cv_fmb_pop = Population::new();
+    
+    let mut cv_fbm_pop = Population::new();
 
     // Computing OOB with validation folds based on FBM
-    let mut importances: HashMap<usize, Vec<f64>> = HashMap::new();
+    let mut importance_values: HashMap<usize, Vec<f64>> = HashMap::new();
+    let mut std_dev_values: HashMap<usize, Vec<f64>> = HashMap::new();
     let mut features_significant_observations: HashMap<usize, usize> = Default::default();
     let mut features_classes: HashMap<usize, i8> = Default::default();
     for (i,(mut fold_last_population, train, mut test)) in results.into_iter().enumerate() {
@@ -339,8 +348,9 @@ pub fn run_cv_ga(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) 
         fold_last_fbm = fold_last_fbm.sort();
         
         let fold_importances = fold_last_fbm.compute_pop_oob_feature_importance(&crossval.validation_folds[i], param.cv.n_permutations_oob, &mut rng, &param.cv.importance_aggregation, param.cv.scaled_importance);
-        for (key, value) in fold_importances.iter() {
-            importances.entry(*key).or_insert_with(Vec::new).push(*value);
+        for (key, (importance, std_dev)) in fold_importances.iter() {
+            importance_values.entry(*key).or_insert_with(Vec::new).push(*importance);
+            std_dev_values.entry(*key).or_insert_with(Vec::new).push(*std_dev);
             if train.feature_class.contains_key(key) {
                 *features_significant_observations.entry(*key).or_insert(0) += 1;
                 let associated_class = train.feature_class[key];
@@ -352,30 +362,28 @@ pub fn run_cv_ga(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) 
             }
         }
 
-        cv_fmb_pop.individuals.extend(fold_last_fbm.individuals);
+        cv_fbm_pop.individuals.extend(fold_last_fbm.individuals);
     }
 
     // Sort best models according to their fit on validation folds
     // Display them and their metrics on data and potential data_test
-    cv_fmb_pop = cv_fmb_pop.sort();
-    
-    info!("\x1b[1;93mDisplaying best models according to their generalization on associated validation fold (fit). Metrics are calculated on the global training set (including training and validation folds) and, if supplied, on the additional test set.\x1b[0m");
-    cv_fmb_pop.compute_all_metrics(&data);
-    cv_fmb_pop.remove_clone();
+    cv_fbm_pop = cv_fbm_pop.sort();
 
     let mut data_test = Data::new();
-    if param.data.Xtest.len()>0 {
-        let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
-        data_test.set_classes(param.data.classes.clone());
-        info!("{}", cv_fmb_pop.display(&data, Some(&data_test), param));
-    } else {
-        info!("{}", cv_fmb_pop.display(&data, None, param));
+    if param.data.Xtest.len()>0 && param.data.ytest.len()>0 {
+         let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
+         data_test.set_classes(param.data.classes.clone());
     }
 
-    let mut final_importances: HashMap<usize, f64> = HashMap::new();
+    let mut final_importances: HashMap<usize, (f64, f64)> = HashMap::new();
 
-    for (key, values) in &importances {
-        let agg = match param.cv.importance_aggregation.as_str() {
+    static EMPTY_VEC: Vec<f64> = Vec::new();
+    for key in importance_values.keys() {
+        let values = &importance_values[key];
+    
+        let stds = std_dev_values.get(key).unwrap_or(&EMPTY_VEC);
+        
+        let agg_importance = match param.cv.importance_aggregation.as_str() {
            "median" => {
                 let mut v = values.clone();
                 v.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -390,175 +398,148 @@ pub fn run_cv_ga(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) 
                 sum / values.len() as f64
             }
         };
-        final_importances.insert(*key, agg);
-    }
-
-    let mut importance_vec: Vec<(&usize, &f64)> = final_importances.iter().collect();
-    importance_vec.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let n = 150;
-    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m",  match param.cv.importance_aggregation.as_str() {"median" => "Importance (Median)", _ => "Importance (Mean)"}
-);
-    // Colouring if the feature is associated with the same class in all FBM models (or unassociated)
-    for (rank, (feature_idx, importance)) in importance_vec.iter().take(n).enumerate() {
-        if features_classes[*feature_idx] == -(features_significant_observations[*feature_idx] as i8)  {
-             info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[95m{}\x1b[0m\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
-        } else if features_classes[*feature_idx] == features_significant_observations[*feature_idx] as i8 {
-            info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[96m{}\x1b[0m\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+        
+        let agg_std_dev = if !stds.is_empty() {
+            match param.cv.importance_aggregation.as_str() {
+                "median" => {
+                    // Simple médiane des mesures de dispersion (déjà des MAD si median était utilisé)
+                    let mut v = stds.clone();
+                    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    if v.len() % 2 == 1 {
+                        v[v.len() / 2]
+                    } else {
+                        (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
+                    }
+                },
+                _ => {
+                    // Simple moyenne des mesures de dispersion (déjà des écarts-types si mean était utilisé)
+                    let sum: f64 = stds.iter().sum();
+                    sum / stds.len() as f64
+                }
+            }
         } else {
-            info!("\x1b[1;93m#{}\x1b[0m\t\t{}\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+            0.0
+        };
+    
+    final_importances.insert(*key, (agg_importance, agg_std_dev));
+
+    }
+    
+    let mut importance_vec: Vec<(&usize, &(f64, f64))> = final_importances.iter().collect();
+    importance_vec.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
+    let n = 150;
+    
+    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m", match param.cv.importance_aggregation.as_str() {"median" => "Importance (Median)\t\tMAD", _ => "Importance (Mean)\t\tStd. dev."});
+
+    // Colouring if the feature is associated with the same class in all FBM models (or unassociated)
+    for (rank, (feature_idx, (importance, std))) in importance_vec.iter().take(n).enumerate() {
+        if features_classes[*feature_idx] == -(features_significant_observations[*feature_idx] as i8)  {
+             info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[95m{}\x1b[0m\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
+        } else if features_classes[*feature_idx] == features_significant_observations[*feature_idx] as i8 {
+            info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[96m{}\x1b[0m\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
+        } else {
+            info!("\x1b[1;93m#{}\x1b[0m\t\t{}\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
         }
     }
 
-    // if param.data.Xtest.len()>0 {
-    //     let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
-    //     test_data.set_classes(param.data.classes.clone());
-        
-    //     for (i,(mut best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-    //         let holdout_auc=best_model.compute_auc(&test_data);
-    //         let (threshold, accuracy, sensitivity, specificity) = 
-    //             best_model.compute_threshold_and_metrics(&test_data);
-    //         info!("Model #{} [gen:{}] [k={}]: train AUC {:.3}  | test AUC {:.3} | holdout AUC {:.3} | threshold {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | {:?}",
-    //                     i+1,best_model.epoch,best_model.k,train_auc,test_auc,holdout_auc,threshold,accuracy,sensitivity,specificity,best_model);
-    //         info!("Features importance on train+test... ");
-    //         info!("{}",
-    //             best_model.compute_oob_feature_importance(&my_data, param.ga.feature_importance_permutations,&mut rng)
-    //                 .into_iter()
-    //                 .map(|feature_importance| { format!("[{:.4}]",feature_importance) })
-    //                 .collect::<Vec<String>>()
-    //                 .join(" ")
-    //         );
-    //         info!("Features importance on holdout... ");
-    //         info!("{}",
-    //             best_model.compute_oob_feature_importance(&test_data, param.ga.feature_importance_permutations,&mut rng)
-    //                 .into_iter()
-    //                 .map(|feature_importance| { format!("[{:.4}]",feature_importance) })
-    //                 .collect::<Vec<String>>()
-    //                 .join(" ")
-    //         );
-    //     }    
-    // }
-    // else {
-    //     for (i,(best_model, train_auc, test_auc)) in results.into_iter().enumerate() {
-    //         warn!("Model #{} [gen:{}] [k={}]: train AUC {:.3} | test AUC {:.3} | {:?}",i+1,best_model.epoch,best_model.k,train_auc,test_auc,best_model);
-    //     }    
-    // }
+    let feature_importance_chart = utils::display_feature_importance_terminal(
+        &data,
+        &final_importances,
+        30, 
+        &param.cv.importance_aggregation
+    );
 
-    (crossval,data,data_test) 
+    info!("\n{}", feature_importance_chart);
+
+    (vec![cv_fbm_pop],data,data_test) 
 
 }
 
-pub fn run_cv_beam(param: &Param, running: Arc<AtomicBool>) -> (cv::CV,Data,Data) {
-    info!("Beam algorithm with \x1b[1;93mCross-Validation\x1b[0m\n-----------------------------------------------------");
+pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+    warn!("MCMC algorithm is still in alpha!");
+    warn!(" - results cannot be guaranteed,");
+    warn!(" - requires RAW/PREV pre-formatted input data,");
+    warn!(" - isn't GPU-compatible,");
+    warn!(" - contains only one 'GENERIC' language.");
+    warn!(" - requires param.general.keep_trace = true");
+
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+
+    // Load Data using Gpredomics Data structure
     let mut data = Data::new();
-    let _ = data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    let _ = data.load_data(param.data.X.as_str(), param.data.y.as_str());
     data.set_classes(param.data.classes.clone());
-    info!("\x1b[2;97m{:?}\x1b[0m", data); 
 
-    let mut data_test = Data::new();
-    let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
-    data_test.set_classes(param.data.classes.clone());
+    // Each Gpredomics function currently handles class 2 as unknown
+    // As MCMC does not, remove unknown sample before analysis
+    data = data.remove_class(2);
 
-    // CV
-    let mut crossval = cv::CV::new(&data, param.cv.fold_number, &mut rng);
-    let mut cv_param = param.clone();
-    cv_param.general.thread_number = param.general.thread_number/param.cv.fold_number; 
-    cv_param.general.gpu = false;
-    
-    if cv_param.general.thread_number >= param.cv.fold_number {
-        info!("\x1b[1;93mCross-validation parallelization using {} thread per fold\x1b[0m", cv_param.general.thread_number);
+    // Selecting features
+    data.select_features(param);
+
+    if data.feature_selection.len() < param.mcmc.nmin as usize {
+        warn!("SBS can not be launched according to required parameters: {} pre-selected features < {} minimum features to keep after SBS",
+                data.feature_selection.len(), param.mcmc.nmin as usize)
     }
-
-    let results=crossval.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| 
-        { beam::beam(d,&mut None,p,r) }, &cv_param, cv_param.general.thread_number, running);
-    
-    let mut cv_fmb_pop = Population::new();
-
-    // Computing OOB with validation folds based on FBM
-    let mut importances: HashMap<usize, Vec<f64>> = HashMap::new();
-    let mut features_significant_observations: HashMap<usize, usize> = Default::default();
-    let mut features_classes: HashMap<usize, i8> = Default::default();
-    for (i,(mut fold_last_population, train, mut test)) in results.into_iter().enumerate() {
         
-        // Fit last population on validation folds instead of training folds in order to select the models most likely to generalize.
-        ga::fit_fn(&mut fold_last_population, &mut test, &mut None, &None, &None, &cv_param);
-
-        let mut fold_last_fbm = fold_last_population.select_best_population(param.cv.cv_best_models_ci_alpha);
-        fold_last_fbm = fold_last_fbm.sort();
+    let mcmc_result;
+    if param.mcmc.nmin != 0 && data.feature_selection.len() > param.mcmc.nmin as usize {
+        // Executing SBS
+        info!("Launching MCMC with SBS (λ={}, {}<->{} features...)", 
+            param.mcmc.lambda, data.feature_selection.len(), param.mcmc.nmin);
+        let results = bayesian_mcmc::run_mcmc_sbs(&data, param, &mut rng, running);
         
-        let fold_importances = fold_last_fbm.compute_pop_oob_feature_importance(&crossval.validation_folds[i], param.cv.n_permutations_oob, &mut rng, &param.cv.importance_aggregation, param.cv.scaled_importance);
-        for (key, value) in fold_importances.iter() {
-            importances.entry(*key).or_insert_with(Vec::new).push(*value);
-            if train.feature_class.contains_key(key) {
-                *features_significant_observations.entry(*key).or_insert(0) += 1;
-                let associated_class = train.feature_class[key];
-                if associated_class == 0 {
-                    *features_classes.entry(*key).or_insert(0) += -1;
-                } else if associated_class == 1 {
-                    *features_classes.entry(*key).or_insert(0) += 1;
-                }
-            }
+        // Displaying summary of SBS traces
+        for (nfeat, post_mean, _, log_evidence, feature_name) in &results {
+            info!("Features: {}, Posterior: {:.4e}, Log Evid: {:.4}, Removed: {}",
+                nfeat, post_mean, log_evidence, feature_name);
         }
-
-        cv_fmb_pop.individuals.extend(fold_last_fbm.individuals);
-    }
-
-    // Sort best models according to their fit on validation folds
-    // Display them and their metrics on data and potential data_test
-    cv_fmb_pop = cv_fmb_pop.sort();
     
-    info!("\x1b[1;93mDisplaying best models according to their generalization on associated validation fold (fit). Metrics are calculated on the global training set (including training and validation folds) and, if supplied, on the additional test set.\x1b[0m");
-    cv_fmb_pop.compute_all_metrics(&data);
-    cv_fmb_pop.remove_clone();
-    
-    let mut data_test = Data::new();
-    if param.data.Xtest.len()>0 {
-        let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
-        data_test.set_classes(param.data.classes.clone());
-        info!("{}", cv_fmb_pop.display(&data, Some(&data_test), param));
+        // Extract best MCMC trace
+        info!("Computing full posterior for optimal feature subset...");
+        mcmc_result = bayesian_mcmc::get_best_mcmc_sbs(&data, &results, &param, rng);
+        
+        println!("{:?}",mcmc_result.population_trace);
+        
     } else {
-        info!("{}", cv_fmb_pop.display(&data, None, param));
+        info!("Launching MCMC without SBS (λ={}, using all {} features...)", 
+            param.mcmc.lambda, data.feature_selection.len());
+        
+        let bp = bayesian_mcmc::BayesPred::new(&data, param.mcmc.lambda);
+        mcmc_result = bayesian_mcmc::compute_mcmc(&bp, param, &mut rng);
     }
 
-    let mut final_importances: HashMap<usize, f64> = HashMap::new();
-
-    for (key, values) in &importances {
-        let agg = match param.cv.importance_aggregation.as_str() {
-           "median" => {
-                let mut v = values.clone();
-                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                if v.len() % 2 == 1 {
-                    v[v.len() / 2]
-                } else {
-                    (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
-                }
-            },
-            _ => {
-                let sum: f64 = values.iter().sum();
-                sum / values.len() as f64
-            }
-        };
-        final_importances.insert(*key, agg);
-    }
-
-    let mut importance_vec: Vec<(&usize, &f64)> = final_importances.iter().collect();
-    importance_vec.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let n = 150;
-    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m",  match param.cv.importance_aggregation.as_str() {"median" => "Importance (Median)", _ => "Importance (Mean)"}
-);
-    // Colouring if the feature is associated with the same class in all FBM models (or unassociated)
-    for (rank, (feature_idx, importance)) in importance_vec.iter().take(n).enumerate() {
-        if features_classes[*feature_idx] == -(features_significant_observations[*feature_idx] as i8)  {
-             info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[95m{}\x1b[0m\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
-        } else if features_classes[*feature_idx] == features_significant_observations[*feature_idx] as i8 {
-            info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[96m{}\x1b[0m\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
-        } else {
-            info!("\x1b[1;93m#{}\x1b[0m\t\t{}\t\t{:.4e}", rank + 1, data.features[**feature_idx], importance);
+    // Control traces
+    if mcmc_result.population_trace.is_none() || mcmc_result.beta_trace.is_none() {
+            warn!("MCMC traces were not saved!");
+            let test_data = Data::new();
+            return (vec![Population::new()], data.clone(), test_data);
         }
+
+    // Building complete posterior distribution
+    let population = mcmc_result.population_trace.as_ref().unwrap();
+    let posterior_distribution = bayesian_mcmc::BayesianMCMCPopulation::new(
+        population,
+        mcmc_result.beta_trace.clone()
+    );
+    
+    // Using MCMC models to compute prediction on test data
+    let mut test_data = Data::new();
+    if !param.data.Xtest.is_empty() {
+        let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
+        test_data.set_classes(param.data.classes.clone());
+        
+        let test_probs = posterior_distribution.predict_proba(&test_data);
+        
+        // Compute metrics
+        let test_preds = test_probs.iter().map(|p| (p[1] > 0.5) as u8).collect::<Vec<_>>(); //
+        //let (accuracy, sensitivity, specificity) = calculate_metrics(&test_data.y, &test_preds);
+        info!("{:?}", test_data.y);
+        info!("{:?}", test_preds);
+        let (acc, se, sp) = utils::calculate_metrics(&test_data.y, &test_preds);
+        info!("Bayesian predictions: Accuracy={:.4}, Sensitivity={:.4}, Specificity={:.4}", acc, se, sp);
     }
-
-    (crossval,data,data_test) 
-
+    
+    // Note: using this population like that is a non sense
+    (vec![population.clone()], data, test_data)
 }

@@ -1,6 +1,5 @@
 use log::{info, error};
-use gpredomics::{param, basic_test, random_run, run_ga, run_cv_ga, gpu_random_run, run_beam, run_cv_beam};
-use std::process;
+use gpredomics::{param, run_ga, run_cv, run_beam, run_mcmc};
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
 use std::fs;
@@ -81,16 +80,19 @@ fn main() {
     info!("Signal registration state is {}",running_clone.load(Ordering::Relaxed));
 
     let sub_thread = thread::spawn(move || {
-        match param.general.algo.as_str() {
-            "basic" => basic_test(&param),
-            "random" => random_run(&param),
-            "testgpu" => gpu_random_run(&param),
-            "ga"|"ga2"|"ga_no_overfit"|"ga2_no_overfit" => { run_ga(&param, running); },
-            "ga+cv"|"ga2+cv" => { run_cv_ga(&param, running); },
-            "beam" => { run_beam(&param, running); },
-            "beam+cv" => { run_cv_beam(&param, running); }
-            other => { error!("ERROR! No such algorithm {}", other);  process::exit(1); }
-        } 
+        let _result = if param.general.cv {
+            run_cv(&param, running)
+        } else {
+            match param.general.algo.as_str() {
+                "ga" => run_ga(&param, running),
+                "beam" => run_beam(&param, running),
+                "mcmc"  => run_mcmc(&param, running),
+                other => {
+                    error!("ERROR! No such algorithm {}", other);
+                    panic!("ERROR! No such algorithm {}", other);
+                }
+            }
+        };
     });
 
     // Main thread now monitors the signal

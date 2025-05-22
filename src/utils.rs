@@ -3,6 +3,7 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand::seq::SliceRandom;
 use statrs::distribution::{Normal, ContinuousCDF};
+use crate::data::Data;
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -82,6 +83,251 @@ pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f6
     let upper_bound = 1.0f64.min(accuracy + ci_range);  
 
     (lower_bound, accuracy, upper_bound)
+}
+
+pub fn calculate_metrics(y_true: &Vec<u8>, y_pred: &Vec<u8>) -> (f64, f64, f64) {
+    if y_true.len() != y_pred.len() {
+        panic!("Wrong length");
+    }
+    
+    let mut tp = 0;
+    let mut tn = 0;
+    let mut fp = 0;
+    let mut fn_ = 0;
+    
+    for (i, &true_val) in y_true.iter().enumerate() {
+        let pred_val = y_pred[i];
+        
+        match (true_val, pred_val) {
+            (1, 1) => tp += 1,   
+            (0, 0) => tn += 1,  
+            (0, 1) => fp += 1,   
+            (1, 0) => fn_ += 1,  
+            _ => {} 
+        }
+    }
+    
+    let total = tp + tn + fp + fn_;
+    let accuracy = if total > 0 { (tp + tn) as f64 / total as f64 } else { 0.0 };
+    
+    let sensitivity = if (tp + fn_) > 0 { tp as f64 / (tp + fn_) as f64 } else { 0.0 };
+    
+    let specificity = if (tn + fp) > 0 { tn as f64 / (tn + fp) as f64 } else { 0.0 };
+    
+    (accuracy, sensitivity, specificity)
+}
+
+
+// Graphical functions
+pub fn display_feature_importance_terminal(
+    data: &Data,
+    final_importances: &HashMap<usize, (f64, f64)>,
+    nb_features: usize,
+    aggregation_method: &str
+) -> String {
+    const GRAPH_WIDTH: usize = 80;
+    const LEFT_MARGIN: usize = 30;
+    const VALUE_AREA_WIDTH: usize = GRAPH_WIDTH - LEFT_MARGIN - 2;
+    
+    let mut importance_vec: Vec<(&usize, &(f64, f64))> = final_importances.iter().collect();
+    importance_vec.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
+    
+    let importance_vec = importance_vec.into_iter().take(nb_features).collect::<Vec<_>>();
+    
+    if importance_vec.is_empty() {
+        return String::from("No features to display.");
+    }
+    
+    let min_with_std = importance_vec.iter()
+        .map(|(_, (imp, std))| imp - std)
+        .fold(f64::MAX, |a, b| a.min(b));
+
+    let max_with_std = importance_vec.iter()
+        .map(|&(_, (imp, std))| imp + std)
+        .fold(f64::MIN, f64::max);
+    
+    let scale_min = round_down_nicely(min_with_std);
+    let scale_max = round_up_nicely(max_with_std);
+    let scale_range = scale_max - scale_min;
+
+    let scale_factor = if scale_range > 0.0 {
+        VALUE_AREA_WIDTH as f64 / scale_range
+    } else {
+        VALUE_AREA_WIDTH as f64 / 1.0
+    };
+    
+    let num_ticks = 7;
+
+    let tick_positions: Vec<usize> = (0..num_ticks)
+        .map(|i| i * VALUE_AREA_WIDTH / (num_ticks - 1))
+        .collect();
+
+    let mut result = String::new();
+    
+    result.push_str(&format!("Feature importance using {} aggregation method\n", aggregation_method));
+    result.push_str("Legend: • = importance value, <- - -> = confidence interval (±std dev/MAD)\n\n");
+    
+    let header_line = format!("{:<LEFT_MARGIN$}|{:^VALUE_AREA_WIDTH$}|", "Feature", "Feature importance");
+    result.push_str(&"-".repeat(LEFT_MARGIN));
+    result.push_str("|-");
+    result.push_str(&"-".repeat(VALUE_AREA_WIDTH));
+    result.push_str("|\n");
+    result.push_str(&header_line);
+    result.push_str("\n");
+    result.push_str(&"-".repeat(LEFT_MARGIN));
+    result.push_str("|-");
+    result.push_str(&"-".repeat(VALUE_AREA_WIDTH));
+    result.push_str("|\n");
+    
+    for (i, (feature_idx, (importance, std_dev))) in importance_vec.iter().enumerate() {
+        let feature_name = if data.features.len() > **feature_idx {
+            &data.features[**feature_idx]
+        } else {
+            "Unknown"
+        };
+        
+        let display_name = format!("#{} {}", i + 1, feature_name);
+        let truncated_name = if display_name.len() > LEFT_MARGIN - 2 {
+            format!("{}...", &display_name[0..LEFT_MARGIN - 5])
+        } else {
+            display_name
+        };
+        
+        let normalized_importance = importance - scale_min;
+        let normalized_min = (importance - std_dev - scale_min).max(0.0);
+        let normalized_max = importance + std_dev - scale_min;
+        
+        let center_pos = (normalized_importance * scale_factor).round() as usize;
+        let start_pos = (normalized_min * scale_factor).round() as usize;
+        let end_pos = (normalized_max * scale_factor).round() as usize;
+        let end_pos = std::cmp::min(end_pos, VALUE_AREA_WIDTH - 1);
+        
+        let left_margin = LEFT_MARGIN; 
+        let mut line = format!("{:<left_margin$}|", truncated_name);
+        
+        for i in 0..VALUE_AREA_WIDTH {
+            if i == center_pos {
+                line.push('•');
+            } else if i == start_pos {
+                line.push('<');
+            } else if i == end_pos {
+                line.push('>');
+            } else if i > start_pos && i < end_pos {
+                line.push('-');
+            } else {
+                line.push(' ');
+            }
+        }
+        
+        line.push('|');
+        result.push_str(&line);
+        result.push('\n');
+    }
+
+    let mut marker_line = "-".repeat(LEFT_MARGIN);
+    marker_line.push('|');
+    
+    for i in 0..VALUE_AREA_WIDTH {
+        if tick_positions.contains(&i) {
+            marker_line.push('|');
+        } else {
+            marker_line.push('-');
+        }
+    }
+    
+    marker_line.push('|');
+    result.push_str(&marker_line);
+    result.push('\n');
+    
+    let mut scale_line = " ".repeat(LEFT_MARGIN + 1);
+
+    for (i, &tick_pos) in tick_positions.iter().enumerate() {
+        let tick_value = scale_min + i as f64 * (scale_range / (num_ticks - 1) as f64);
+        let value_str = format_tick_value(tick_value);
+        
+        let label_width = value_str.len();
+        let label_start = tick_pos.saturating_sub(label_width / 2);
+        
+        while scale_line.len() < LEFT_MARGIN + 1 + label_start {
+            scale_line.push(' ');
+        }
+
+        scale_line.push_str(&value_str);
+    }
+    
+    result.push_str(&scale_line);
+    result.push_str("\n\n");
+    
+    result
+}
+
+fn format_tick_value(value: f64) -> String {
+    let abs_value = value.abs();
+    if abs_value == 0.0 {
+        return "0".to_string();
+    } else if abs_value < 0.001 || abs_value >= 10000.0 {
+        return format!("{:.1e}", value);
+    } else if abs_value < 0.01 {
+        return format!("{:.4}", value);
+    } else if abs_value < 0.1 {
+        return format!("{:.3}", value);
+    } else if abs_value < 1.0 {
+        return format!("{:.2}", value);
+    } else if abs_value < 10.0 {
+        return format!("{:.1}", value);
+    } else {
+        if value == value.round() {
+            return format!("{:.0}", value);
+        } else {
+            return format!("{:.1}", value);
+        }
+    }
+}
+
+fn round_up_nicely(value: f64) -> f64 {
+    if value == 0.0 {
+        return 0.1; 
+    }
+    
+    if value < 0.0 {
+        return -round_down_nicely(value.abs());
+    }
+    
+    let magnitude = value.log10().floor();
+    let power_of_ten = 10.0_f64.powf(magnitude);
+
+    if value <= 1.0 * power_of_ten {
+        1.0 * power_of_ten
+    } else if value <= 2.0 * power_of_ten {
+        2.0 * power_of_ten
+    } else if value <= 5.0 * power_of_ten {
+        5.0 * power_of_ten
+    } else {
+        10.0 * power_of_ten
+    }
+}
+
+fn round_down_nicely(value: f64) -> f64 {
+    if value < 0.0 {
+        return -round_up_nicely(value.abs());
+    }
+    
+    if value < 1e-10 {
+        return 0.0; 
+    }
+    
+    let magnitude = value.log10().floor();
+    let power_of_ten = 10.0_f64.powf(magnitude);
+    
+    if value >= 5.0 * power_of_ten {
+        5.0 * power_of_ten
+    } else if value >= 2.0 * power_of_ten {
+        2.0 * power_of_ten
+    } else if value >= 1.0 * power_of_ten {
+        1.0 * power_of_ten
+    } else {
+        0.5 * power_of_ten
+    }
 }
 
 

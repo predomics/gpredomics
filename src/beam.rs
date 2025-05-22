@@ -144,28 +144,17 @@ fn count_feature_appearances(population: &Population) -> HashMap<usize, usize> {
 //     important_features.into_iter().take(nb_features_to_keep).map(|(feature, _)| feature).collect()
 // }
 
-fn select_features_from_best(best_pop: &Population, very_best_pop: &Population, best_pct:f64) -> Vec<usize> {
+fn select_features_from_best(best_pop: &Population) -> Vec<usize> {
     let mut unique_features = HashSet::new();
     let mut features: Vec<usize> = vec![];
-    let threshold = best_pop.individuals.len() as f64 * (best_pct / 100.0);
 
-    for individual in &very_best_pop.individuals {
-        for very_best_feature in individual.features.keys() {
-            unique_features.insert(*very_best_feature);
+    for individual in &best_pop.individuals {
+        for best_feature in individual.features.keys() {
+            unique_features.insert(*best_feature);
         }
     }
 
-    debug!("Very best features : {:?}", unique_features.len());
-    let features_appearances = count_feature_appearances(&best_pop);
-    for (feature, count) in features_appearances {
-        if best_pop.individuals[0].features.len() != 1 && (count as f64) >= threshold {
-            unique_features.insert(feature);
-        // Keep all best features when k=1
-        } else if best_pop.individuals[0].features.len() == 1 {
-            unique_features.insert(feature);
-        }
-    }
-    debug!("Very best features + best features : {:?}", unique_features.len());
+    debug!("Features kept: {:?}", unique_features.len());
 
     features.extend(unique_features.into_iter());
 
@@ -199,7 +188,7 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
         language: language,
         data_type: data_type,
         hash: 0,
-        data_type_minimum: param.general.data_type_epsilon,
+        epsilon: param.general.data_type_epsilon,
         parents: None
     }
 }
@@ -242,44 +231,24 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
         if param.general.overfit_penalty == 0.0 {
             let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
             let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
-
-            let assay = if param.beam.method == "exhaustive" && param.beam.max_nb_of_models == 0 {
-                warn!("GPU requires a maximum number of models. \
-                \nAccording to your configuration, this number should be {} for one language-data_type pair to prevent crashes. \
-                \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models);
+            if param.beam.max_nb_of_models == 0 {
+                warn!("GPU requires a maximum number of models. Setting max_nb_of_models={} to prevent crashes.", 
+                    gpu_max_nb_models / lang_and_type_pop.individuals.len());
                 None
-            } else if param.beam.method == "exhaustive" && param.beam.max_nb_of_models != 0 && (param.beam.max_nb_of_models as usize)*lang_and_type_pop.individuals.len() > gpu_max_nb_models {
-                warn!("GPU requires a maximum number of models that you exceed. \
-                \nAccording to your configuration, this number should be {} for one language-data_type pair to prevent crashes \
-                \n(or {} considering all the possible pairs following your input parameters). \
-                \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models, gpu_max_nb_models/lang_and_type_pop.individuals.len());
-                None
-            } else if param.beam.method == "extend" && param.beam.extendable_models*data.feature_selection.len()*lang_and_type_pop.individuals.len() > gpu_max_nb_models {
-                let max_features = if gpu_max_nb_models/param.beam.extendable_models/lang_and_type_pop.individuals.len() > 1 {
-                    format!(" or tighten up the criteria for pre-selecting features in order to have a maximum of {} features",
-                    gpu_max_nb_models/param.beam.extendable_models/lang_and_type_pop.individuals.len())
-                } else { format!("") };
-
-                warn!("GPU requires a maximum number of models that you exceed. \
-                \nAccording to your configuration, this number should be {} for one language-data_type pair to prevent crashes \
-                \n(or {} considering all the possible pairs following your input parameters). \
-                \nPlease considers reducing extendable_models to {}{}. \
-                \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models, 
-                gpu_max_nb_models/lang_and_type_pop.individuals.len(), 
-                gpu_max_nb_models/data.feature_selection.len()/lang_and_type_pop.individuals.len(), max_features);
+            } else if (param.beam.max_nb_of_models as usize) * lang_and_type_pop.individuals.len() > gpu_max_nb_models {
+                warn!("GPU requires a maximum number of models that you exceed (GPU max_nb_of_models = {}). \
+                \nAccording to the input parameters, please fix max_nb_of_models to {} \
+                \nIf your configuration supports it and you know what you're doing, consider alternatively increasing the size of the buffers to {:.0} MB (do not forget to adjust the total size accordingly) \
+                \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models,
+                gpu_max_nb_models/lang_and_type_pop.individuals.len(),
+                ((param.beam.max_nb_of_models*lang_and_type_pop.individuals.len()) as usize * data.sample_len * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0)+1.0);
                 None
             } else {
-                let max_nb = match param.beam.method.as_str() {
-                    "exhaustive" => {(param.beam.max_nb_of_models as usize) * lang_and_type_pop.individuals.len()}
-                    "extend" => {param.beam.extendable_models * data.feature_selection.len() * lang_and_type_pop.individuals.len()}
-                    _ => {gpu_max_nb_models}
-                };
+                let max_nb = (param.beam.max_nb_of_models as usize) * lang_and_type_pop.individuals.len();
                 Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, max_nb, &param.gpu))
-            }; 
-            assay
+            }
         } else {
-            warn!("Beam algorithm cannot be started with GPU if overfit_penalty>0.0 currently. \
-            \nThis Gpredomics session will therefore be launched without a GPU.");
+            warn!("Beam algorithm cannot be started with GPU if overfit_penalty>0.0.");
             None
         }
     } else { None };
@@ -329,13 +298,11 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
             // Dynamically select the best_models where features_to_keep are picked
             debug!("Selecting models...");
             let best_pop = pop.select_best_population(param.beam.best_models_ci_alpha);
-            let (very_best_pop, _) = best_pop.select_first_pct(param.beam.very_best_models_pct);
 
             debug!("Kept {:?} individuals from the family of best models of k={:?}", best_pop.individuals.len(), ind_k-1);
-            debug!("Kept {:?} individuals from the family of very best models of k={:?}", very_best_pop.individuals.len(), ind_k-1);
 
             // pertinent features to use for next combinations
-            let mut features_to_keep = select_features_from_best(&best_pop, &very_best_pop, param.beam.features_importance_minimal_pct);
+            let mut features_to_keep = select_features_from_best(&best_pop);
 
             // Stop the loop to avoid a panic! if there is not enough features_to_keep
             if (features_to_keep.len() <= ind_k ) & (ind_k != 1) {
@@ -347,7 +314,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
             class_0_features = class_0_features.iter().filter(|&&(index, _, _)| features_to_keep.contains(&index)).cloned().collect();
             class_1_features = class_1_features.iter().filter(|&&(index, _, _)| features_to_keep.contains(&index)).cloned().collect();
             let mut bin_combinations: Option<Vec<Vec<usize>>> = None; let mut possibilities=0;
-            if param.beam.method == "exhaustive" {
+            if param.beam.method == "combinatorial" {
                 // Generate all possible combinations between the features_to_keep
                 // Combinations are limited by features_to_keep (by param.beam.best_models_ci_alpha)
                 // These features can be limited with param.beam.max_nb_of_models
@@ -412,17 +379,26 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
                 } else {
                     combinations = generate_combinations(&features_to_keep, ind_k);
                 }
-            } else if param.beam.method == "extend" {
+            } else if param.beam.method == "incremental" {
                 // Generate new combinations Mk + 1 feature_to_keep for next step
-                // Combinations are limited both by kept Mk maximum (param.beam.extendable_models) and features_to_keep (param.beam.best_models_ci_alpha)
+                // Combinations are limited both by kept Mk maximum (param.beam.max_nb_of_models) and features_to_keep (param.beam.best_models_ci_alpha)
                 // Combinations are currently generated at each epoch in each languages and data_type
                 debug!("Selecting best combinations...");
+                let potential_combinations = best_pop.individuals.len() * features_to_keep.len();
                 let mut reduced_best_pop = Population::new();
-                if best_pop.individuals.len() > param.beam.extendable_models {
-                    reduced_best_pop.individuals = best_pop.individuals[..param.beam.extendable_models].to_vec();
+                if potential_combinations > param.beam.max_nb_of_models && param.beam.max_nb_of_models != 0 {
+                    let max_parents = param.beam.max_nb_of_models / features_to_keep.len();
+                    let min_parents = std::cmp::min(5, best_pop.individuals.len());
+                    let adjusted_parents = std::cmp::max(max_parents, min_parents);
+                    
+                    debug!("Limiting parent models from {} to {} to respect max_nb_of_models={} (with {} features)",
+                        best_pop.individuals.len(), adjusted_parents, param.beam.max_nb_of_models, features_to_keep.len());
+                    
+                    reduced_best_pop.individuals = best_pop.individuals[..std::cmp::min(adjusted_parents, best_pop.individuals.len())].to_vec();
                 } else {
                     reduced_best_pop.individuals = best_pop.individuals;
                 }
+
                 let best_combinations: Vec<Vec<usize>> = reduced_best_pop.individuals.clone().par_iter().map(|ind| ind.features.keys().cloned().collect()).collect();
                 debug!("Computing new combinations with these features...");
                 combinations = combine_with_best(best_combinations.clone(), &features_to_keep);
@@ -435,7 +411,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
             pop = Population::new();
 
             for ind in &lang_and_type_pop.individuals{
-                if ind.language == BINARY_LANG && param.beam.method == "exhaustive" && possibilities > param.beam.max_nb_of_models as u128 && param.beam.max_nb_of_models != 0 {
+                if ind.language == BINARY_LANG && param.beam.method == "combinatorial" && possibilities > param.beam.max_nb_of_models as u128 && param.beam.max_nb_of_models != 0 {
                     if (!bin_combinations.is_none()) && languages.contains(&BINARY_LANG){
                         pop.individuals.extend(beam_pop_from_combinations(bin_combinations.clone().unwrap(), ind.clone()).individuals);
                     } else {
@@ -529,7 +505,7 @@ mod tests {
     fn create_test_individual() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8,
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0,
-        data_type_minimum: f64::MIN_POSITIVE, parents: None}
+        epsilon: f64::MIN_POSITIVE, parents: None}
     }
 
     #[test]

@@ -227,9 +227,25 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
 
     info!("Population size: {}, kmin {}, kmax {}",pop.individuals.len(),pop.individuals.iter().map(|i| {i.k}).min().unwrap_or(0),pop.individuals.iter().map(|i| {i.k}).max().unwrap_or(0));
 
-    let gpu_assay = if param.general.gpu {
-        Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, param.ga.population_size as usize, &param.gpu))
-    } else { None };
+    let gpu_assay = if param.general.gpu  {
+        let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
+        let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
+        let assay = if gpu_max_nb_models < param.ga.population_size as usize {
+            warn!("GPU requires a maximum number of models (<=> Population size). \
+            \nAccording to your configuration, param.ga.population_size must not exceed {}. \
+            \nIf your configuration supports it and you know what you're doing, consider alternatively increasing the size of the buffers to {:.0} MB (do not forget to adjust the total size accordingly) \
+            \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models,
+            ((param.ga.population_size as usize * data.sample_len * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0)+1.0));
+            None
+        } else {
+            Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, param.ga.population_size as usize, &param.gpu))
+        }; 
+        assay
+    } else {
+        None
+    };
+
+    
     let test_assay = if param.general.gpu && param.general.overfit_penalty>0.0 {
         let test_data = test_data.as_mut().unwrap();
         Some(GpuAssay::new(&test_data.X, &data.feature_selection, test_data.sample_len, param.ga.population_size as usize, &param.gpu))
@@ -329,7 +345,7 @@ pub fn ga(data: &mut Data, test_data: &mut Option<Data>, param: &Param, running:
     }
 
     let elapsed = time.elapsed();
-        info!("Genetic algorithm computed {:?} generations in {:.2?}", populations.len(), elapsed);
+    info!("Genetic algorithm computed {:?} generations in {:.2?}", populations.len(), elapsed);
 
     populations
     
@@ -640,7 +656,7 @@ mod tests {
                 language: (i % 4) as u8,
                 data_type: (i % 3) as u8,
                 hash: i as u64,
-                data_type_minimum: f64::MIN_POSITIVE + (i as f64 * 0.001),
+                epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
                 parents : None
             };
             pop.individuals.push(ind);
@@ -656,6 +672,11 @@ mod tests {
         let mut pop = create_test_population();
         let mut data=  create_test_data_disc();
         let mut param = param::get("param.yaml".to_string()).unwrap();
+
+        for ind in pop.individuals.iter_mut() {
+            ind.epsilon = param.general.data_type_epsilon;
+        }
+
         const EPSILON: f64 = 1e-5; // mandatory to compare threshold which could be a little different because of GPU f32
         param.general.overfit_penalty = 0.0;
         let fit_vec = vec![FitFunction::auc, FitFunction::sensitivity, FitFunction::specificity];
@@ -695,9 +716,15 @@ mod tests {
     #[test]
     fn test_fit_fn_overfit_penalty() {
         let mut pop = create_test_population();
+        
         let mut data=  create_test_data_disc();
         let test_data = create_test_data_valid();
         let mut param = param::get("param.yaml".to_string()).unwrap();
+
+        for ind in pop.individuals.iter_mut() {
+            ind.epsilon = param.general.data_type_epsilon;
+        }
+
         // mandatory to compare threshold which could be a little different because of GPU f32
         const EPSILON: f64 = 1e-5; 
         let fit_vec = vec![FitFunction::auc, FitFunction::sensitivity, FitFunction::specificity];
@@ -729,7 +756,7 @@ mod tests {
                     assert_eq!(populations[0][i].sensitivity, populations[p][i].sensitivity, "Calculated Sensitivities for parameters 0 and parameters {} are differents (ind = {}, fit on {:?})", p, i, fit_method);
                     assert_eq!(populations[0][i].specificity, populations[p][i].specificity, "Calculated Specificities for parameters 0 and parameters {} are differents (ind = {}, fit on {:?})", p, i, fit_method);
                     assert_eq!(populations[0][i].accuracy, populations[p][i].accuracy, "Calculated Accuracies for parameters 0 and parameters {} are differents (ind = {}, fit on {:?})", p, i, fit_method);
-                    assert!((populations[0][i].threshold - populations[p][i].threshold).abs() < EPSILON, "Calculated Thresholds for parameters 0 and parameters {} are differents (ind = {}, fit on {:?}) : {} VS {}", p, i, fit_method, populations[0][i].threshold, populations[p][i].threshold);
+                    assert!((populations[0][i].threshold - populations[p][i].threshold).abs() < EPSILON, "Calculated Thresholds for parameters 0 and parameters {} are differents (ind = {}, fit on {:?}) : {} VS {} {:?}", p, i, fit_method, populations[0][i].threshold, populations[p][i].threshold, populations[p][i]);
                     assert_eq!(populations[0][i].fit, populations[p][i].fit, "Calculated Fits for parameters 0 and parameters {} are differents (ind = {}, fit on {:?})", p, i, fit_method);
                 }
             }

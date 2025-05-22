@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use bytemuck;
 use crate::individual::{Individual, RATIO_LANG,RAW_TYPE,LOG_TYPE,PREVALENCE_TYPE};
 use crate::param::{GpuMemoryPolicy, GPU};
+use log::warn;
 
 /// Convert a HashMap<(row, col), f64> to CSR format for an R x C matrix. 
 ///
@@ -206,7 +207,8 @@ struct MatrixMultParams {
     R: u32,
     C: u32,
     N: u32,
-    threshold: f32
+    threshold: f32,
+    epsilon: f32
     // possibly some padding
 }
 
@@ -326,14 +328,14 @@ impl GpuAssay {
             GpuMemoryPolicy::Strict => {
                 if requested_total_size > hardware_limits.max_buffer_size {
                     panic!(
-                        "Strict mode: requested total memory ({} MB) exceeds hardware limit ({} MB)",
+                        "GPU Strict policy: requested total memory ({} MB) exceeds hardware limit ({} MB)",
                         config.max_total_memory_mb,
                         hardware_limits.max_buffer_size / (1024 * 1024)
                     );
                 } 
                 if requested_buffer_size > hardware_limits.max_storage_buffer_binding_size {
                     panic!(
-                        "Strict mode: requested buffer size ({} MB) exceeds hardware limit ({} MB)",
+                        "GPU Strict policy: requested buffer size ({} MB) exceeds hardware limit ({} MB)",
                         config.max_buffer_size_mb,
                         hardware_limits.max_storage_buffer_binding_size / (1024 * 1024)
                     );
@@ -617,7 +619,9 @@ impl GpuAssay {
             C: self.feature_count as u32,
             N: num_models as u32,
             threshold,
+            epsilon: models[0].epsilon as f32,
         };
+
         let params_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Params Buf"),
             contents: bytemuck::bytes_of(&params_data),
@@ -713,31 +717,61 @@ impl GpuAssay {
                 force_fallback_adapter: false,
                 compatible_surface: None,
             });
-            
+
             let adapter = match adapter_future.await {
                 Some(a) => a,
                 None => {
                     if !config.fallback_to_cpu {
-                        return 134217728/2;
+                        return 134217728 / 2;
                     }
-                
+
                     match instance.request_adapter(&wgpu::RequestAdapterOptions {
                         power_preference: wgpu::PowerPreference::LowPower,
                         force_fallback_adapter: true,
                         compatible_surface: None,
                     }).await {
                         Some(a) => a,
-                        None => return 134217728/2, 
+                        None => return 134217728 / 2,
                     }
                 }
             };
-            
+
             let hardware_limits = adapter.limits();
+            let config_max_size = config.max_buffer_size_mb.saturating_mul(1024 * 1024);
 
             match config.memory_policy {
-                GpuMemoryPolicy::Strict => config.max_buffer_size_mb.saturating_mul(1024 * 1024).min(hardware_limits.max_storage_buffer_binding_size),
-                GpuMemoryPolicy::Adaptive => hardware_limits.max_storage_buffer_binding_size.min(config.max_buffer_size_mb.saturating_mul(1024 * 1024)),
-                GpuMemoryPolicy::Performance => hardware_limits.max_storage_buffer_binding_size,
+                GpuMemoryPolicy::Strict => {
+                    let max_size = config_max_size.min(hardware_limits.max_storage_buffer_binding_size);
+                    if config_max_size > hardware_limits.max_storage_buffer_binding_size {
+                        panic!(
+                            "GPU Strict policy: requested total memory ({} MB) exceeds hardware limit ({} MB)",
+                            config.max_buffer_size_mb,
+                            hardware_limits.max_storage_buffer_binding_size / (1024 * 1024)
+                        );
+                    }
+                    max_size
+                }
+                GpuMemoryPolicy::Adaptive => {
+                    let max_size = hardware_limits.max_storage_buffer_binding_size.min(config_max_size);
+                    if config_max_size > hardware_limits.max_storage_buffer_binding_size {
+                        warn!(
+                            "The value of param.gpu.max_buffer_size_mb ({} MB) is too high and will be truncated to the hardware limit ({} MB).",
+                            config.max_buffer_size_mb,
+                            hardware_limits.max_storage_buffer_binding_size / (1024 * 1024)
+                        );
+                    }
+                    max_size
+                }
+                GpuMemoryPolicy::Performance => {
+                    if config_max_size > hardware_limits.max_storage_buffer_binding_size {
+                        warn!(
+                            "The value of param.gpu.max_buffer_size_mb ({} MB) is too high and will be ignored in favor of the hardware limit ({} MB).",
+                            config.max_buffer_size_mb,
+                            hardware_limits.max_storage_buffer_binding_size / (1024 * 1024)
+                        );
+                    }
+                    hardware_limits.max_storage_buffer_binding_size
+                }
             }
         })
     }
