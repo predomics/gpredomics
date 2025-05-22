@@ -12,7 +12,7 @@ general:
   k_penalty: 0.0001                           # this penalty is deduced from fit function multiplied by k, the number of variables used in the model
   fr_penalty: 0.0                             # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
   nb_best_model_to_test: 100                  # nb of models to test in the last generation (default to 10, 0 means all models)
-  #log_base: "dev_test_os"                    # uncomment to print log and results in log_file_name
+  #log_base: ""                               # uncomment to print log and results in log_file_name
   log_level: debug                            # possible values are trace, debug, info, warning or error 
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
@@ -37,8 +37,8 @@ data:
   feature_maximal_pvalue: 0.1                 # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_log_abs_bayes_factor: 2     # features with a fewer log absolute bayes factor will be removed (bayesian method only)
   classes:
-    - "OS12+"
-    - "OS12-"
+    - "healthy"
+    - "cirrhosis"
     - "unknown"
 
 ga:
