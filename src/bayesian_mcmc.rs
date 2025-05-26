@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::process;
 use std::time::Instant;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 use rayon::prelude::*;
 use statrs::function::logistic::logistic;
 use statrs::function::erf::{erf, erf_inv};
+use serde::{Serialize, Deserialize};
 use argmin::{
     core::{CostFunction, Error as argmin_Error, Executor},
     solver::brent::BrentOpt,
@@ -17,8 +18,7 @@ use argmin::{
 use log::{debug, info, error};
 
 use crate::data::Data;
-use crate::individual::{Individual, TERNARY_LANG};
-use crate::population::Population;
+use crate::individual::{Individual, MCMC_GENERIC_LANG};
 use crate::param::Param;
 
 const BIG_NUMBER: f64 = 100.0;
@@ -72,8 +72,106 @@ fn random_normal(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 
     mu + 2_f64.sqrt() * scale * erf_inv(2.0 * u - 1.0)
 }
 
+
 //-----------------------------------------------------------------------------
 // Structure for holding data for MCMC
+
+// Structure for making predictions using an ensemble of models from MCMC sampling.
+// Contains multiple model configurations and their parameters for robust prediction.
+// <=> Density
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct Betas {
+    a: Vec<f64>,
+    b: Vec<f64>,
+    c: Vec<f64>
+}
+
+impl Betas {
+    pub fn new(a: Vec<f64>, b: Vec<f64>, c: Vec<f64>) -> Self {
+        Betas { a, b, c }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (f64, f64, f64)> + '_ {
+        self.a.iter().zip(self.b.iter()).zip(self.c.iter())
+            .map(|((&a, &b), &c)| (a, b, c))
+    }
+}
+
+
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct MCMC {
+    pub features_collection: Vec<HashMap<usize,i8>>,
+    pub betas_collection: Betas
+}
+
+impl MCMC {
+    // Creates a new prediction ensemble from a population of models.
+    // Parameters:
+    // - population: Reference to the population containing model configurations
+    // - betas: Optional vector of beta coefficients for each model
+    pub fn new(features_collection: Vec<HashMap<usize,i8>>, betas_collection: Betas) -> Self {
+        MCMC {
+            features_collection,
+            betas_collection
+        }
+    }
+
+    // Predicts class probabilities for each sample in the provided dataset.
+    // Combines predictions from all models in the ensemble for robust estimation.
+    // Parameters:
+    // - data: Dataset to make predictions on
+    // Returns a vector of probability pairs [prob_class0, prob_class1] for each sample.
+    pub fn predict_proba(&self, data: &Data) -> Vec<[f64; 2]> {
+        let probabilities;
+        
+        probabilities = (0..data.sample_len).into_par_iter().map(|i_sample| {
+            let mut probs = [0.0, 0.0];
+            for (features, betas) in self.features_collection.iter().zip(self.betas_collection.iter()) {
+                let mut pos_features = 0.0;
+                let mut neg_features = 0.0;
+                
+                for (&feat_idx, &coef) in features {
+                    if let Some(&value) = data.X.get(&(i_sample, feat_idx)) {
+                        match coef {
+                            1 => pos_features += value,
+                            -1 => neg_features += value,
+                            _ => (),
+                        }
+                    }
+                }
+                
+                let z = pos_features * betas.0 + neg_features * betas.1 + betas.2;
+                probs[0] += logistic(-z);
+                probs[1] += logistic(z);
+            }
+            
+            probs[0] /= self.features_collection.len() as f64;
+            probs[1] /= self.features_collection.len() as f64;
+
+            assert!(probs[0] >= 0.0 && probs[0] <= 1.0, "p should be between 0 and 1");
+            assert!(probs[1] >= 0.0 && probs[1] <= 1.0, "p should be between 0 and 1");
+
+            probs
+            
+        }).collect::<Vec<[f64; 2]>>();
+        
+        probabilities
+    }
+    
+    // Predicts discrete class labels by thresholding the probability predictions.
+    // Uses the ensemble of models to determine the most likely class for each sample.
+    // Parameters:
+    // - data: Dataset to make predictions on
+    // Returns a vector of predicted class labels.
+    pub fn predict_class(&self, data: &Data) -> Vec<u8> {
+        let probs = self.predict_proba(data);
+        probs.iter()
+            .map(|p| if p[1] > p[0] { 1 } else { 0 })
+            .collect()
+    }
+}
+
 
 // Main structure for Bayesian prediction models that holds data and model parameters
 // for MCMC sampling and posterior probability calculations.
@@ -100,20 +198,18 @@ impl BayesPred {
     // - Intercept (always 1.0)
     // Returns a vector of vectors where each inner vector contains [pos_features, neg_features, intercept]
     // for each sample in the dataset.
-    fn compute_feature_groups(&self, individual: &Individual) -> Vec<[f64; 3]> {
+    fn compute_feature_groups(&self, features: &HashMap<usize,i8>) -> Vec<[f64; 3]> {
         let mut z = Vec::with_capacity(self.data.sample_len);
         for i_sample in 0..self.data.sample_len {
             let mut pos_features: f64 = 0.0;
             let mut neg_features: f64 = 0.0;
             
-            for (&feature_idx, &coef) in &individual.features {
-                if self.data.feature_selection.contains(&feature_idx) {
-                    if let Some(&value) = self.data.X.get(&(i_sample, feature_idx)) {
-                        match coef {
-                            1 => pos_features += value,
-                            -1 => neg_features += value,
-                            _ => ()
-                        }
+            for (&feature_idx, &coef) in features {
+                if let Some(&value) = self.data.X.get(&(i_sample, feature_idx)) {
+                    match coef {
+                        1 => pos_features += value,
+                        -1 => neg_features += value,
+                        _ => ()
                     }
                 }
             }
@@ -253,19 +349,16 @@ impl CostFunction for NegLogPostToMinimize<'_> {
 // and optional traces of the sampling process.
 #[derive(Clone, Debug)]
 pub struct MCMCAnalysisTrace {
-    pub n_features: usize,
-    pub feature_names: Option<Vec<String>>,
-    pub feature_prob: HashMap<String, (f64, f64, f64)>, // nom -> (pos, neutre, neg)
-    pub model_stats: HashMap<String, (f64, f64)>,       // nom -> (moyenne, variance)
+    pub coefs: MCMC,
+    pub feature_prob: HashMap<usize, (f64, f64, f64)>,  // idx -> (pos, neutre, neg)
+    pub model_stats: HashMap<usize, (f64, f64)>,        // idx -> (moyenne, variance)
     pub beta_mean: [f64; 3],
     pub beta_var: [f64; 3],
     pub log_post_mean: f64,
     pub log_post_var: f64,
+    pub log_post_trace: Vec<f64>,
     pub post_mean: f64,
     pub post_var: f64,
-    pub log_post_trace: Option<Vec<f64>>,
-    pub beta_trace: Option<Vec<[f64; 3]>>,
-    pub population_trace: Option<Population>,
 }
 
 impl MCMCAnalysisTrace {
@@ -274,30 +367,28 @@ impl MCMCAnalysisTrace {
     // - n_features: Total number of features in the model
     // - keep_trace: Whether to store detailed traces of sampling history
     // - feature_names: Optional vector of feature names for better interpretability
-    pub fn new(n_features: usize, keep_trace: bool, feature_names: Option<Vec<String>>) -> Self {
+    pub fn new(feature_selection: &Vec<usize>) -> Self {
+        let n_features = feature_selection.len();
         let mut feature_prob = HashMap::with_capacity(n_features);
         let mut model_stats = HashMap::with_capacity(n_features);
-        if let Some(names) = &feature_names {
-            for name in names {
-                feature_prob.insert(name.clone(), (0.0, 0.0, 0.0));
-                model_stats.insert(name.clone(), (0.0, 0.0));
-            }
+        for idx in feature_selection {
+                // Probabilities are divided with finalize()
+                feature_prob.insert(*idx, (0.0, 0.0, 0.0));
+                model_stats.insert(*idx, (0.0, 0.0));
         }
         
         MCMCAnalysisTrace {
-            n_features,
-            feature_names,
+            coefs: MCMC::new(Vec::with_capacity(n_features),
+             Betas::new(Vec::with_capacity(n_features), Vec::with_capacity(n_features), Vec::with_capacity(n_features))), 
             feature_prob,
             model_stats,
             beta_mean: [0.0, 0.0, 0.0],
             beta_var: [0.0, 0.0, 0.0],
             log_post_mean: 0.0,
             log_post_var: 0.0,
+            log_post_trace: Vec::with_capacity(n_features),
             post_mean: 0.0,
             post_var: 0.0,
-            log_post_trace: if keep_trace { Some(Vec::new()) } else { None },
-            beta_trace: if keep_trace { Some(Vec::new()) } else { None },
-            population_trace: if keep_trace { Some(Population::new()) } else { None },
         }
     }
 
@@ -307,7 +398,7 @@ impl MCMCAnalysisTrace {
     // - beta: Current model coefficients
     // - individual: Current feature selection and coefficients
     // - log_post: Log posterior probability of the current sample
-    pub fn update(&mut self, beta: &[f64; 3], individual: &Individual, log_post: f64) {
+    pub fn update(&mut self, beta: &[f64; 3], features: &HashMap<usize,i8>, log_post: f64) {
         self.beta_mean = [
             self.beta_mean[0] + beta[0], 
             self.beta_mean[1] + beta[1], 
@@ -320,20 +411,16 @@ impl MCMCAnalysisTrace {
             self.beta_var[2] + beta[2].powf(2.0)
         ];
         
-        if let Some(names) = &self.feature_names {
-            for (idx, name) in names.iter().enumerate() {
-                let coef = individual.features.get(&idx).copied().unwrap_or(0);
-                
-                let model_stat = self.model_stats.entry(name.clone()).or_insert((0.0, 0.0));
-                model_stat.0 += coef as f64;
-                model_stat.1 += (coef as f64).powf(2.0);
-                
-                let feature_prob = self.feature_prob.entry(name.clone()).or_insert((0.0, 0.0, 0.0));
-                match coef {
-                    1 => feature_prob.0 += 1.0,  // pos
-                    -1 => feature_prob.2 += 1.0, // neg
-                    _ => feature_prob.1 += 1.0,  // neutre (maintenant explicite)
-                }
+        for (feature_idx, coef) in features {
+            let model_stat = self.model_stats.entry(*feature_idx).or_insert((0.0, 0.0));
+            model_stat.0 += *coef as f64;
+            model_stat.1 += (*coef as f64).powf(2.0);
+
+            let feature_prob = self.feature_prob.entry(*feature_idx).or_insert((0.0, 0.0, 0.0));
+            match *coef {
+                1 => feature_prob.0 += 1.0, 
+                -1 => feature_prob.2 += 1.0, 
+                _ => feature_prob.1 += 1.0, 
             }
         }
         
@@ -341,19 +428,14 @@ impl MCMCAnalysisTrace {
         self.log_post_var += log_post.powf(2.0);
         self.post_mean += log_post.exp();
         self.post_var += (2.0 * log_post).exp();
-        
-        // Save trace
-        if let Some(log_trace) = &mut self.log_post_trace {
-            log_trace.push(log_post);
-        }
-        
-        if let Some(beta_trace) = &mut self.beta_trace {
-            beta_trace.push(*beta);
-        }
-        
-        if let Some(pop_trace) = &mut self.population_trace {
-            pop_trace.individuals.push(individual.clone());
-        }
+
+        self.coefs.betas_collection.a.push(beta[0]);
+        self.coefs.betas_collection.b.push(beta[1]);
+        self.coefs.betas_collection.c.push(beta[2]);
+        self.coefs.features_collection.push(features.clone());
+
+        self.log_post_trace.push(log_post);
+
     }
     
     // fn get_feature_name(&self, feature_idx: usize) -> String {
@@ -369,7 +451,7 @@ impl MCMCAnalysisTrace {
     // - n_iter: Total number of MCMC iterations
     // - n_burn: Number of burn-in iterations to discard
     pub fn finalize(&mut self, n_iter: usize, n_burn: usize) {
-        let n_mean = ((self.n_features + 3) * (n_iter - n_burn)) as f64;
+        let n_mean = ((self.coefs.features_collection[0].len() + 3) * (n_iter - n_burn)) as f64;
         
         // Beta
         self.beta_mean = self.beta_mean.iter()
@@ -409,6 +491,32 @@ impl MCMCAnalysisTrace {
         self.post_var = (self.post_var - self.post_mean.powf(2.0) * n_mean) / (n_mean - 1.0);
     }
 
+    pub fn get_log_evidence(&self, n_classes:f64) -> f64 {
+        let n_features = self.coefs.features_collection[0].len() as f64;
+        self.post_mean.log10() - n_features * n_classes.log10()
+    }
+
+    pub fn get_ind(&self, param: &Param) -> Individual {
+
+        Individual {
+                features: HashMap::new(),
+                auc: 0.0,
+                specificity: 0.0,
+                sensitivity: 0.0,
+                accuracy: 0.0,
+                threshold: 0.5,
+                fit: self.get_log_evidence(3.0),
+                k: self.coefs.features_collection[0].len(),
+                epoch: 0,   
+                language: MCMC_GENERIC_LANG,
+                data_type: 0,
+                hash: 0,
+                epsilon: param.general.data_type_epsilon,
+                parents: None,
+                mcmc: Some(self.coefs.clone())
+            }
+    }
+
     // Returns final MCMC results with informative logging of key statistics.
     // Identifies and reports the most important features based on sampling.
     // Parameters:
@@ -436,78 +544,78 @@ impl MCMCAnalysisTrace {
     //     self.clone()
     // }
 
-    pub fn export_to_files(&self, outdir: &str) -> std::io::Result<()> {
-        use std::fs::File;
-        use std::io::{BufWriter, Write};
-        use std::fs;
+    // pub fn export_to_files(&self, outdir: &str) -> std::io::Result<()> {
+    //     use std::fs::File;
+    //     use std::io::{BufWriter, Write};
+    //     use std::fs;
         
-        fs::create_dir_all(outdir)?;
+    //     fs::create_dir_all(outdir)?;
         
-        let p_mean_path = format!("{}/P_mean.tsv", outdir);
-        let mut file = BufWriter::new(File::create(&p_mean_path)?);
+    //     let p_mean_path = format!("{}/P_mean.tsv", outdir);
+    //     let mut file = BufWriter::new(File::create(&p_mean_path)?);
         
-        writeln!(file, "FEATURE\tPOS\tNUL\tNEG")?;
+    //     writeln!(file, "FEATURE\tPOS\tNUL\tNEG")?;
         
-        let mut feature_names: Vec<_> = self.feature_prob.keys().collect();
-        feature_names.sort();
+    //     let mut feature_names: Vec<_> = self.feature_prob.keys().collect();
+    //     feature_names.sort();
         
-        for name in feature_names {
-            let (pos, neutral, neg) = self.feature_prob.get(name).unwrap();
-            writeln!(file, "{}\t{}\t{}\t{}", name, pos, neutral, neg)?;
-        }
+    //     for name in feature_names {
+    //         let (pos, neutral, neg) = self.feature_prob.get(name).unwrap();
+    //         writeln!(file, "{}\t{}\t{}\t{}", name, pos, neutral, neg)?;
+    //     }
         
-        if let Some(beta_trace) = &self.beta_trace {
-            let beta_trace_path = format!("{}/betas.tsv", outdir);
-            let mut file = BufWriter::new(File::create(&beta_trace_path)?);
+    //     if let Some(beta_trace) = &self.beta_trace {
+    //         let beta_trace_path = format!("{}/betas.tsv", outdir);
+    //         let mut file = BufWriter::new(File::create(&beta_trace_path)?);
             
-            writeln!(file, "a\tb\tc")?;
-            for beta in beta_trace {
-                writeln!(file, "{}\t{}\t{}", beta[0], beta[1], beta[2])?;
-            }
-        }
+    //         writeln!(file, "a\tb\tc")?;
+    //         for beta in beta_trace {
+    //             writeln!(file, "{}\t{}\t{}", beta[0], beta[1], beta[2])?;
+    //         }
+    //     }
         
-        if let Some(pop_trace) = &self.population_trace {
-            let model_trace_path = format!("{}/models.tsv", outdir);
-            let mut file = BufWriter::new(File::create(&model_trace_path)?);
+    //     if let Some(pop_trace) = &self.population_trace {
+    //         let model_trace_path = format!("{}/models.tsv", outdir);
+    //         let mut file = BufWriter::new(File::create(&model_trace_path)?);
             
-            if let Some(names) = &self.feature_names {
-                writeln!(file, "{}", names.join("\t"))?;
-                for individual in &pop_trace.individuals {
-                    let row: Vec<String> = names.iter()
-                        .enumerate()
-                        .map(|(idx, _)| {
-                            individual.features.get(&idx)
-                                .copied()
-                                .unwrap_or(0)
-                                .to_string()
-                        })
-                        .collect();
+    //         if let Some(names) = &self.feature_names {
+    //             writeln!(file, "{}", names.join("\t"))?;
+    //             for individual in &pop_trace.individuals {
+    //                 let row: Vec<String> = names.iter()
+    //                     .enumerate()
+    //                     .map(|(idx, _)| {
+    //                         individual.features.get(&idx)
+    //                             .copied()
+    //                             .unwrap_or(0)
+    //                             .to_string()
+    //                     })
+    //                     .collect();
                     
-                    writeln!(file, "{}", row.join("\t"))?;
-                }
-            }
-        }
+    //                 writeln!(file, "{}", row.join("\t"))?;
+    //             }
+    //         }
+    //     }
         
-        let means_vars_path = format!("{}/means_vars.tsv", outdir);
-        let mut file = BufWriter::new(File::create(&means_vars_path)?);
+    //     let means_vars_path = format!("{}/means_vars.tsv", outdir);
+    //     let mut file = BufWriter::new(File::create(&means_vars_path)?);
         
-        writeln!(file, "parameter\tmean\tvariance")?;
+    //     writeln!(file, "parameter\tmean\tvariance")?;
         
-        writeln!(file, "a\t{}\t{}", self.beta_mean[0], self.beta_var[0])?;
-        writeln!(file, "b\t{}\t{}", self.beta_mean[1], self.beta_var[1])?;
-        writeln!(file, "c\t{}\t{}", self.beta_mean[2], self.beta_var[2])?;
+    //     writeln!(file, "a\t{}\t{}", self.beta_mean[0], self.beta_var[0])?;
+    //     writeln!(file, "b\t{}\t{}", self.beta_mean[1], self.beta_var[1])?;
+    //     writeln!(file, "c\t{}\t{}", self.beta_mean[2], self.beta_var[2])?;
         
-        if let Some(names) = &self.feature_names {
-            for (name, (mean, variance)) in self.model_stats.iter() {
-                writeln!(file, "{}\t{}\t{}", name, mean, variance)?;
-            }
-        }
+    //     if let Some(names) = &self.feature_names {
+    //         for (name, (mean, variance)) in self.model_stats.iter() {
+    //             writeln!(file, "{}\t{}\t{}", name, mean, variance)?;
+    //         }
+    //     }
         
-        writeln!(file, "logPost\t{}\t{}", self.log_post_mean, self.log_post_var)?;
-        writeln!(file, "Post\t{}\t{}", self.post_mean, self.post_var)?;
+    //     writeln!(file, "logPost\t{}\t{}", self.log_post_mean, self.log_post_var)?;
+    //     writeln!(file, "Post\t{}\t{}", self.post_mean, self.post_var)?;
         
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
 //     pub fn import_from_files(outdir: &str) -> std::io::Result<MCMCAnalysisTrace> {
 //         use std::fs::File;
@@ -590,95 +698,6 @@ impl MCMCAnalysisTrace {
 }
 
 //-----------------------------------------------------------------------------
-
-// Structure for making predictions using an ensemble of models from MCMC sampling.
-// Contains multiple model configurations and their parameters for robust prediction.
-// <=> Density
-pub struct BayesianMCMCPopulation {
-    individuals: Vec<Individual>,     // Stockage des modèles sous forme d'Individuals
-    betas: Vec<[f64; 3]>,             // Coefficients beta pour chaque modèle
-    n_individuals: usize,             // Nombre de modèles
-}
-
-impl BayesianMCMCPopulation {
-    // Creates a new prediction ensemble from a population of models.
-    // Parameters:
-    // - population: Reference to the population containing model configurations
-    // - betas: Optional vector of beta coefficients for each model
-    pub fn new(population: &Population, betas: Option<Vec<[f64; 3]>>) -> Self {
-        let n_individuals = population.individuals.len();
-        let betas = betas.unwrap_or_else(|| vec![[1.0, -1.0, 0.0]; n_individuals]);
-
-        let mut feature_indices_set = HashSet::new();
-        for individual in &population.individuals {
-            for &feature_idx in individual.features.keys() {
-                feature_indices_set.insert(feature_idx);
-            }
-        }
-
-        BayesianMCMCPopulation {
-            individuals: population.individuals.clone(),
-            betas,
-            n_individuals,
-        }
-    }
-
-    // Predicts class probabilities for each sample in the provided dataset.
-    // Combines predictions from all models in the ensemble for robust estimation.
-    // Parameters:
-    // - data: Dataset to make predictions on
-    // Returns a vector of probability pairs [prob_class0, prob_class1] for each sample.
-    pub fn predict_proba(&self, data: &Data) -> Vec<[f64; 2]> {
-        let probabilities;
-        
-        probabilities = (0..data.sample_len).into_par_iter().map(|i_sample| {
-            let mut probs = [0.0, 0.0];
-            for (individual, beta) in self.individuals.iter().zip(self.betas.iter()) {
-                let mut pos_features = 0.0;
-                let mut neg_features = 0.0;
-                
-                for (&feat_idx, &coef) in &individual.features {
-                    if let Some(&value) = data.X.get(&(i_sample, feat_idx)) {
-                        match coef {
-                            1 => pos_features += value,
-                            -1 => neg_features += value,
-                            _ => (),
-                        }
-                    }
-                }
-                
-                let z = pos_features * beta[0] + neg_features * beta[1] + beta[2];
-                probs[0] += logistic(-z);
-                probs[1] += logistic(z);
-            }
-            
-            probs[0] /= self.n_individuals as f64;
-            probs[1] /= self.n_individuals as f64;
-
-            assert!(probs[0] >= 0.0 && probs[0] <= 1.0, "p should be between 0 and 1");
-            assert!(probs[1] >= 0.0 && probs[1] <= 1.0, "p should be between 0 and 1");
-
-            probs
-            
-        }).collect::<Vec<[f64; 2]>>();
-        
-        probabilities
-    }
-    
-    // Predicts discrete class labels by thresholding the probability predictions.
-    // Uses the ensemble of models to determine the most likely class for each sample.
-    // Parameters:
-    // - data: Dataset to make predictions on
-    // Returns a vector of predicted class labels.
-    pub fn predict_class(&self, data: &Data) -> Vec<u8> {
-        let probs = self.predict_proba(data);
-        probs.iter()
-            .map(|p| if p[1] > p[0] { 1 } else { 0 })
-            .collect()
-    }
-}
-
-//-----------------------------------------------------------------------------
 // Algorithms
 
 // Implements Sequential Backward Selection using MCMC to progressively eliminate 
@@ -688,15 +707,15 @@ impl BayesianMCMCPopulation {
 // - data: Dataset to model
 // - param: Configuration parameters for the MCMC process
 // Returns a vector of results for each model size with performance metrics.
-pub fn run_mcmc_sbs(data: &Data, param: &Param, rng: &mut ChaCha8Rng, running: Arc<AtomicBool>) -> Vec<(u32, f64, f64, f64, String)> {
+pub fn run_mcmc_sbs(data: &Data, param: &Param, rng: &mut ChaCha8Rng, running: Arc<AtomicBool>) -> Vec<(u32, f64, f64, f64, usize)> {
     let time = Instant::now();
     let mut data_train = data.clone();
     let nmax = data_train.feature_selection.len() as u32;
     let mut post_mean = Vec::new();
-    let mut feature_names_to_drop = Vec::new();
+    let mut feature_to_drop = Vec::new();
 
     for n in (param.mcmc.nmin..=nmax).rev() {
-        debug!("n = {}, (#Features, #Samples) = ({}, {})", n, data_train.feature_selection.len(), data_train.sample_len);
+        debug!("n = {}, (#Features, #Samples) = ({}, {})", n, &data_train.feature_selection.len(), data_train.sample_len);
         let bp = BayesPred::new(&data_train, param.mcmc.lambda);
 
         let res = compute_mcmc(&bp, param, rng);
@@ -707,23 +726,20 @@ pub fn run_mcmc_sbs(data: &Data, param: &Param, rng: &mut ChaCha8Rng, running: A
         let mut feature_vec: Vec<_> = res.feature_prob.iter().collect();
         feature_vec.sort_by(|a, b| a.0.cmp(b.0));
 
-        let (feature_name, (_, neutral_prob, _)) = feature_vec.iter()
+        let (idx, (_, neutral_prob, _)) = feature_vec.iter()
             .max_by(|(_, (_, neutral1, _)), (_, (_, neutral2, _))| {
                 neutral1.total_cmp(neutral2)
             })
-            .map(|(name, &prob)| (*name, prob))
+            .map(|(idx, &prob)| (*idx, prob))
             .unwrap_or_else(|| panic!("Couldn't find maximum neutral probability"));
 
+        let feature_name = &data_train.features[*idx];
         debug!("Feature {} has maximum neutral probability: {}", feature_name, neutral_prob);
-
-        let idx = data_train.features.iter()
-            .position(|f| f == feature_name)
-            .unwrap_or_else(|| panic!("Couldn't find feature index for {}", feature_name));
         
-        data_train = filter_feature(&data_train, idx);
+        data_train.feature_selection.retain(|keep_idx| keep_idx != idx);
         
         info!("[{}/{}] | Dropping feature: {}", data.feature_selection.len()-(n as usize), data.feature_selection.len()-(param.mcmc.nmin) as usize, feature_name);
-        feature_names_to_drop.push(feature_name.clone());
+        feature_to_drop.push(idx.clone());
 
         // Stop SBS loop if user want to safe quit from this step
         if !running.load(Ordering::Relaxed) {
@@ -739,18 +755,18 @@ pub fn run_mcmc_sbs(data: &Data, param: &Param, rng: &mut ChaCha8Rng, running: A
     // Calculate metrics
     let nn: Vec<u32> = (param.mcmc.nmin..=nmax).rev().collect();
     let log_post_mean: Vec<f64> = post_mean.iter().map(|v| v.log10()).collect();
-    let n_sigs = 3.0 as f64; 
+    let n_classes = 3.0 as f64; 
     let log_evidence: Vec<f64> = nn.iter()
         .zip(log_post_mean.iter())
-        .map(|(n, lpm)| lpm - (*n as f64) * n_sigs.log10())
+        .map(|(n, lpm)| lpm - (*n as f64) * n_classes.log10())
         .collect();
 
     nn.into_iter()
         .zip(post_mean)
         .zip(log_post_mean)
         .zip(log_evidence)
-        .zip(feature_names_to_drop)
-        .map(|((((n, pm), lpm), le), name)| (n, pm, lpm, le, name))
+        .zip(feature_to_drop)
+        .map(|((((n, pm), lpm), le), idx)| (n, pm, lpm, le, idx))
         .collect()
 }
 
@@ -769,32 +785,20 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
     }
 
     let nvals = 3;
-
-    let mut individual = Individual::new();
-    individual.language = TERNARY_LANG;
+    
+    // Initialize coefficients 
+    let mut features : HashMap<usize,i8> = HashMap::with_capacity(bp.data.feature_selection.len());
     for feature_idx in &bp.data.feature_selection {
         let random_val = [1, 0, -1].choose(rng).unwrap();
-        if *random_val != 0 {
-            individual.features.insert(*feature_idx, *random_val);
-        }
+        features.insert(*feature_idx, *random_val);
     }
 
     let mut beta = [1_f64, -1_f64, 1_f64];
     let nbeta: usize = 3;
-    let mut z = bp.compute_feature_groups(&individual);
+    let mut z = bp.compute_feature_groups(&features);
     let mut log_post: f64 = 0.0;
 
-    let selected_names: Vec<String> = bp.data.feature_selection
-        .iter()
-        .map(|&i| bp.data.features[i].clone())
-        .collect();
-
-    let mut res_mcmc = MCMCAnalysisTrace::new(
-        selected_names.len(),
-        param.general.keep_trace,
-        Some(selected_names)   
-    );
-
+    let mut res_mcmc = MCMCAnalysisTrace::new(&bp.data.feature_selection);
 
     debug!("Computing MCMC...");
     
@@ -832,30 +836,26 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
 
             log_post = bp.log_posterior(&beta, &z);
             if n > param.mcmc.n_burn {
-                res_mcmc.update(&beta, &individual, log_post);
+                res_mcmc.update(&beta, &features, log_post);
             }
         }
 
         for &feature_idx in &bp.data.feature_selection {
-            let current_coef = individual.features.get(&feature_idx).copied().unwrap_or(0);
+            let current_coef = &features.get(&feature_idx).copied().unwrap_or(0);
             let new_coef = (current_coef + [2, 3].choose(rng).unwrap()) % nvals - 1;
-            let z_new = bp.update_feature_groups(&z, feature_idx, current_coef, new_coef);
+            let z_new = bp.update_feature_groups(&z, feature_idx, *current_coef, new_coef);
             let log_post_new = bp.log_posterior(&beta, &z_new);
             let diff_log_post = log_post_new - log_post;
             let u: f64 = rng.gen_range(0.0..1.0);
             
             if diff_log_post > 0.0 || u < diff_log_post.exp() {
-                if new_coef != 0 {
-                    individual.features.insert(feature_idx, new_coef);
-                } else {
-                    individual.features.remove(&feature_idx);
-                }
+                features.insert(feature_idx, new_coef);
                 log_post = log_post_new;
                 z = z_new;
             }
             
             if n > param.mcmc.n_burn {
-                res_mcmc.update(&beta, &individual, log_post);
+                res_mcmc.update(&beta, &features, log_post);
             }
         }
     }
@@ -876,23 +876,21 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
 // - param: Configuration parameters
 // - rng: Random number generator
 // Returns the MCMC results for the best model configuration.
-pub fn get_best_mcmc_sbs(data: &Data, results: &[(u32, f64, f64, f64, String)], param: &Param, mut rng: ChaCha8Rng) -> MCMCAnalysisTrace {
+pub fn get_best_mcmc_sbs(data: &Data, results: &[(u32, f64, f64, f64, usize)], param: &Param, mut rng: ChaCha8Rng) -> MCMCAnalysisTrace {
     let best_models = results.iter()
         .max_by(|(_, _, _, le1, _), (_, _, _, le2, _)| le1.partial_cmp(le2).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or_else(|| panic!("Couldn't find best models"));
     
     let n_best = best_models.0;
     
-    let features_to_drop: Vec<String> = results.iter()
+    let features_to_drop: Vec<usize> = results.iter()
         .filter(|(n, _, _, _, _)| *n > n_best)
-        .map(|(_, _, _, _, name)| name.clone())
+        .map(|(_, _, _, _, idx)| idx.clone())
         .collect();
     
     let mut data_filtered = data.clone();
-    for feature_name in &features_to_drop {
-        if let Some(idx) = data_filtered.features.iter().position(|f| f == feature_name) {
-            data_filtered = filter_feature(&data_filtered, idx);
-        }
+    for feature_idx in &features_to_drop {
+        data_filtered.feature_selection.retain(|keep_idx| keep_idx != feature_idx);
     }
     
     info!("\nBest Models: n = {}, data dimensions = ({}, {})", 
@@ -900,67 +898,24 @@ pub fn get_best_mcmc_sbs(data: &Data, results: &[(u32, f64, f64, f64, String)], 
     
     let now = Instant::now();
     let bp = BayesPred::new(&data_filtered, param.mcmc.lambda);
-    let res = compute_mcmc(&bp, param, &mut rng);
+    let res: MCMCAnalysisTrace = compute_mcmc(&bp, param, &mut rng);
 
-    if param.mcmc.save_trace_outdir.len() > 0 {
-        if let Err(e) = res.clone().export_to_files(&param.mcmc.save_trace_outdir.to_string()) {
-            error!("Failed to export MCMC results: {}", e);
-        } else {
-            debug!("Best MCMC trace saved to {}", &param.mcmc.save_trace_outdir.to_string())
-        }
-    }
+    // if param.mcmc.save_trace_outdir.len() > 0 {
+    //     if let Err(e) = res.clone().export_to_files(&param.mcmc.save_trace_outdir.to_string()) {
+    //         error!("Failed to export MCMC results: {}", e);
+    //     } else {
+    //         debug!("Best MCMC trace saved to {}", &param.mcmc.save_trace_outdir.to_string())
+    //     }
+    // }
     
     let elapsed = now.elapsed();
     info!("Elapsed: {:.2?}", elapsed);
     
     res
+    
 }
 
-// Creates a new Data object with a specific feature removed.
-// Updates all necessary indices and data structures to maintain consistency.
-// Parameters:
-// - data: Original dataset
-// - feature_idx: Index of the feature to remove
-// Returns a new Data object without the specified feature.
-fn filter_feature(data: &Data, feature_idx: usize) -> Data {
-    let mut filtered_data = Data::new();
 
-    filtered_data.y = data.y.clone();
-    filtered_data.samples = data.samples.clone();
-    filtered_data.classes = data.classes.clone();
-    filtered_data.sample_len = data.sample_len;
-    
-    filtered_data.features = data.features.iter()
-        .enumerate()
-        .filter(|(i, _)| *i != feature_idx)
-        .map(|(_, name)| name.clone())
-        .collect();
-    
-    for ((sample, feat), value) in &data.X {
-        if *feat != feature_idx {
-            let new_feat = if *feat > feature_idx { feat - 1 } else { *feat };
-            filtered_data.X.insert((*sample, new_feat), *value);
-        }
-    }
-    
-    for (&idx, &class) in &data.feature_class {
-        if idx != feature_idx {
-            let new_idx = if idx > feature_idx { idx - 1 } else { idx };
-            filtered_data.feature_class.insert(new_idx, class);
-        }
-    }
-    
-    filtered_data.feature_selection = data.feature_selection.iter()
-        .filter_map(|&idx| {
-            if idx == feature_idx { None }
-            else { Some(if idx > feature_idx { idx - 1 } else { idx }) }
-        })
-        .collect();
-    
-    filtered_data.feature_len = filtered_data.features.len();
-    
-    filtered_data
-}
 
 // pub fn save_results_to_tsv(results: &[(u32, f64, f64, f64, String)], path: &str) -> std::io::Result<()> {
 //     let file = File::create(path)?;
@@ -976,3 +931,4 @@ fn filter_feature(data: &Data, feature_idx: usize) -> Data {
     
 //     Ok(())
 // }
+
