@@ -461,7 +461,6 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     warn!(" - requires RAW/PREV pre-formatted input data,");
     warn!(" - isn't GPU-compatible,");
     warn!(" - contains only one 'GENERIC' language.");
-    warn!(" - requires param.general.keep_trace = true");
 
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
@@ -490,16 +489,16 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         let results = bayesian_mcmc::run_mcmc_sbs(&data, param, &mut rng, running);
         
         // Displaying summary of SBS traces
-        for (nfeat, post_mean, _, log_evidence, feature_name) in &results {
+        for (nfeat, post_mean, _, log_evidence, feature_idx) in &results {
             info!("Features: {}, Posterior: {:.4e}, Log Evid: {:.4}, Removed: {}",
-                nfeat, post_mean, log_evidence, feature_name);
+                nfeat, post_mean, log_evidence, data.features[*feature_idx]);
         }
     
         // Extract best MCMC trace
         info!("Computing full posterior for optimal feature subset...");
         mcmc_result = bayesian_mcmc::get_best_mcmc_sbs(&data, &results, &param, rng);
         
-        println!("{:?}",mcmc_result.population_trace);
+        //println!("{:?}",mcmc_result.MCMC);
         
     } else {
         info!("Launching MCMC without SBS (λ={}, using all {} features...)", 
@@ -509,20 +508,21 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         mcmc_result = bayesian_mcmc::compute_mcmc(&bp, param, &mut rng);
     }
 
-    // Control traces
-    if mcmc_result.population_trace.is_none() || mcmc_result.beta_trace.is_none() {
-            warn!("MCMC traces were not saved!");
-            let test_data = Data::new();
-            return (vec![Population::new()], data.clone(), test_data);
-        }
-
     // Building complete posterior distribution
-    let population = mcmc_result.population_trace.as_ref().unwrap();
-    let posterior_distribution = bayesian_mcmc::BayesianMCMCPopulation::new(
-        population,
-        mcmc_result.beta_trace.clone()
-    );
-    
+    // let ind = mcmc_result.get_ind(&param);
+    let posterior_distribution = mcmc_result.coefs;
+
+    //println!("k={}, fit={}, threshold={}", ind.k, ind.fit, ind.threshold);
+
+    // Performance on train : 
+    info!("Train:");
+    let train_probs = posterior_distribution.predict_proba(&data);
+    let train_preds = train_probs.iter().map(|p| (p[1] > 0.5) as u8).collect::<Vec<_>>(); //
+    info!("{:?}", data.y);
+    info!("{:?}", train_preds);
+    let (acc, se, sp) = utils::calculate_metrics(&data.y, &train_preds);
+    info!("Bayesian predictions: Accuracy={:.4}, Sensitivity={:.4}, Specificity={:.4}", acc, se, sp);
+
     // Using MCMC models to compute prediction on test data
     let mut test_data = Data::new();
     if !param.data.Xtest.is_empty() {
@@ -530,10 +530,9 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         test_data.set_classes(param.data.classes.clone());
         
         let test_probs = posterior_distribution.predict_proba(&test_data);
-        
-        // Compute metrics
         let test_preds = test_probs.iter().map(|p| (p[1] > 0.5) as u8).collect::<Vec<_>>(); //
-        //let (accuracy, sensitivity, specificity) = calculate_metrics(&test_data.y, &test_preds);
+
+        info!("Test:");
         info!("{:?}", test_data.y);
         info!("{:?}", test_preds);
         let (acc, se, sp) = utils::calculate_metrics(&test_data.y, &test_preds);
@@ -541,5 +540,5 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     }
     
     // Note: using this population like that is a non sense
-    (vec![population.clone()], data, test_data)
+    (vec![Population::new()], data, test_data)
 }

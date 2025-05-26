@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+use crate::bayesian_mcmc::MCMC;
 use crate::utils::{generate_random_vector,shuffle_row};
 use crate::data::Data;
 use rand::seq::SliceRandom; // Provides the `choose_multiple` method
@@ -27,9 +28,11 @@ pub struct Individual {
     pub data_type: u8, // abundance (raw), prevalence (0,1), log
     pub hash: u64,
     pub epsilon: f64,
-    pub parents: Option<Vec<u64>>
+    pub parents: Option<Vec<u64>>,
+    pub mcmc: Option<MCMC>,
 }
 
+pub const MCMC_GENERIC_LANG :u8 = 101;
 pub const BINARY_LANG :u8 = 0;
 pub const TERNARY_LANG :u8 = 1;
 pub const POW2_LANG :u8 = 2;
@@ -105,7 +108,8 @@ impl Individual {
             data_type: RAW_TYPE,
             hash: 0,
             epsilon: DEFAULT_MINIMUM,
-            parents: None
+            parents: None,
+            mcmc: None
         }
     }
 
@@ -916,6 +920,7 @@ impl Individual {
             TERNARY_LANG => "Ternary",
             RATIO_LANG => "Ratio",
             POW2_LANG => "Pow2",
+            MCMC_GENERIC_LANG => "MCMC_Generic",
             _ => "Unknown"
         }
     }
@@ -983,13 +988,13 @@ mod tests {
     fn create_test_individual() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        epsilon: f64::MIN_POSITIVE, parents: None}
+        epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None}
     }
 
     fn create_test_individual_n2() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 0.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        epsilon: f64::MIN_POSITIVE, parents: None}
+        epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None}
     }
 
     fn create_test_data() -> Data {
@@ -1722,7 +1727,8 @@ mod tests {
                 data_type: (i % 3) as u8,
                 hash: i as u64,
                 epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
-                parents : None
+                parents : None,
+                mcmc: None
             };
             pop.individuals.push(ind);
         }

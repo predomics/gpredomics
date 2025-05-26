@@ -657,7 +657,8 @@ mod tests {
                 data_type: (i % 3) as u8,
                 hash: i as u64,
                 epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
-                parents : None
+                parents : None,
+                mcmc: None
             };
             pop.individuals.push(ind);
         }

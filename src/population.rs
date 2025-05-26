@@ -493,7 +493,8 @@ mod tests {
                 data_type: (i % 3) as u8,
                 hash: i as u64,
                 epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
-                parents : None
+                parents : None,
+                mcmc: None 
             };
             pop.individuals.push(ind);
         }
@@ -762,10 +763,10 @@ mod tests {
         let mut pop_to_add= Population::new();
         let ind1 = Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
             specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42, language: 0, data_type: 0, hash: 0, 
-            epsilon: f64::MIN_POSITIVE, parents: None};
+            epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None};
         let ind2 = Individual  {features: vec![(0, -1), (1, 1), (2, 1), (3, 1)].into_iter().collect(), auc: 0.2, fit: 0.4, 
             specificity: 0.6, sensitivity:0.8, accuracy: 0.12, threshold: 24.0, k: 48, epoch:96, language: 0, data_type: 0, hash: 0, 
-            epsilon: f64::MIN_POSITIVE, parents: None};
+            epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None};
         let ind_vec = vec![ind1, ind2];
         pop_to_add.individuals = ind_vec.clone();
 
