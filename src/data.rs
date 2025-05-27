@@ -426,6 +426,8 @@ impl Data {
             self.feature_selection.push(j);
         }
 
+        assert!( self.feature_selection.len()>0, "No feature has been selected, please lower your selection criteria or improve the quality of your data!");
+
         info!("{} features selected", self.feature_selection.len());
     }
 

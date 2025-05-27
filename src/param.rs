@@ -131,8 +131,6 @@ pub struct BEAM {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MCMC {
-    // #[serde(default = "empty_string")]                      
-    // pub load_trace: String,
     #[serde(default = "n_iter_default")]  
     pub n_iter: usize,
     #[serde(default = "n_burn_default")]

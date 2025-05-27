@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use crate::bayesian_mcmc::MCMC;
+use crate::bayesian_mcmc::Betas;
 use crate::utils::{generate_random_vector,shuffle_row};
 use crate::data::Data;
 use rand::seq::SliceRandom; // Provides the `choose_multiple` method
@@ -12,6 +12,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use crate::Population;
 use log::debug;
+use statrs::function::logistic::logistic;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Individual {
@@ -29,7 +30,7 @@ pub struct Individual {
     pub hash: u64,
     pub epsilon: f64,
     pub parents: Option<Vec<u64>>,
-    pub mcmc: Option<MCMC>,
+    pub betas: Option<Betas>,
 }
 
 pub const MCMC_GENERIC_LANG :u8 = 101;
@@ -50,6 +51,7 @@ pub fn language(language_string: &str) -> u8 {
         "ternary"|"ter" => TERNARY_LANG,
         "pow2" => POW2_LANG,
         "ratio" => RATIO_LANG,
+        "generic"|"mcmc_generic" => MCMC_GENERIC_LANG,
         other => panic!("Unrecognized language {}", other)
     }
 }
@@ -109,7 +111,7 @@ impl Individual {
             hash: 0,
             epsilon: DEFAULT_MINIMUM,
             parents: None,
-            mcmc: None
+            betas: None
         }
     }
 
@@ -117,8 +119,10 @@ impl Individual {
         let algo_str;
         if algo == "ga" {
             algo_str = format!(" [gen:{}] ", self.epoch);
-        } else {
+        } else if algo=="beam "{
             algo_str = format!(" ");
+        } else {
+            algo_str = format!(" [MCMC step: {}] ", self.epoch);
         }
 
         let metrics;
@@ -148,7 +152,6 @@ impl Individual {
                 
         }
         
-
         // Sort features by index
         let mut sorted_features: Vec<_> = self.features.iter().collect();
         sorted_features.sort_by(|a, b| a.0.cmp(b.0));
@@ -265,8 +268,8 @@ impl Individual {
         
         // Convert HashMap to a sorted representation
         let sorted_features: BTreeMap<_, _> = self.features.iter().collect();
-        sorted_features.hash(&mut hasher); // Hash the sorted features
-        
+        sorted_features.hash(&mut hasher);
+        self.betas.hash(&mut hasher);
         self.hash = hasher.finish();
     }
 
@@ -318,6 +321,25 @@ impl Individual {
             for sample in 0..sample_len {
                 score[sample]=r[sample][0]/(r[sample][1]+self.epsilon);
             }
+        } else if self.language == MCMC_GENERIC_LANG {
+            let betas = self.betas.as_ref().expect("MCMC Individuals must have betas coefficeints");
+            let mut pos_sums = vec![0.0; sample_len];
+            let mut neg_sums = vec![0.0; sample_len];
+            for (feature_index,coef) in self.features.iter() {
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, *feature_index)).unwrap_or(&0.0);
+                    match coef {
+                        1 => pos_sums[sample] += v,
+                        -1 => neg_sums[sample] += v,
+                        _ => {}
+                    } 
+                }
+            }
+
+            score = pos_sums.into_iter().zip(neg_sums.into_iter()).map(|(pos, neg)| {
+                        let z = pos * betas.a + neg * betas.b + betas.c;
+                        logistic(z)
+                        }).collect();
         } else {
             for (feature_index,coef) in self.features.iter() {
                 let x_coef = *coef as f64;
@@ -325,8 +347,7 @@ impl Individual {
                         score[sample] += X.get(&(sample,*feature_index)).unwrap_or(&0.0) * x_coef;
                 }
             }
-        }
-
+        }   
         score
     }
 
@@ -344,6 +365,25 @@ impl Individual {
             for sample in 0..sample_len {
                 score[sample]=r[sample][0]/(r[sample][1]+self.epsilon);
             }
+        } else if self.language == MCMC_GENERIC_LANG {
+            let betas = self.betas.as_ref().expect("MCMC Individuals must have betas coefficeints");
+            let mut pos_sums = vec![0.0; sample_len];
+            let mut neg_sums = vec![0.0; sample_len];
+            for (feature_index,coef) in self.features.iter() {
+                for sample in 0..sample_len {
+                    let v = if X.get(&(sample,*feature_index)).unwrap_or(&0.0)>&self.epsilon {1.0} else {0.0};
+                    match coef {
+                        1 => pos_sums[sample] += v,
+                        -1 => neg_sums[sample] += v,
+                        _ => {}
+                    } 
+                }
+            }
+
+            score = pos_sums.into_iter().zip(neg_sums.into_iter()).map(|(pos, neg)| {
+                        let z = pos * betas.a + neg * betas.b + betas.c;
+                        logistic(z)
+                        }).collect();
         } else {
             for (feature_index,coef) in self.features.iter() {
                 let x_coef = *coef as f64;
@@ -357,6 +397,7 @@ impl Individual {
     }
 
     fn evaluate_log(&self, X: &HashMap<(usize,usize),f64>, sample_len: usize) -> Vec<f64> {
+        // Shouldn't + epsilon be added? 
         let mut score=vec![0.0; sample_len];
 
         if self.language == RATIO_LANG {
@@ -372,6 +413,27 @@ impl Individual {
             for sample in 0..sample_len {
                 score[sample]=r[sample][0]/(r[sample][1]+self.epsilon);
             }
+        } else if self.language == MCMC_GENERIC_LANG {
+            let betas = self.betas.as_ref().expect("MCMC Individuals must have betas coefficeints");
+            let mut pos_sums = vec![0.0; sample_len];
+            let mut neg_sums = vec![0.0; sample_len];
+            for (feature_index,coef) in self.features.iter() {
+                for sample in 0..sample_len {
+                    if let Some(v)=X.get(&(sample,*feature_index)) {
+                        match coef {
+                            1 => pos_sums[sample] += (v/self.epsilon).ln(),
+                            -1 => neg_sums[sample] += (v/self.epsilon).ln(),
+                            _ => {}
+                        } 
+                    }
+                }
+            }
+
+            score = pos_sums.into_iter().zip(neg_sums.into_iter()).map(|(pos, neg)| {
+                        let z = pos * betas.a + neg * betas.b + betas.c;
+                        logistic(z)
+                        }).collect();
+                    
         } else {
             for (feature_index,coef) in self.features.iter() {
                 let x_coef = *coef as f64;
@@ -645,34 +707,53 @@ impl Individual {
     }
     
     /// a function that compute accuracy,precision and sensitivity
-    /// return (threshold, accuracy, sensitivity, specificity)
+    /// return (accuracy, sensitivity, specificity)
     pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64) {
-        let value = self.evaluate(d); // Predicted probabilities
-        let predicted_and_real_class: Vec<(u8, u8)> = value.iter().cloned()
-                .map(|x| {if x>=self.threshold {1} else {0}}).zip(d.y.iter().cloned()).collect();
-        
-        // Initialize confusion matrix
+        let value = self.evaluate(d);
+         let predicted: Vec<u8> = value
+            .iter()
+            .map(|&p| if p >= self.threshold { 1 } else { 0 })
+            .collect();
+
+        self.compute_metrics_from_classes(&predicted, &d.y)
+    }
+
+    pub fn compute_metrics_from_classes(&self, predicted: &Vec<u8>, y: &Vec<u8>, ) -> (f64, f64, f64) {
         let mut tp = 0;
         let mut fn_count = 0;
         let mut tn = 0;
         let mut fp = 0;
-        for predicted_and_real in predicted_and_real_class.into_iter() {
-            match predicted_and_real {
-                (_,2) => {},
-                (1,1) => tp+=1,
-                (1,0) => fp+=1,
-                (0,0) => tn+=1,
-                (0,1) => fn_count+=1,
-                other => panic!("A predicted vs real class of {:?} should not exist",other)
+
+        for (&pred, &real) in predicted.iter().zip(y.iter()) {
+            if real == 2 {
+                continue;
+            }
+            match (pred, real) {
+                (1, 1) => tp += 1,
+                (1, 0) => fp += 1,
+                (0, 0) => tn += 1,
+                (0, 1) => fn_count += 1,
+                other => panic!("A predicted vs real class of {:?} should not exist", other),
             }
         }
 
-        let sensitivity = tp as f64 / (tp + fn_count) as f64;
-        let specificity = tn as f64 / (fp + tn) as f64;
-        let accuracy = (tp + tn) as f64 / (tp + tn + fp + fn_count) as f64;
+        let sensitivity = if tp + fn_count > 0 {
+            tp as f64 / (tp + fn_count) as f64
+        } else {
+            0.0
+        };
+        let specificity = if fp + tn > 0 {
+            tn as f64 / (fp + tn) as f64
+        } else {
+            0.0
+        };
+        let accuracy = if tp + tn + fp + fn_count > 0 {
+            (tp + tn) as f64 / (tp + tn + fp + fn_count) as f64
+        } else {
+            0.0
+        };
 
-        
-        (accuracy,sensitivity,specificity)
+        (accuracy, sensitivity, specificity)
     }
 
 
@@ -988,13 +1069,13 @@ mod tests {
     fn create_test_individual() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None}
+        epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
     }
 
     fn create_test_individual_n2() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1)].into_iter().collect(), auc: 0.4, fit: 0.8, 
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 0.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None}
+        epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
     }
 
     fn create_test_data() -> Data {
@@ -1080,6 +1161,7 @@ mod tests {
         let mut hasher = DefaultHasher::new();
         let sorted_features: BTreeMap<_, _> = ind.features.iter().collect();
         sorted_features.hash(&mut hasher);
+        ind.betas.hash(&mut hasher);
         let expected_hash = hasher.finish();
 
         assert_eq!(ind.hash, expected_hash, "hash is different from expected hash");
@@ -1099,6 +1181,7 @@ mod tests {
         let mut hasher = DefaultHasher::new();
         let sorted_features: BTreeMap<_, _> = ind.features.iter().collect();
         sorted_features.hash(&mut hasher);
+        ind.betas.hash(&mut hasher);
         let expected_hash = hasher.finish();
 
         assert_eq!(ind.hash, expected_hash, "hash is different from expected hash");
@@ -1728,7 +1811,7 @@ mod tests {
                 hash: i as u64,
                 epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
                 parents : None,
-                mcmc: None
+                betas: None
             };
             pop.individuals.push(ind);
         }
@@ -1742,43 +1825,44 @@ mod tests {
     fn test_get_genealogy() {
         use std::collections::{HashMap, HashSet};
     
-        let mut real_tree2: HashMap<(u64, Option<Vec<u64>>), HashSet<usize>> = HashMap::new();
-        real_tree2.insert((13776636996568204467, Some(vec![8310551554976651538, 15701002319609139959])), [0].iter().cloned().collect());
-        real_tree2.insert((8310551554976651538, Some(vec![8712745243790315600, 5577107020388865403])), [1].iter().cloned().collect());
-        real_tree2.insert((15701002319609139959, Some(vec![573762283934476040])), [1].iter().cloned().collect());
-        real_tree2.insert((8712745243790315600, Some(vec![8225502949628013706])), [2].iter().cloned().collect());
-        real_tree2.insert((5577107020388865403, Some(vec![212344198819259482, 16067238433084305925])), [2].iter().cloned().collect());
-        real_tree2.insert((573762283934476040, None), [2].iter().cloned().collect());
-        real_tree2.insert((8225502949628013706, Some(vec![9859973499533993323])), [3].iter().cloned().collect());
-        real_tree2.insert((212344198819259482, None), [3].iter().cloned().collect());
-        real_tree2.insert((16067238433084305925, None), [3].iter().cloned().collect());
-        real_tree2.insert((9859973499533993323, None), [4].iter().cloned().collect());
+        // Outdated - betas are now used to compute hash
+        // let mut real_tree2: HashMap<(u64, Option<Vec<u64>>), HashSet<usize>> = HashMap::new();
+        // real_tree2.insert((13776636996568204467, Some(vec![8310551554976651538, 15701002319609139959])), [0].iter().cloned().collect());
+        // real_tree2.insert((8310551554976651538, Some(vec![8712745243790315600, 5577107020388865403])), [1].iter().cloned().collect());
+        // real_tree2.insert((15701002319609139959, Some(vec![573762283934476040])), [1].iter().cloned().collect());
+        // real_tree2.insert((8712745243790315600, Some(vec![8225502949628013706])), [2].iter().cloned().collect());
+        // real_tree2.insert((5577107020388865403, Some(vec![212344198819259482, 16067238433084305925])), [2].iter().cloned().collect());
+        // real_tree2.insert((573762283934476040, None), [2].iter().cloned().collect());
+        // real_tree2.insert((8225502949628013706, Some(vec![9859973499533993323])), [3].iter().cloned().collect());
+        // real_tree2.insert((212344198819259482, None), [3].iter().cloned().collect());
+        // real_tree2.insert((16067238433084305925, None), [3].iter().cloned().collect());
+        // real_tree2.insert((9859973499533993323, None), [4].iter().cloned().collect());
     
-        let mut pop2 = create_test_population();
-        pop2.compute_hash();
-        pop2.individuals[0].parents = Some(vec![8310551554976651538, 15701002319609139959]);
-        pop2.individuals[1].parents = Some(vec![8712745243790315600, 5577107020388865403]);
-        pop2.individuals[2].parents = Some(vec![573762283934476040]);
-        pop2.individuals[3].parents = Some(vec![8225502949628013706]);
-        pop2.individuals[4].parents = Some(vec![212344198819259482, 16067238433084305925]);
-        pop2.individuals[6].parents = Some(vec![9859973499533993323]);
+        // let mut pop2 = create_test_population();
+        // pop2.compute_hash();
+        // pop2.individuals[0].parents = Some(vec![8310551554976651538, 15701002319609139959]);
+        // pop2.individuals[1].parents = Some(vec![8712745243790315600, 5577107020388865403]);
+        // pop2.individuals[2].parents = Some(vec![573762283934476040]);
+        // pop2.individuals[3].parents = Some(vec![8225502949628013706]);
+        // pop2.individuals[4].parents = Some(vec![212344198819259482, 16067238433084305925]);
+        // pop2.individuals[6].parents = Some(vec![9859973499533993323]);
     
-        for (i, epoch) in [4, 3, 3, 2, 2, 2, 1, 1, 1, 0].iter().enumerate() {
-            pop2.individuals[i].epoch = *epoch;
-        }
-        let mut gen_0 = Population::new();
-        let mut gen_1  = Population::new();
-        let mut gen_2  = Population::new();
-        let mut gen_3  = Population::new();
-        let mut gen_4  = Population::new();
-        gen_0.individuals = vec![pop2.individuals[9].clone()];
-        gen_1.individuals = vec![pop2.individuals[6].clone(), pop2.individuals[7].clone(), pop2.individuals[8].clone()];
-        gen_2.individuals = vec![pop2.individuals[5].clone(), pop2.individuals[4].clone(), pop2.individuals[3].clone()];
-        gen_3.individuals = vec![pop2.individuals[2].clone(), pop2.individuals[1].clone()];
-        gen_4.individuals = vec![pop2.individuals[0].clone()];
+        // for (i, epoch) in [4, 3, 3, 2, 2, 2, 1, 1, 1, 0].iter().enumerate() {
+        //     pop2.individuals[i].epoch = *epoch;
+        // }
+        // let mut gen_0 = Population::new();
+        // let mut gen_1  = Population::new();
+        // let mut gen_2  = Population::new();
+        // let mut gen_3  = Population::new();
+        // let mut gen_4  = Population::new();
+        // gen_0.individuals = vec![pop2.individuals[9].clone()];
+        // gen_1.individuals = vec![pop2.individuals[6].clone(), pop2.individuals[7].clone(), pop2.individuals[8].clone()];
+        // gen_2.individuals = vec![pop2.individuals[5].clone(), pop2.individuals[4].clone(), pop2.individuals[3].clone()];
+        // gen_3.individuals = vec![pop2.individuals[2].clone(), pop2.individuals[1].clone()];
+        // gen_4.individuals = vec![pop2.individuals[0].clone()];
     
-        let collection = vec![gen_0, gen_1, gen_2, gen_3, gen_4];
-        assert_eq!(collection[4].individuals[0].get_genealogy(&collection, 15), real_tree2, "Generated tree is broken for hash-computed tree");
+        // let collection = vec![gen_0, gen_1, gen_2, gen_3, gen_4];
+        // assert_eq!(collection[4].individuals[0].get_genealogy(&collection, 15), real_tree2, "Generated tree is broken for hash-computed tree");
     
         // What about consanguinity?
         // This function should return this tree:

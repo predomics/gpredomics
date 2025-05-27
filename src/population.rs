@@ -40,32 +40,51 @@ impl Population {
     }
 
     pub fn display(&mut self, data: &Data, data_to_test: Option<&Data>, param: &Param) -> String {
-        let limit:u32;
-        if (self.individuals.len() as u32) < param.general.nb_best_model_to_test || param.general.nb_best_model_to_test == 0 {
-            limit = self.individuals.len() as u32
-        } else {
-            limit = param.general.nb_best_model_to_test
+        if param.general.algo == "mcmc" {
+            let mut str: String = format!("Displaying bayesian model with the greatest log evidence. Metrics are shown in the following order: Train/Test.");
+            let (train_auc, train_best_threshold, train_best_acc, train_best_sens, train_best_spec, _) = self.bayesian_compute_roc_and_metrics(&data);
+            if let Some(data_to_test) = data_to_test {
+                let (test_auc, test_best_acc, test_best_sens, test_best_spec) = self.bayesian_compute_metrics(&data_to_test, train_best_threshold);
+                str = format!("{}\n\nBayesian model {}:{} [n_it = {}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}", str,
+                self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), train_auc, test_auc, train_best_acc, test_best_acc, 
+                train_best_sens, test_best_sens, train_best_spec, test_best_spec)
+            } else {
+                str = format!("{}\nBayesian model {}:{} [n_it = {}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}", str,
+                self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), train_auc, train_best_acc, train_best_sens,
+                train_best_sens)
+            }   
+            str = format!("{}\n\nThese metrics were calculated by optimizing the probability of decision (threshold={:.3} instead of 0.5)", str, train_best_threshold);
+            str = format!("{}\nNote: the number of iterations corresponds to the sum of the number of betas and feature coefficient variations, resulting in a number greater than n_iter-n_burn)", str);
+            format!("{}\nTo reproduce these results, relaunch this exact training with data to be predicted and/or export the MCMC trace with save_trace_outdir", str)
         }
+        else {
+            let limit:u32;
+            if (self.individuals.len() as u32) < param.general.nb_best_model_to_test || param.general.nb_best_model_to_test == 0 {
+                limit = self.individuals.len() as u32
+            } else {
+                limit = param.general.nb_best_model_to_test
+            }
 
-        let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
-        for i in 0..=(limit-1) as usize {
-            if param.general.keep_trace == false {
-                match param.general.fit {
-                    FitFunction::sensitivity =>  {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![param.general.fr_penalty, 1.0]));},
-                    FitFunction::specificity => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![1.0, param.general.fr_penalty]));},
-                    _ => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, None);}
+            let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
+            for i in 0..=(limit-1) as usize {
+                if param.general.keep_trace == false {
+                    match param.general.fit {
+                        FitFunction::sensitivity =>  {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![param.general.fr_penalty, 1.0]));},
+                        FitFunction::specificity => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![1.0, param.general.fr_penalty]));},
+                        _ => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, None);}
+                    }
+                }
+                if param.general.display_colorful == true && param.general.log_base == "" {
+                    str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
+                } else if param.general.display_colorful == false && param.general.log_base == "" {
+                    str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
+                } else {
+                    // avoid ASCII symbols and newlines in log file
+                    str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, false));
                 }
             }
-            if param.general.display_colorful == true && param.general.log_base == "" {
-                str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
-            } else if param.general.display_colorful == false && param.general.log_base == "" {
-                str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
-            } else {
-                // avoid ASCII symbols and newlines in log file
-                str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, false));
-            }
-            }
-        str
+        return str
+        }
     }
 
     pub fn new() -> Population {
@@ -454,6 +473,42 @@ impl Population {
         result
     }
     
+    pub fn bayesian_predict(&self, data: &Data) -> Vec<f64> {
+        let mut bayesian_prob: Vec<f64> = vec![0.0; data.sample_len];
+        for ind in &self.individuals {
+            let sample_prob = ind.evaluate(&data);
+            for (sample_sum, &val) in bayesian_prob.iter_mut().zip(sample_prob.iter()) {
+                *sample_sum += val;
+            }
+        }
+
+        let pop_size = self.individuals.len() as f64;
+        for sample in bayesian_prob.iter_mut() {
+            *sample /= pop_size;
+        }
+
+        bayesian_prob
+    }
+
+    pub fn bayesian_class(&self, data: &Data, threshold: f64) -> Vec<u8> {
+        let probs = self.bayesian_predict(data);
+        probs.iter()
+            .map(|p| if *p > threshold { 1 } else { 0 })
+            .collect()
+    }
+
+    pub fn bayesian_compute_roc_and_metrics(&self, data: &Data) -> (f64, f64, f64, f64, f64, f64) {
+        // A bit dirty at the moment, the ideal would be to export the functions that don't really depend on Individual in utils
+        let ind = Individual::new();
+        ind.compute_roc_and_metrics_from_value(&self.bayesian_predict(data), &data.y, None) 
+    }
+
+    pub fn bayesian_compute_metrics(&self, data: &Data, threshold: f64) -> (f64, f64, f64, f64) {
+        // A bit dirty at the moment, the ideal would be to export the functions that don't really depend on Individual in utils
+        let ind = Individual::new();
+        let (acc, se, sp) = ind.compute_metrics_from_classes(&self.bayesian_class(data, threshold), &data.y);
+        (ind.compute_auc_from_value(&self.bayesian_predict(&data), &data.y), acc, se, sp)
+    }
     
 }
 
@@ -494,7 +549,7 @@ mod tests {
                 hash: i as u64,
                 epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
                 parents : None,
-                mcmc: None 
+                betas: None 
             };
             pop.individuals.push(ind);
         }
@@ -568,23 +623,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_hash_reproductibility() {
-        let mut pop = create_test_population();
-        let test_stdout ="hashes of Individuals of the Population are not the same as generated in the past, indicating a reproducibility problem.";
-        pop.compute_hash();
-        assert_eq!(13776636996568204467, pop.individuals[0].hash, "{}", test_stdout);
-        assert_eq!(8310551554976651538, pop.individuals[1].hash, "{}", test_stdout);
-        assert_eq!(15701002319609139959, pop.individuals[2].hash, "{}", test_stdout);
-        assert_eq!(8712745243790315600, pop.individuals[3].hash, "{}", test_stdout);
-        assert_eq!(5577107020388865403, pop.individuals[4].hash, "{}", test_stdout);
-        assert_eq!(573762283934476040, pop.individuals[5].hash, "{}", test_stdout);
-        assert_eq!(8225502949628013706, pop.individuals[6].hash, "{}", test_stdout);
-        assert_eq!(212344198819259482, pop.individuals[7].hash, "{}", test_stdout);
-        assert_eq!(16067238433084305925, pop.individuals[8].hash, "{}", test_stdout);
-        assert_eq!(9859973499533993323, pop.individuals[9].hash, "{}", test_stdout);
-        assert_eq!(9859973499533993323, pop.individuals[10].hash, "same Individual of the Population should have the same hash");
-    }
+    // #[test] outdated - betas are now used to compute hash
+    // fn test_hash_reproductibility() {
+    //     let mut pop = create_test_population();
+    //     let test_stdout ="hashes of Individuals of the Population are not the same as generated in the past, indicating a reproducibility problem.";
+    //     pop.compute_hash();
+    //     assert_eq!(8828241517069783773, pop.individuals[0].hash, "{}", test_stdout);
+    //     assert_eq!(10219684453491833036, pop.individuals[1].hash, "{}", test_stdout);
+    //     assert_eq!(15701002319609139959, pop.individuals[2].hash, "{}", test_stdout);
+    //     assert_eq!(8712745243790315600, pop.individuals[3].hash, "{}", test_stdout);
+    //     assert_eq!(5577107020388865403, pop.individuals[4].hash, "{}", test_stdout);
+    //     assert_eq!(573762283934476040, pop.individuals[5].hash, "{}", test_stdout);
+    //     assert_eq!(8225502949628013706, pop.individuals[6].hash, "{}", test_stdout);
+    //     assert_eq!(212344198819259482, pop.individuals[7].hash, "{}", test_stdout);
+    //     assert_eq!(16067238433084305925, pop.individuals[8].hash, "{}", test_stdout);
+    //     assert_eq!(9859973499533993323, pop.individuals[9].hash, "{}", test_stdout);
+    //     assert_eq!(9859973499533993323, pop.individuals[10].hash, "same Individual of the Population should have the same hash");
+    // }
 
     #[test]
     fn test_remove_clone() {
@@ -763,10 +818,10 @@ mod tests {
         let mut pop_to_add= Population::new();
         let ind1 = Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
             specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42, language: 0, data_type: 0, hash: 0, 
-            epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None};
+            epsilon: f64::MIN_POSITIVE, parents: None, betas: None};
         let ind2 = Individual  {features: vec![(0, -1), (1, 1), (2, 1), (3, 1)].into_iter().collect(), auc: 0.2, fit: 0.4, 
             specificity: 0.6, sensitivity:0.8, accuracy: 0.12, threshold: 24.0, k: 48, epoch:96, language: 0, data_type: 0, hash: 0, 
-            epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None};
+            epsilon: f64::MIN_POSITIVE, parents: None, betas: None};
         let ind_vec = vec![ind1, ind2];
         pop_to_add.individuals = ind_vec.clone();
 

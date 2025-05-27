@@ -190,7 +190,7 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
         hash: 0,
         epsilon: param.general.data_type_epsilon,
         parents: None,
-        mcmc: None
+        betas: None
     }
 }
 
@@ -506,7 +506,7 @@ mod tests {
     fn create_test_individual() -> Individual {
         Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8,
         specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0,
-        epsilon: f64::MIN_POSITIVE, parents: None, mcmc: None}
+        epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
     }
 
     #[test]

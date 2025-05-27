@@ -85,39 +85,6 @@ pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f6
     (lower_bound, accuracy, upper_bound)
 }
 
-pub fn calculate_metrics(y_true: &Vec<u8>, y_pred: &Vec<u8>) -> (f64, f64, f64) {
-    if y_true.len() != y_pred.len() {
-        panic!("Wrong length");
-    }
-    
-    let mut tp = 0;
-    let mut tn = 0;
-    let mut fp = 0;
-    let mut fn_ = 0;
-    
-    for (i, &true_val) in y_true.iter().enumerate() {
-        let pred_val = y_pred[i];
-        
-        match (true_val, pred_val) {
-            (1, 1) => tp += 1,   
-            (0, 0) => tn += 1,  
-            (0, 1) => fp += 1,   
-            (1, 0) => fn_ += 1,  
-            _ => {} 
-        }
-    }
-    
-    let total = tp + tn + fp + fn_;
-    let accuracy = if total > 0 { (tp + tn) as f64 / total as f64 } else { 0.0 };
-    
-    let sensitivity = if (tp + fn_) > 0 { tp as f64 / (tp + fn_) as f64 } else { 0.0 };
-    
-    let specificity = if (tn + fp) > 0 { tn as f64 / (tn + fp) as f64 } else { 0.0 };
-    
-    (accuracy, sensitivity, specificity)
-}
-
-
 // Graphical functions
 pub fn display_feature_importance_terminal(
     data: &Data,
