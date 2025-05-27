@@ -57,7 +57,7 @@ beam:
   features_importance_minimal_pct: 10 # the minimum prevalence percentage among best_models required for a variable to be kept for next epoch
 
 mcmc:
- n_iter: 100 #number of MCMC (Markov Chain Monte Carlo) iterations
- n_burn: 50 #number of MCMC iterations ignored (typically first half of all iterations)
+ n_iter: 1000 #number of MCMC (Markov Chain Monte Carlo) iterations
+ n_burn: 500 #number of MCMC iterations ignored (typically first half of all iterations)
  lmbd: 0.001 #Bayesian prior parameter for coefficients a, b, c
- nmin: 10 #minimum number of features in a model after feature elimination
+ nmin: 2 #minimum number of features in a model after feature elimination

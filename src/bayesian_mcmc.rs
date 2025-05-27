@@ -165,11 +165,11 @@ impl BayesPred {
             else {
                 log_likelihood += log_logistic(-value)
             }
-            if log_logistic(value).is_infinite() || log_logistic(-value).is_infinite() {
-                println!("v={}, logistic(x)={}, logistic(-x)={}", value, logistic(value), logistic(-value));
-                println!("{}, {}, {}", value, log_logistic(value), log_logistic(-value));
-                process::exit(1)
-            };
+            // if log_logistic(value).is_infinite() || log_logistic(-value).is_infinite() {
+            //     println!("v={}, logistic(x)={}, logistic(-x)={}", value, logistic(value), logistic(-value));
+            //     println!("{}, {}, {}", value, log_logistic(value), log_logistic(-value));
+            //     process::exit(1)
+            // };
         }
         let log_prior: f64 = - self.lmbd * beta.iter().map(|v| v*v).sum::<f64>();
         log_likelihood + log_prior
@@ -448,6 +448,7 @@ pub fn run_mcmc(bp: &BayesPred, n_iter: usize, n_burn: usize, keep_trace: bool, 
                     _ => beta[i] = 0.0,
                 }
             }
+            if beta[i].is_infinite() {beta[i] = 0_f64};
 
             //update values
             log_post = bp.log_posterior(&beta, &z);
