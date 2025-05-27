@@ -1,12 +1,12 @@
 # unless specifically indicated all field accept a single value
 general:
   seed: 42                                    # used in parent selection, child conception (cross over) and mutation, all of which is single thread
-  algo: mcmc                                  # ga for genetic algorithm and beam for beam algorithm
-  cv: false                                    
-  thread_number: 8                           # the number of thread used in feature selection and fit computation
+  algo: ga                                    # ga for genetic algorithm and beam for beam algorithm
+  cv: true                                    
+  thread_number: 8                            # the number of thread used in feature selection and fit computation
   gpu: true                                   # should Gpredomics use GPU ? (ga only)
-  language: bin,ter,pow2,ratio                    # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
-  data_type: prev,raw,log                         # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
+  language: bin,ter,pow2,ratio                # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
+  data_type: raw,log,prev                     # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
   epsilon: 1e-5                               # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
   fit: auc                                    # possible values are auc,specificity,sensitivity (classification), see README.md for details
   k_penalty: 0.0001                           # this penalty is deduced from fit function multiplied by k, the number of variables used in the model
@@ -19,22 +19,22 @@ general:
   keep_trace: true                            # keep this setting to false when using gpredomics as a binary
 
 cv:
-  fold_number: 5                             # number of folds for cross-validation (k-folds strategy).
+  fold_number: 5                              # number of folds for cross-validation (k-folds strategy).
   cv_best_models_ci_alpha: 0.05               # alpha for the family of best model confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
   n_permutations_oob: 500                     # number of permutations per feature for OOB importance.
   scaled_importance: true                     # scale importance by feature prevalence inside folds.
   importance_aggregation: mean                # aggregation method for importances: "mean" or "median".     
 
 data:
-  X: "samples/Qin2014/Xtrain.tsv"            # the features of the train data set 
-  y: "samples/Qin2014/Ytrain.tsv"            # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
-  Xtest: "samples/Qin2014/Xtest.tsv"         # the features of the test data set
-  ytest: "samples/Qin2014/Ytest.tsv"         # the class description of the test data set 
+  X: "samples/Qin2014/Xtrain.tsv"             # the features of the train data set 
+  y: "samples/Qin2014/Ytrain.tsv"             # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
+  Xtest: "samples/Qin2014/Xtest.tsv"          # the features of the test data set
+  ytest: "samples/Qin2014/Ytest.tsv"          # the class description of the test data set 
   features_maximal_number_per_class: 0        # 0: all significant features ; else first X significant features (per class!) sorted according to their pvalue/log_abs_bayes_factor
-  feature_minimal_prevalence_pct: 25          # per class, e.g. features are retained if any of the class reaches this level
+  feature_minimal_prevalence_pct: 10          # per class, e.g. features are retained if any of the class reaches this level
   feature_minimal_feature_value: 1e-4         # features which mean is below that value are discarded
   feature_selection_method: bayesian_fisher   # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
-  feature_maximal_pvalue: 0.05                 # features with differences less significant (p value above that threshold) than this will be removed
+  feature_maximal_pvalue: 0.05                # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_log_abs_bayes_factor: 2     # features with a fewer log absolute bayes factor will be removed (bayesian method only)
   classes:
     - "healthy"
@@ -64,10 +64,10 @@ beam:
 
 mcmc:
   n_iter: 10000                               # number of MCMC (Markov Chain Monte Carlo) iterations
-  n_burn: 5000                               # number of MCMC iterations ignored (typically first half of all iterations)
-  lambda: 0.01                               # bayesian prior parameter for coefficients a, b, c 
-  nmin: 5                                     # minimum number of features in a model after feature elimination | 0 : keep all features (deactivate SBS search)
-  #save_trace_outdir: "./"                     # outdir to save trace allowing to reproduce results
+  n_burn: 5000                                # number of MCMC iterations ignored (typically first half of all iterations)
+  lambda: 0.01                                # bayesian prior parameter for coefficients a, b, c 
+  nmin: 10                                    # minimum number of features in a model after feature elimination | 0 : keep all features (deactivate SBS search)
+  #save_trace_outdir: "./out/"                # outdir to save trace allowing to reproduce results
 
 gpu:
   fallback_to_cpu: true                       # executes the code on the CPU (integrated graphics) if there is no GPU available (recommanded)
