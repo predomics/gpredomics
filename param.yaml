@@ -1,10 +1,10 @@
 # unless specifically indicated all field accept a single value
 general:
   seed: 42                                    # used in parent selection, child conception (cross over) and mutation, all of which is single thread
-  algo: ga                                    # ga for genetic algorithm and beam for beam algorithm
-  cv: true                                    
-  thread_number: 8                            # the number of thread used in feature selection and fit computation
-  gpu: true                                   # should Gpredomics use GPU ? (ga only)
+  algo: ga                                    # ga for genetic algorithm, beam for beam algorithm and mcmc for MCMC-based algorithm
+  cv: false                                   # should cross-validation be enabled?
+  thread_number: 32                           # the number of thread used in feature selection and fit computation
+  gpu: true                                   # should Gpredomics use GPU ? (ga and beam only)
   language: bin,ter,pow2,ratio                # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
   data_type: raw,log,prev                     # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
   epsilon: 1e-5                               # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
@@ -16,7 +16,7 @@ general:
   log_level: debug                            # possible values are trace, debug, info, warning or error 
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
-  keep_trace: true                            # keep this setting to false when using gpredomics as a binary
+  keep_trace: false                           # keep this setting to false when using gpredomics as a binary
 
 cv:
   fold_number: 5                              # number of folds for cross-validation (k-folds strategy).
@@ -33,7 +33,7 @@ data:
   features_maximal_number_per_class: 0        # 0: all significant features ; else first X significant features (per class!) sorted according to their pvalue/log_abs_bayes_factor
   feature_minimal_prevalence_pct: 10          # per class, e.g. features are retained if any of the class reaches this level
   feature_minimal_feature_value: 1e-4         # features which mean is below that value are discarded
-  feature_selection_method: bayesian_fisher   # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
+  feature_selection_method: wilcoxon          # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
   feature_maximal_pvalue: 0.05                # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_log_abs_bayes_factor: 2     # features with a fewer log absolute bayes factor will be removed (bayesian method only)
   classes:
@@ -59,15 +59,15 @@ beam:
   method: combinatorial                       # combinatorial: generate all combinations (k out of features_to_keep). extend: increment each extendable_models of each 1 feature from features_to_keep.
   kmin: 1                                     # the number of variables used in the initial population
   kmax: 100                                   # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
-  best_models_ci_alpha: 1e-20                 # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
+  best_models_ci_alpha: 1e-5                  # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
   max_nb_of_models: 200000                    # (combinatorial mode) limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance)
 
 mcmc:
   n_iter: 10000                               # number of MCMC (Markov Chain Monte Carlo) iterations
   n_burn: 5000                                # number of MCMC iterations ignored (typically first half of all iterations)
-  lambda: 0.01                                # bayesian prior parameter for coefficients a, b, c 
+  lambda: 0.001                               # bayesian prior parameter for coefficients a, b, c 
   nmin: 10                                    # minimum number of features in a model after feature elimination | 0 : keep all features (deactivate SBS search)
-  #save_trace_outdir: "./out/"                # outdir to save trace allowing to reproduce results
+  #save_trace_outdir: "./"                    # outdir to save trace of the MCMC model used for the final prediction
 
 gpu:
   fallback_to_cpu: true                       # executes the code on the CPU (integrated graphics) if there is no GPU available (recommanded)
