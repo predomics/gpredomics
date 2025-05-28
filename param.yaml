@@ -3,7 +3,7 @@ general:
   seed: 42                                    # used in parent selection, child conception (cross over) and mutation, all of which is single thread
   algo: ga                                    # ga for genetic algorithm, beam for beam algorithm and mcmc for MCMC-based algorithm
   cv: false                                   # should cross-validation be enabled?
-  thread_number: 32                           # the number of thread used in feature selection and fit computation
+  thread_number: 8                            # the number of thread used in feature selection and fit computation
   gpu: true                                   # should Gpredomics use GPU ? (ga and beam only)
   language: bin,ter,pow2,ratio                # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
   data_type: raw,log,prev                     # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
