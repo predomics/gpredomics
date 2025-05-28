@@ -456,9 +456,10 @@ pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
 }
 
 pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
-    warn!("MCMC algorithm is still in alpha!");
+    warn!("MCMC algorithm is still in beta!");
     warn!(" - results cannot be guaranteed,");
     warn!(" - isn't GPU-compatible,");
+    warn!(" - isn't multi-threaded,");
     warn!(" - contains only one 'GENERIC' language.");
 
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);

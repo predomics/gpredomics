@@ -29,6 +29,8 @@ gpredomics is a rewrite of predomics in Rust, which REALLY use GPU since version
 
 - the Cross-validation, also in beta version, is available since v0.5.8. Feature importance is estimated by OOB algorithm using mean decreased AUC.
 
+- a new algorithm based on Markov chain Monte Carlo - not present in the original version of predomics - is available since v0.5.8. This algorithm explores the search space iteratively and provides a probabilistic prediction based on all the models explored. This algorithm is still in beta version. The MCMC algorithm is run for each number of features between the pre-selected number of features (according to the data parameters) and the `param.mcmc.nmin` number, following the Sequential Backward Selection principle. The MCMC exploration with the highest log-likelihood is retained for prediction. 
+
 - lots of features are still not implemented.
 
 At this stage (beta), the program is remains simple, yet it is already versatile and useful. 
@@ -99,7 +101,8 @@ There are six sections: general, data, cv, ga, beam & gpu.
 ### general
 
 - seed: gpredomics is fully determinist, re-running a computation with the same seed bear the same results, this should be a number.
-- algo: either `random` (not useful, for tests only), `ga` the basic genetic algorithm, `ga+cv`, the same algorithm but with a simple cross val scheme, `beam` the beam algorithm and `beam+cv` the same algorithm but with a simple cross val scheme.
+- algo: `ga` the genetic algorithm, `beam` the beam algorithm and `mcmc` the Markov chain Monte Carlo based algorithm.
+- cv: boolean indicating whether to run cross-validation (depending on the parameters specified in the cv category). Gives an idea of variable importances. Only available for `ga` and `beam` for the moment.
 - thread_number: the number of parallel threads used in feature selection and fit evaluation. Note that for cross validation, each fold will be run on one or more threads, depending on avalability.
 - gpu: should be true whenever possible (that is almost always).
 
@@ -165,9 +168,15 @@ Finally, this section also has a parameter that is essential for GpredomicsR to 
 - kmin: the number of variables used in the initial population.
 - kmax: the maximum number of variables to considere in a single model, the variable count limit for beam algorithm.
 - best_models_ci_alpha: alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
-- features_importance_minimal_pct: the minimum prevalence percentage among best_models required for a variable to be a features_to_keep for next epoch.
-- very_best_models_pct: the percentage of best models where all variables are features_to_keep.
-- max_nb_of_models: limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance) (combinatorial mode) | the number of models to increment with each feature_to_keep (incremental mode).
+- max_nb_of_models: limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance).
+
+### mcmc
+
+- n_iter: number of MCMC (Markov Chain Monte Carlo) iterations.
+- n_burn: number of MCMC iterations ignored (typically first half of all iterations)
+- lambda: bayesian prior parameter for coefficients a, b, c 
+- nmin: minimum number of features in a model after Sequential Backward Selection (0 : keep all preselected features - deactivate SBS)
+- save_trace_outdir: outdir to save trace of the MCMC model used for the final prediction (for debugging/statistical exploration purposes)
 
 ### gpu
 
