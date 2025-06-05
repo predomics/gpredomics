@@ -29,9 +29,7 @@ fn custom_format(
 
 
 fn main() {
-    let cargo_toml_content = fs::read_to_string("Cargo.toml").expect("Unable to read Cargo.toml");
-    let value: Value = cargo_toml_content.parse().expect("Unable to parse Cargo.toml");
-    let version = value["package"]["version"].as_str().expect("Unable to get version");
+    let version = env!("CARGO_PKG_VERSION");
 
     let param= param::get("param.yaml".to_string()).unwrap();
 
