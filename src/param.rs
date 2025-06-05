@@ -167,7 +167,7 @@ pub struct CV {
     #[serde(default = "scaled_importance_default")]  
     pub scaled_importance: bool,
     #[serde(default = "importance_aggregation_default")]  
-    pub importance_aggregation: String,
+    pub importance_aggregation: String, // proably not the best idea to use a string here, use an enum instead
 
 }
 
