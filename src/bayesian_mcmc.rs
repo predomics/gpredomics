@@ -7,13 +7,12 @@ use std::hash::Hasher;
 use std::time::Instant;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::{HashMap};
-use rayon::prelude::*;
 use statrs::function::logistic::logistic;
 use statrs::function::erf::{erf, erf_inv};
 use serde::{Serialize, Deserialize};
 use crate::individual::{RAW_TYPE, PREVALENCE_TYPE, LOG_TYPE};
 use argmin::{
-    core::{CostFunction, Error as argmin_Error, Executor},
+    core::{CostFunction, Error as ArgminError, Executor},  
     solver::brent::BrentOpt,
 };
 
@@ -21,7 +20,7 @@ use log::{debug, info, warn, error};
 use crate::individual;
 
 use crate::data::Data;
-use crate::individual::{Individual, MCMC_GENERIC_LANG};
+use crate::individual::{Individual, data_type, MCMC_GENERIC_LANG};
 use crate::Population;
 use crate::param::Param;
 
@@ -94,6 +93,17 @@ impl Betas {
     pub fn new(a: f64, b: f64, c: f64) -> Self {
         Betas { a, b, c }
     }
+
+    pub fn get(&self) -> [f64;3] { [self.a, self.b, self.c] }
+
+    pub fn set(&mut self, idx: usize, val: f64) {
+        match idx {
+            0 => self.a = val,
+            1 => self.b = val,
+            2 => self.c = val,
+            _ => panic!("β index out of range (0..2)"),
+        }
+    }
 }
 
 impl Hash for Betas {
@@ -103,80 +113,6 @@ impl Hash for Betas {
         state.write_u64(self.c.to_bits());
     }
 }
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct MCMC {
-    pub features_collection: Vec<HashMap<usize,i8>>,
-    pub betas_collection: Vec<Betas>
-}
-
-impl MCMC {
-    // Creates a new prediction ensemble from a population of models.
-    // Parameters:
-    // - population: Reference to the population containing model configurations
-    // - betas: Optional vector of beta coefficients for each model
-    pub fn new(features_collection: Vec<HashMap<usize,i8>>, betas_collection: Vec<Betas>) -> Self {
-        MCMC {
-            features_collection,
-            betas_collection
-        }
-    }
-
-    // Predicts class probabilities for each sample in the provided dataset.
-    // Combines predictions from all models in the ensemble for robust estimation.
-    // Parameters:
-    // - data: Dataset to make predictions on
-    // Returns a vector of probability pairs [prob_class0, prob_class1] for each sample.
-    pub fn predict_proba(&self, data: &Data) -> Vec<[f64; 2]> {
-        let probabilities;
-        
-        probabilities = (0..data.sample_len).into_par_iter().map(|i_sample| {
-            let mut probs = [0.0, 0.0];
-            for (features, betas) in self.features_collection.iter().zip(self.betas_collection.iter()) {
-                let mut pos_features = 0.0;
-                let mut neg_features = 0.0;
-                
-                for (&feat_idx, &coef) in features {
-                    if let Some(&value) = data.X.get(&(i_sample, feat_idx)) {
-                        match coef {
-                            1 => pos_features += value,
-                            -1 => neg_features += value,
-                            _ => (),
-                        }
-                    }
-                }
-                
-                let z = pos_features * betas.a + neg_features * betas.b + betas.c;
-                probs[0] += logistic(-z);
-                probs[1] += logistic(z);
-            }
-            
-            probs[0] /= self.features_collection.len() as f64;
-            probs[1] /= self.features_collection.len() as f64;
-
-            assert!(probs[0] >= 0.0 && probs[0] <= 1.0, "p(Y=0) should be between 0 and 1");
-            assert!(probs[1] >= 0.0 && probs[1] <= 1.0, "p(Y=1) should be between 0 and 1");
-
-            probs
-            
-        }).collect::<Vec<[f64; 2]>>();
-        
-        probabilities
-    }
-    
-    // Predicts discrete class labels by thresholding the probability predictions.
-    // Uses the ensemble of models to determine the most likely class for each sample.
-    // Parameters:
-    // - data: Dataset to make predictions on
-    // Returns a vector of predicted class labels.
-    pub fn predict_class(&self, data: &Data) -> Vec<u8> {
-        let probs = self.predict_proba(data);
-        probs.iter()
-            .map(|p| if p[1] > p[0] { 1 } else { 0 })
-            .collect()
-    }
-}
-
 
 // Main structure for Bayesian prediction models that holds data and model parameters
 // for MCMC sampling and posterior probability calculations.
@@ -220,12 +156,12 @@ impl BayesPred {
     // - Intercept (always 1.0)
     // Returns a vector of vectors where each inner vector contains [pos_features, neg_features, intercept]
     // for each sample in the dataset.
-    fn compute_feature_groups(&self, features: &HashMap<usize, i8>) -> Vec<[f64; 3]> {
+    fn compute_feature_groups(&self, ind: &Individual) -> Vec<[f64; 3]> {
         let mut z = Vec::with_capacity(self.data.sample_len);
         for i_sample in 0..self.data.sample_len {
             let mut pos_features: f64 = 0.0;
             let mut neg_features: f64 = 0.0;
-            for (&feature_idx, &coef) in features {
+            for (&feature_idx, &coef) in ind.features.iter() {
                 if let Some(&raw_value) = self.data.X.get(&(i_sample, feature_idx)) {
                     let value = self.transform_value(raw_value);
                     match coef {
@@ -248,43 +184,42 @@ impl BayesPred {
     // - old_coef: Previous coefficient value
     // - new_coef: New coefficient value
     // Returns a new vector of updated feature groups.
-    fn update_feature_groups(&self, z: &Vec<[f64; 3]>, feature_idx: usize, old_coef: i8, new_coef: i8) -> Vec<[f64; 3]> {
-        if old_coef == new_coef || !self.data.feature_selection.contains(&feature_idx){
-            return z.clone();
+    pub fn update_feature_groups(&self, z: &[[f64; 3]], ind: &Individual, feature_idx: usize, new_coef: i8) -> Vec<[f64; 3]> {
+       let old_coef = ind.get_coef(feature_idx);
+
+        if old_coef == new_coef || !self.data.feature_selection.contains(&feature_idx) {
+            return z.to_vec();
         }
-        
-        let mut z_new = z.clone();
-        
-        let delta_pos = match (old_coef, new_coef) {
-            (0, 1) => 1.0,
-            (1, 0) => -1.0,
-            (-1, 1) => 1.0,
-            (1, -1) => -1.0,
-            _ => 0.0,
-        };
-        
-        let delta_neg = match (old_coef, new_coef) {
-            (0, -1) => 1.0,
-            (-1, 0) => -1.0,
-            (1, -1) => 1.0,
-            (-1, 1) => -1.0,
-            _ => 0.0,
-        };
-        
+
+        let mut z_new = z.to_vec();
+
+        let delta_pos: f64 = match (old_coef, new_coef) {
+            (0,  1) =>  1.0,  
+            (1,  0) => -1.0,   
+            (-1, 1) =>  1.0,   
+            (1, -1) => -1.0,   
+            _       =>  0.0,   
+        };           
+
+        let delta_neg: f64 = match (old_coef, new_coef) {
+            (0, -1) =>  1.0,   
+            (-1, 0) => -1.0, 
+            (1, -1) =>  1.0,   
+            (-1, 1) => -1.0,  
+            _       =>  0.0,  
+        };                 
+
         for i_sample in 0..self.data.sample_len {
-            if let Some(&raw_value) = self.data.X.get(&(i_sample, feature_idx)) {
-                let value = self.transform_value(raw_value); 
-                if delta_pos != 0.0 {
-                    z_new[i_sample][0] += delta_pos * value;
-                }
-                if delta_neg != 0.0 {
-                    z_new[i_sample][1] += delta_neg * value;
-                }
+            if let Some(&raw) = self.data.X.get(&(i_sample, feature_idx)) {
+                let v = self.transform_value(raw);
+                if delta_pos != 0.0 { z_new[i_sample][0] += delta_pos * v; }
+                if delta_neg != 0.0 { z_new[i_sample][1] += delta_neg * v; }
             }
         }
-        
-        z_new
-    }
+
+    z_new
+}
+
 
 
     // Calculates the log posterior probability for given model parameters and feature groups.
@@ -293,11 +228,12 @@ impl BayesPred {
     // - beta: Model coefficients [beta_pos, beta_neg, beta_intercept]
     // - z: Feature groups [pos_features, neg_features, intercept]
     // Returns the log posterior probability.
-    fn log_posterior(&self, beta: &[f64; 3], z: &Vec<[f64; 3]>) -> f64 {
+    fn log_posterior(&self, ind: &Individual, z: &Vec<[f64;3]>) -> f64 {
+        let [a,b,c] = ind.get_betas();
         let mut log_likelihood = 0.0;
         for (i_sample, z_sample) in z.iter().enumerate() {
             let y_sample = self.data.y[i_sample] as f64;
-            let value = z_sample[0] * beta[0] + z_sample[1] * beta[1] + z_sample[2] * beta[2];
+            let value = z_sample[0] * a + z_sample[1] * b + z_sample[2] * c;
             
             if y_sample == 1.0 {
                 log_likelihood += log_logistic(value);
@@ -311,7 +247,7 @@ impl BayesPred {
             // }
         }
         
-        let log_prior: f64 = -self.lambda * beta.iter().map(|v| v*v).sum::<f64>();
+        let log_prior: f64 = -self.lambda * [a, b, c].iter().map(|v| v * v).sum::<f64>();
         log_likelihood + log_prior
     }
 
@@ -323,12 +259,13 @@ impl BayesPred {
     // - z: Feature groups
     // - param_idx: Index of the parameter to compute sigma for (0=pos, 1=neg, 2=intercept)
     // Returns the standard deviation.
-    fn compute_sigma_i(&self, beta: &[f64; 3], z: &Vec<[f64; 3]>, param_idx: usize) -> f64 {
+    fn compute_sigma_i(&self, ind: &Individual, z: &Vec<[f64;3]>, i: usize) -> f64 {
+        let [a,b,c] = ind.get_betas();
         let mut cov_inv = 0.0;
         
         for (_i_sample, z_sample) in z.iter().enumerate() {
-            let value = z_sample[0] * beta[0] + z_sample[1] * beta[1] + z_sample[2] * beta[2];
-            cov_inv += logistic(value) * logistic(-value) * z_sample[param_idx].powf(2.0)
+            let value = z_sample[0] * a + z_sample[1] * b + z_sample[2] * c;
+            cov_inv += logistic(value) * logistic(-value) * z_sample[i].powf(2.0)
         }
         
         1.0 / (cov_inv + self.lambda).sqrt()
@@ -340,28 +277,24 @@ impl BayesPred {
 // Used to minimize the negative log posterior probability for parameter optimization.
 // Holds references to the Bayesian prediction model, parameter index, current beta values, and feature groups.
 struct NegLogPostToMinimize<'a> {
-    bp: &'a BayesPred,
-    i: usize,
-    beta: &'a [f64; 3],
-    z: &'a Vec<[f64; 3]>,
+    bp:   &'a BayesPred,
+    i:    usize,
+    ind:  &'a Individual,
+    z:    &'a Vec<[f64;3]>,
 }
 
 // Implements the cost function for optimization.
 // Returns the negative log posterior probability for the proposed parameter value.
 impl CostFunction for NegLogPostToMinimize<'_> {
-    type Param = f64;
+    type Param  = f64;
     type Output = f64;
 
-    // Implements the cost function for optimization.
-    // Returns the negative log posterior probability for the proposed parameter value.
-    // Parameters:
-    // - beta_i: Proposed value for the parameter being optimized
-    // Returns the negative log posterior (to be minimized).
-    fn cost(&self, beta_i: &Self::Param) -> Result<Self::Output, argmin_Error> {
-        let mut new_beta = self.beta.clone();
-        new_beta[self.i] = *beta_i;
-        Ok(- self.bp.log_posterior(&new_beta, &self.z))
+    fn cost(&self, beta_i: &Self::Param) -> Result<Self::Output, ArgminError> {
+        let mut clone = self.ind.clone();
+        clone.set_beta(self.i, *beta_i);
+        Ok(-self.bp.log_posterior(&clone, self.z))
     }
+
 }
 
 
@@ -373,7 +306,8 @@ impl CostFunction for NegLogPostToMinimize<'_> {
 // and optional traces of the sampling process.
 #[derive(Clone, Debug)]
 pub struct MCMCAnalysisTrace {
-    pub coefs: MCMC,
+    pub population: Population,
+    pub feature_selection: Vec<usize>,
     pub feature_prob: HashMap<usize, (f64, f64, f64)>,  // idx -> (pos, neutre, neg)
     pub model_stats: HashMap<usize, (f64, f64)>,        // idx -> (moyenne, variance)
     pub beta_mean: [f64; 3],
@@ -383,6 +317,7 @@ pub struct MCMCAnalysisTrace {
     pub log_post_trace: Vec<f64>,
     pub post_mean: f64,
     pub post_var: f64,
+    pub param: Param
 }
 
 impl MCMCAnalysisTrace {
@@ -391,7 +326,7 @@ impl MCMCAnalysisTrace {
     // - n_features: Total number of features in the model
     // - keep_trace: Whether to store detailed traces of sampling history
     // - feature_names: Optional vector of feature names for better interpretability
-    pub fn new(feature_selection: &Vec<usize>) -> Self {
+    pub fn new(feature_selection: &Vec<usize>, param:Param) -> Self {
         let n_features = feature_selection.len();
         let mut feature_prob = HashMap::with_capacity(n_features);
         let mut model_stats = HashMap::with_capacity(n_features);
@@ -402,8 +337,8 @@ impl MCMCAnalysisTrace {
         }
         
         MCMCAnalysisTrace {
-            coefs: MCMC::new(Vec::with_capacity(n_features),
-             Vec::with_capacity(n_features)), 
+            population: Population::new(), 
+            feature_selection: feature_selection.clone(),
             feature_prob,
             model_stats,
             beta_mean: [0.0, 0.0, 0.0],
@@ -413,6 +348,7 @@ impl MCMCAnalysisTrace {
             log_post_trace: Vec::with_capacity(n_features),
             post_mean: 0.0,
             post_var: 0.0,
+            param: param
         }
     }
 
@@ -422,43 +358,32 @@ impl MCMCAnalysisTrace {
     // - beta: Current model coefficients
     // - individual: Current feature selection and coefficients
     // - log_post: Log posterior probability of the current sample
-    pub fn update(&mut self, beta: &[f64; 3], features: &HashMap<usize,i8>, log_post: f64) {
-        self.beta_mean = [
-            self.beta_mean[0] + beta[0], 
-            self.beta_mean[1] + beta[1], 
-            self.beta_mean[2] + beta[2]
-        ];
-        
-        self.beta_var = [
-            self.beta_var[0] + beta[0].powf(2.0),
-            self.beta_var[1] + beta[1].powf(2.0),
-            self.beta_var[2] + beta[2].powf(2.0)
-        ];
-        
-        for (feature_idx, coef) in features {
-            let model_stat = self.model_stats.entry(*feature_idx).or_insert((0.0, 0.0));
-            model_stat.0 += *coef as f64;
-            model_stat.1 += (*coef as f64).powf(2.0);
+    pub fn update(&mut self, ind: &Individual, log_post: f64) {
+        let [a,b,c] = ind.get_betas();
+        self.beta_mean = [ self.beta_mean[0]+a, self.beta_mean[1]+b, self.beta_mean[2]+c ];
+        self.beta_var  = [ self.beta_var[0]+a*a, self.beta_var[1]+b*b, self.beta_var[2]+c*c ];
 
-            let feature_prob = self.feature_prob.entry(*feature_idx).or_insert((0.0, 0.0, 0.0));
-            match *coef {
-                1 => feature_prob.0 += 1.0, 
-                -1 => feature_prob.2 += 1.0, 
-                _ => feature_prob.1 += 1.0, 
-            }
+        for idx in &self.feature_selection {
+            let coef = ind.features.get(idx).copied().unwrap_or(0);
+            let prob = self.feature_prob.get_mut(idx).unwrap();
+            match coef { 1 => prob.0+=1.0, -1=>prob.2+=1.0, _=>prob.1+=1.0 }
+            let stat = self.model_stats.get_mut(idx).unwrap();
+            stat.0 += coef as f64;
+            stat.1 += (coef as f64).powi(2);
         }
-        
+
         self.log_post_mean += log_post;
-        self.log_post_var += log_post.powf(2.0);
-        self.post_mean += log_post.exp();
-        self.post_var += (2.0 * log_post).exp();
+        self.log_post_var  += log_post.powi(2);
+        self.post_mean     += log_post.exp();
+        self.post_var      += (2.0*log_post).exp();
 
-        self.coefs.betas_collection.push(Betas::new(beta[0], beta[1], beta[2]));
-        self.coefs.features_collection.push(features.clone());
-
+        let mut clone = ind.clone();
+        clone.epoch = self.population.individuals.len();
+        clone.compute_hash();
+        self.population.individuals.push(clone);
         self.log_post_trace.push(log_post);
-
     }
+
     
     // fn get_feature_name(&self, feature_idx: usize) -> String {
     //     match &self.feature_names {
@@ -473,7 +398,7 @@ impl MCMCAnalysisTrace {
     // - n_iter: Total number of MCMC iterations
     // - n_burn: Number of burn-in iterations to discard
     pub fn finalize(&mut self, n_iter: usize, n_burn: usize) {
-        let n_mean = ((self.coefs.features_collection[0].len() + 3) * (n_iter - n_burn)) as f64;
+        let n_mean = ((self.population.individuals[0].features.len() + 3) * (n_iter - n_burn)) as f64;
         
         // Beta
         self.beta_mean = self.beta_mean.iter()
@@ -514,44 +439,8 @@ impl MCMCAnalysisTrace {
     }
 
     pub fn get_log_evidence(&self, n_classes:f64) -> f64 {
-        let n_features = self.coefs.features_collection[0].len() as f64;
+        let n_features = self.population.individuals[0].features.len() as f64;
         self.post_mean.log10() - n_features * n_classes.log10()
-    }
-
-    pub fn get_pop(&self, param: &Param) -> Population {
-
-        let data_types: Vec<&str> = param.general.data_type.split(",").collect();
-        let data_type = data_types[0];
-        if data_types.len() > 1 { warn!("MCMC allows only one datatype per launch. Keeping: {}", data_type)}
-        
-        let mut pop = Population::new();
-        
-        for i in 0..self.coefs.features_collection.len() {
-            let mut it_ind = Individual {
-                features: self.coefs.features_collection[i].clone(),
-                auc: 0.0,
-                specificity: 0.0,
-                sensitivity: 0.0,
-                accuracy: 0.0,
-                threshold: 0.5,
-                fit: (i as f64 * 1e-5),
-                k: self.coefs.features_collection[i].len(),
-                epoch: i,   
-                language: MCMC_GENERIC_LANG,
-                data_type: individual::data_type(data_type),
-                hash: 0,
-                epsilon: param.general.data_type_epsilon,
-                parents: None,
-                betas: Some(self.coefs.betas_collection[i].clone())
-            };
-
-            it_ind.compute_hash();
-            pop.individuals.push(it_ind)
-        
-        }
-
-        pop
-        
     }
 
     // Returns final MCMC results with informative logging of key statistics.
@@ -603,8 +492,9 @@ impl MCMCAnalysisTrace {
         let beta_trace_path = format!("{}/betas.tsv", outdir);
         let mut file = BufWriter::new(File::create(&beta_trace_path)?);
         writeln!(file, "a\tb\tc")?;
-        for beta in &self.coefs.betas_collection {
-            writeln!(file, "{}\t{}\t{}", beta.a, beta.b, beta.c)?;
+        for ind in &self.population.individuals {
+            let beta = ind.betas.as_ref().expect("MCMC individual without betas");
+            writeln!(file, "\t{}\t{}\t{}", beta.a, beta.b, beta.c)?;
         }
 
         // Export features
@@ -614,16 +504,12 @@ impl MCMCAnalysisTrace {
             .map(|&idx| data.features[*idx].clone())
             .collect();
         writeln!(file, "{}", names.join("\t"))?;
-        for features_map in &self.coefs.features_collection {
-            let row: Vec<String> = feature_idx.iter()
-                .map(|&orig_idx| {
-                    features_map.get(&orig_idx)
-                                .copied()
-                                .unwrap_or(0)
-                                .to_string()
-                })
+        for ind in &self.population.individuals {
+            let row: Vec<String> = feature_idx
+                .iter()
+                .map(|orig| ind.features.get(orig).copied().unwrap_or(0).to_string())
                 .collect();
-            writeln!(file, "{}", row.join("\t"))?;
+            writeln!(file, "\t{}", row.join("\t"))?;
         }
             
         // Export statistics
@@ -819,34 +705,41 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
         panic!("n_iter should be greater than n_burn!");
     }
 
-    let nvals = 3;
+    //let _nvals = 3;
     
     // Initialize coefficients 
-    let mut features : HashMap<usize,i8> = HashMap::with_capacity(bp.data.feature_selection.len());
-    for feature_idx in &bp.data.feature_selection {
-        let random_val = [1, 0, -1].choose(rng).unwrap();
-        features.insert(*feature_idx, *random_val);
-    }
+    let mut ind = Individual::new();
+    ind.language = MCMC_GENERIC_LANG;
+    ind.data_type = data_type(&param.general.data_type);
+    ind.epsilon  = param.general.data_type_epsilon;
+    ind.betas = Some(Betas::new(1.0, -1.0, 1.0));
 
-    let mut beta = [1_f64, -1_f64, 1_f64];
+    for idx in &bp.data.feature_selection {
+        if let &coef @ (-1|0|1) = [1,0,-1].choose(rng).unwrap() {
+            if coef != 0 { ind.features.insert(*idx, coef); }
+        }
+    }
+    ind.k = ind.features.len();
+
+    
     let nbeta: usize = 3;
-    let mut z = bp.compute_feature_groups(&features);
+    let mut z = bp.compute_feature_groups(&ind);
     let mut log_post: f64 = 0.0;
 
-    let mut res_mcmc = MCMCAnalysisTrace::new(&bp.data.feature_selection);
+    let mut res_mcmc = MCMCAnalysisTrace::new(&bp.data.feature_selection, param.clone());
 
     debug!("Computing MCMC...");
     
     let solver = BrentOpt::new(-10_f64.powf(4_f64), 10_f64.powf(4_f64));
     for n in 0..param.mcmc.n_iter {
         if param.mcmc.n_iter>1000 && ((n as f64 == param.mcmc.n_iter as f64 * 0.25) || (n as f64 == param.mcmc.n_iter as f64 * 0.50) ||  (n as f64 == param.mcmc.n_iter as f64 * 0.75)) {
-            debug!("MCMC : {}% iterations finished: a={:.4}, b={:.4}, c={:.4}", (n as f64 / param.mcmc.n_iter as f64) as f64 *100.0, beta[0], beta[1], beta[2]);
+            debug!("MCMC : {}% iterations finished: a={:.4}, b={:.4}, c={:.4}", (n as f64 / param.mcmc.n_iter as f64) as f64 *100.0, ind.get_betas()[0], ind.get_betas()[1], ind.get_betas()[2]);
         }
         for i in 0..nbeta {
             let cost = NegLogPostToMinimize {
                 bp: bp,
                 i: i,
-                beta: &beta,
+                ind: &ind,
                 z: &z,
             };
         
@@ -855,44 +748,48 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
                 .run()
                 .unwrap();
 
-            beta[i] = res.state.param.unwrap();
-            let scale_i = bp.compute_sigma_i(&beta, &z, i);
+            ind.set_beta(i, res.state.param.unwrap());
 
-            if beta[i].abs() / scale_i > 10_f64 {
-                beta[i] = random_normal(beta[i], scale_i, rng)
-            } else {
-                match i {
-                    0_usize => beta[i] = truncnorm_pos(beta[i], scale_i, rng),
-                    1_usize => beta[i] = truncnorm_neg(beta[i], scale_i, rng),
-                    2_usize => beta[i] = random_normal(beta[i], scale_i, rng),
-                    _ => beta[i] = 0.0,
-                }
-            }
-            if beta[i].is_infinite() {beta[i] = 0_f64};
+            let scale_i = bp.compute_sigma_i(&ind, &z, i);
+            let mut b_i = ind.get_betas()[i];
+            b_i = if (b_i/scale_i).abs() > 10.0 {
+                    random_normal(b_i, scale_i, rng)
+                } else {
+                    match i {
+                        0 => truncnorm_pos(b_i, scale_i, rng),
+                        1 => truncnorm_neg(b_i, scale_i, rng),
+                        _ => random_normal   (b_i, scale_i, rng)
+                    }
+                };
+            ind.set_beta(i, b_i);
 
-            log_post = bp.log_posterior(&beta, &z);
+            log_post = bp.log_posterior(&ind, &z);
+
             if n > param.mcmc.n_burn {
-                res_mcmc.update(&beta, &features, log_post);
+                res_mcmc.update(&ind, log_post);
             }
         }
+        
 
         for &feature_idx in &bp.data.feature_selection {
-            let current_coef = &features.get(&feature_idx).copied().unwrap_or(0);
-            let new_coef = (current_coef + [2, 3].choose(rng).unwrap()) % nvals - 1;
-            let z_new = bp.update_feature_groups(&z, feature_idx, *current_coef, new_coef);
-            let log_post_new = bp.log_posterior(&beta, &z_new);
+            let current_coef = ind.get_coef(feature_idx);
+            let new_coef = (current_coef + [2, 3].choose(rng).unwrap()) % 3 - 1;
+            let z_new = bp.update_feature_groups(&z, &mut ind, feature_idx, new_coef);
+
+            let log_post_new = bp.log_posterior(&ind, &z_new);
             let diff_log_post = log_post_new - log_post;
-            let u: f64 = rng.gen_range(0.0..1.0);
-            
+            let u: f64 = rng.gen();
+
             if diff_log_post > 0.0 || u < diff_log_post.exp() {
-                features.insert(feature_idx, new_coef);
+                ind.set_coef(feature_idx, new_coef);
                 log_post = log_post_new;
-                z = z_new;
+                z        = z_new;
             }
             
             if n > param.mcmc.n_burn {
-                res_mcmc.update(&beta, &features, log_post);
+                res_mcmc.update(&ind, log_post);   
             }
+
         }
     }
 
@@ -957,8 +854,81 @@ pub fn get_best_mcmc_sbs(data: &Data, results: &[(u32, f64, f64, f64, usize, Cha
     
 }
 
+// unit tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+    
+    #[test]
+    fn test_log_logistic_threshold() {
+        // Below threshold
+        assert!(log_logistic(-BIG_NUMBER - 1.0).is_finite());
+        // Threshold
+        assert_eq!(log_logistic(-BIG_NUMBER), logistic(-BIG_NUMBER).ln());
+        // Above threshold
+        assert!((log_logistic(0.0) - logistic(0.0).ln()).abs() < 1e-10);
+    }
 
+    #[test]
+    fn test_log_logistic_threshold_positive_negative() {
+        // Positive
+        let test_values = [1.0, 5.0, 10.0];
+        for x in test_values.iter() {
+            let result = log_logistic(*x);
+            let expected = logistic(*x).ln();
+            assert!((result - expected).abs() < 1e-10);
+        }
+        // Negative
+        let x = -10.0; 
+        assert!((log_logistic(x) - logistic(x).ln()).abs() < 1e-10);
+        // Negative and tiny
+        assert!(log_logistic(-1000.0).is_finite() || log_logistic(-1000.0) == f64::NEG_INFINITY);
+    }
 
+    #[test]
+    fn test_truncnorm_pos_positive() {
+        let mut rng = ChaCha8Rng::seed_from_u64(123);
+        for _ in 0..1_000 {
+            let x = truncnorm_pos(0.0, 1.0, &mut rng);
+            assert!(x > 0.0, "sample = {x} is not strictly positive");
+        }
+    }
+
+    #[test]
+    fn test_truncnorm_neg_negative() {
+        let mut rng = ChaCha8Rng::seed_from_u64(456);
+        for _ in 0..1_000 {
+            let x = truncnorm_neg(0.0, 1.0, &mut rng);
+            assert!(x < 0.0, "sample = {x} is not strictly negative");
+        }
+    }
+
+    #[test]
+    fn test_random_normal_basic_stats() {
+        let mut rng = ChaCha8Rng::seed_from_u64(789);
+        const MU: f64 = 2.0;
+        const SIGMA: f64 = 3.0;
+        const N: usize = 20_000;
+
+        let mut sum = 0.0;
+        let mut sum_sq = 0.0;
+        for _ in 0..N {
+            let x = random_normal(MU, SIGMA, &mut rng);
+            sum += x;
+            sum_sq += x * x;
+        }
+
+        let sample_mean = sum / N as f64;
+        let sample_var = sum_sq / N as f64 - sample_mean.powi(2);
+
+        assert!((sample_mean - MU).abs() < 0.2, "mean {sample_mean}");
+        assert!((sample_var - SIGMA * SIGMA).abs() < 0.5, "var {sample_var}");
+    }
+
+}
+
+  
 // pub fn save_results_to_tsv(results: &[(u32, f64, f64, f64, String)], path: &str) -> std::io::Result<()> {
 //     let file = File::create(path)?;
 //     let mut writer = BufWriter::new(file);

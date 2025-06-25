@@ -4,6 +4,7 @@ use crate::individual::{self, RATIO_LANG, TERNARY_LANG};
 use crate::individual::Individual;
 use crate::param::{Param, FitFunction};
 use crate::gpu::GpuAssay;
+use crate::utils::{compute_roc_and_metrics_from_value, compute_auc_from_value};
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use rand::seq::index::sample;
@@ -37,9 +38,9 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .enumerate()
                             .for_each(|(n,i)| {
                                 if param.general.keep_trace {
-                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, None);
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, None);
                                 } else {
-                                    i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
+                                    i.auc = compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
                                 i.fit = i.auc - i.k as f64 * param.general.k_penalty;
                             });
                     });
@@ -52,7 +53,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .for_each(|(n,i)| {
                                 let objective;
                                 if param.general.keep_trace {
-                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![param.general.fr_penalty, 1.0]));
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![param.general.fr_penalty, 1.0]));
                                 } else {
                                     objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0)
                                 }
@@ -68,7 +69,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .for_each(|(n,i)| {
                                 let objective;
                                 if param.general.keep_trace {
-                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![1.0, param.general.fr_penalty]));
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![1.0, param.general.fr_penalty]));
                                 } else {
                                     objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty)
                                 }
@@ -93,11 +94,11 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                             .par_iter_mut()
                             .enumerate()
                             .for_each(|(n,i)| {
-                                let test_auc = i.compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
+                                let test_auc = compute_auc_from_value(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data.y);
                                 if param.general.keep_trace {
-                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, None);
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, None);
                                 } else {
-                                    i.auc = i.compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
+                                    i.auc = compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
                                 }
                                 i.fit = i.auc - i.k as f64 * param.general.k_penalty - (i.auc-test_auc).abs() * param.general.overfit_penalty;
                             });
@@ -112,7 +113,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                                 let objective;
                                 let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, param.general.fr_penalty, 1.0);
                                 if param.general.keep_trace {
-                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![param.general.fr_penalty, 1.0]));
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![param.general.fr_penalty, 1.0]));
                                 } else {
                                     objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0); 
                                 }
@@ -129,7 +130,7 @@ pub fn fit_fn(pop: &mut Population, data: &mut Data, test_data: &mut Option<Data
                                 let objective;
                                 let test_objective = i.maximize_objective_with_scores(&t_scores[n*test_data.sample_len..(n+1)*test_data.sample_len], &test_data, 1.0, param.general.fr_penalty);
                                 if param.general.keep_trace {
-                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![1.0, param.general.fr_penalty]));
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![1.0, param.general.fr_penalty]));
                                 } else {
                                     objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty); 
                                 }

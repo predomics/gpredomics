@@ -4,6 +4,7 @@ use rand_chacha::ChaCha8Rng;
 use rand::seq::SliceRandom;
 use statrs::distribution::{Normal, ContinuousCDF};
 use crate::data::Data;
+use crate::param::ImportanceAggregation;
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -85,12 +86,143 @@ pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f6
     (lower_bound, accuracy, upper_bound)
 }
 
+/// Compute AUC for binary class using Mann-Whitney U algorithm O(n log n)
+pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
+    let mut data: Vec<(f64, u8)> = value.iter()
+        .zip(y.iter())
+        .filter(|(_, &label)| label == 0 || label == 1)
+        .map(|(&v, &y)| (v, y))
+        .collect();
+
+    let n = data.len();
+    let n1 = data.iter().filter(|(_, label)| *label == 1).count();
+    let n0 = n - n1;
+
+    if n1 == 0 || n0 == 0 {
+        return 0.5;
+    }
+
+    data.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut u = 0.0;
+    let mut pos_so_far = 0;
+    let mut i = 0;
+
+    while i < n {
+        let score = data[i].0;
+
+        let mut pos_equal = 0;
+        let mut neg_equal = 0;
+
+        while i < n && data[i].0 == score {
+            if data[i].1 == 1 {
+                pos_equal += 1;
+            } else {
+                neg_equal += 1;
+            }
+            i += 1;
+        }
+
+        if neg_equal > 0 {
+            u += neg_equal as f64 * pos_so_far as f64;
+            u += 0.5 * neg_equal as f64 * pos_equal as f64;
+        }
+
+        pos_so_far += pos_equal;
+    }
+
+    u / (n1 as f64 * n0 as f64)
+}
+
+pub fn compute_roc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
+    let mut best_objective: f64 = f64::MIN;
+
+    let mut data: Vec<_> = value.iter()
+        .zip(y.iter())
+        .filter(|(_, &y)| y == 0 || y == 1)
+        .map(|(&v, &y)| (v, y))
+        .collect();
+
+    data.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total_pos = data.iter().filter(|(_, y)| *y == 1).count();
+    let total_neg = data.len() - total_pos;
+
+    if total_pos == 0 || total_neg == 0 {
+        return (0.5, f64::NAN, 0.0, 0.0, 0.0, f64::MIN);
+    }
+
+    let (mut auc, mut tn, mut fn_count) = (0.0, 0, 0);
+    let mut best_threshold = f64::NEG_INFINITY;
+    let (mut best_acc, mut best_sens, mut best_spec) = (0.0, 0.0, 0.0);
+
+    let mut i = 0;
+    while i < data.len() {
+        let current_score = data[i].0;
+        let (mut current_tn, mut current_fn) = (0, 0);
+
+        while i < data.len() && (data[i].0 - current_score).abs() < f64::EPSILON {
+            match data[i].1 {
+                0 => current_tn += 1,
+                1 => current_fn += 1,
+                _ => unreachable!()
+            }
+            i += 1;
+        }
+
+        let remaining_pos_before = total_pos - fn_count;
+        auc += current_tn as f64 * (remaining_pos_before - current_fn) as f64;
+        auc += 0.5 * (current_tn * current_fn) as f64;
+
+        tn += current_tn;
+        fn_count += current_fn;
+
+        let tp = total_pos - fn_count;
+
+        // Include scores equal to the threshold as positive
+        let sensitivity = (tp + current_fn) as f64 / total_pos as f64;
+        let specificity = (tn - current_tn) as f64 / total_neg as f64;
+        let accuracy = (tp + current_fn + tn - current_tn) as f64 / (total_pos + total_neg) as f64;
+
+        if let Some(p) = penalties {
+            if p.len() >= 2 {
+                let objective = (p[0] * specificity + p[1] * sensitivity)/(p[0] + p[1]);
+                if objective > best_objective || (objective == best_objective && current_score < best_threshold) {
+                    best_objective = objective;
+                    best_threshold = current_score;
+                    best_acc = accuracy;
+                    best_sens = sensitivity;
+                    best_spec = specificity;
+                }
+            }
+        } else {
+            // Objective is Youden Maxima
+            let objective = sensitivity + specificity - 1.0;
+            if objective > best_objective || (objective == best_objective && current_score < best_threshold) {
+                best_objective = objective;
+                best_threshold = current_score;
+                best_acc = accuracy;
+                best_sens = sensitivity;
+                best_spec = specificity;
+            }
+        }
+    }
+
+    let auc = if total_pos * total_neg > 0 {
+        auc / (total_pos * total_neg) as f64
+    } else {
+        0.5
+    };
+
+    (auc, best_threshold, best_acc, best_sens, best_spec, best_objective)
+}    
+
 // Graphical functions
 pub fn display_feature_importance_terminal(
     data: &Data,
     final_importances: &HashMap<usize, (f64, f64)>,
     nb_features: usize,
-    aggregation_method: &str
+    aggregation_method: &ImportanceAggregation
 ) -> String {
     const GRAPH_WIDTH: usize = 80;
     const LEFT_MARGIN: usize = 30;
@@ -131,8 +263,15 @@ pub fn display_feature_importance_terminal(
 
     let mut result = String::new();
     
-    result.push_str(&format!("Feature importance using {} aggregation method\n", aggregation_method));
-    result.push_str("Legend: • = importance value, <- - -> = confidence interval (±std dev/MAD)\n\n");
+    result.push_str(match aggregation_method {
+        ImportanceAggregation::Median => "Feature importance using median aggregation method\n",
+        ImportanceAggregation::Mean => "Feature importance using mean aggregation method\n",
+    });
+
+    result.push_str(match aggregation_method {
+        ImportanceAggregation::Median => "Legend: • = importance value, <- - -> = confidence interval (±MAD)\n\n",
+        ImportanceAggregation::Mean => "Legend: • = importance value, <- - -> = confidence interval (±std dev)\n\n",
+    });
     
     let header_line = format!("{:<LEFT_MARGIN$}|{:^VALUE_AREA_WIDTH$}|", "Feature", "Feature importance");
     result.push_str(&"-".repeat(LEFT_MARGIN));

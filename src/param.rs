@@ -29,6 +29,12 @@ pub enum GpuMemoryPolicy {
     Performance,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum ImportanceAggregation {
+    Mean,
+    Median
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct General {
     pub seed: u64,
@@ -167,10 +173,8 @@ pub struct CV {
     #[serde(default = "scaled_importance_default")]  
     pub scaled_importance: bool,
     #[serde(default = "importance_aggregation_default")]  
-    pub importance_aggregation: String, // proably not the best idea to use a string here, use an enum instead
-
+    pub importance_aggregation: ImportanceAggregation
 }
-
 
 impl Default for General {
     fn default() -> Self {
@@ -269,7 +273,7 @@ fn fold_number_default() -> usize { 5 }
 fn cv_best_models_ci_alpha_default() -> f64 { 0.05 }
 fn n_permutations_oob_default() -> usize { 100 }
 fn scaled_importance_default() -> bool { false }
-fn importance_aggregation_default() -> String { "mean".to_string() }
+fn importance_aggregation_default() -> ImportanceAggregation { ImportanceAggregation::Mean }
 fn penalty_default() -> f64 { 0.0 }
 fn fit_default() -> FitFunction { FitFunction::auc }
 fn nb_best_model_to_test_default() -> u32 { 10 }

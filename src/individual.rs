@@ -11,6 +11,7 @@ use std::cmp::min;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use crate::Population;
+use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value};
 use log::debug;
 use statrs::function::logistic::logistic;
 
@@ -119,10 +120,12 @@ impl Individual {
         let algo_str;
         if algo == "ga" {
             algo_str = format!(" [gen:{}] ", self.epoch);
-        } else if algo=="beam "{
+        } else if algo =="beam"{
             algo_str = format!(" ");
-        } else {
+        } else if algo == "mcmc" {
             algo_str = format!(" [MCMC step: {}] ", self.epoch);
+        } else {
+            algo_str = format!(" [unknwon] ")
         }
 
         let metrics;
@@ -452,70 +455,23 @@ impl Individual {
     /// Compute AUC based on the target vector y
     pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
-        self.auc = self.compute_auc_from_value(&value, &d.y);
+        self.auc = compute_auc_from_value(&value, &d.y);
         self.auc
     }
 
     // Compute AUC without changing self.auc
     pub fn compute_new_auc(&self, d: &Data) -> f64 {
         let value = self.evaluate(d);
-        self.compute_auc_from_value(&value, &d.y)
+        compute_auc_from_value(&value, &d.y)
     }
 
     /// Compute AUC based on X and y rather than a complete Data object
     pub fn compute_auc_from_features(&mut self, X: &HashMap<(usize,usize),f64>, sample_len: usize, y: &Vec<u8>) -> f64 {
         let value = self.evaluate_from_features(X, sample_len);
-        self.auc = self.compute_auc_from_value(&value, y);
+        self.auc = compute_auc_from_value(&value, y);
         self.auc
     }
 
-    /// Compute AUC for binary class using Mann-Whitney U algorithm O(n log n)
-    pub fn compute_auc_from_value(&self, value: &[f64], y: &Vec<u8>) -> f64 {
-        let mut data: Vec<(f64, u8)> = value.iter()
-            .zip(y.iter())
-            .filter(|(_, &label)| label == 0 || label == 1)
-            .map(|(&v, &y)| (v, y))
-            .collect();
-    
-        let n = data.len();
-        let n1 = data.iter().filter(|(_, label)| *label == 1).count();
-        let n0 = n - n1;
-    
-        if n1 == 0 || n0 == 0 {
-            return 0.5;
-        }
-    
-        data.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    
-        let mut u = 0.0;
-        let mut pos_so_far = 0;
-        let mut i = 0;
-    
-        while i < n {
-            let score = data[i].0;
-    
-            let mut pos_equal = 0;
-            let mut neg_equal = 0;
-    
-            while i < n && data[i].0 == score {
-                if data[i].1 == 1 {
-                    pos_equal += 1;
-                } else {
-                    neg_equal += 1;
-                }
-                i += 1;
-            }
-    
-            if neg_equal > 0 {
-                u += neg_equal as f64 * pos_so_far as f64;
-                u += 0.5 * neg_equal as f64 * pos_equal as f64;
-            }
-    
-            pos_so_far += pos_equal;
-        }
-    
-        u / (n1 as f64 * n0 as f64)
-    }
     
     // For GpredomicsR, compute metrics and AUC using the same data to be quicker
     // Same results as compute_auc and compute_threshold_and_metrics (different threshold but same metrics)
@@ -523,92 +479,9 @@ impl Individual {
     pub fn compute_roc_and_metrics(&mut self, d: &Data, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
         let objective;
         let scores: Vec<_> = self.evaluate(d);
-        (self.auc, self.threshold, self.accuracy, self.sensitivity, self.specificity, objective) = self.compute_roc_and_metrics_from_value(&scores, &d.y, penalties);
+        (self.auc, self.threshold, self.accuracy, self.sensitivity, self.specificity, objective) = compute_roc_and_metrics_from_value(&scores, &d.y, penalties);
         (self.auc, self.threshold, self.accuracy, self.sensitivity, self.specificity, objective)        
     }
-
-    pub fn compute_roc_and_metrics_from_value(&self, value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
-        let mut best_objective: f64 = f64::MIN;
-    
-        let mut data: Vec<_> = value.iter()
-            .zip(y.iter())
-            .filter(|(_, &y)| y == 0 || y == 1)
-            .map(|(&v, &y)| (v, y))
-            .collect();
-    
-        data.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    
-        let total_pos = data.iter().filter(|(_, y)| *y == 1).count();
-        let total_neg = data.len() - total_pos;
-    
-        if total_pos == 0 || total_neg == 0 {
-            return (0.5, f64::NAN, 0.0, 0.0, 0.0, f64::MIN);
-        }
-    
-        let (mut auc, mut tn, mut fn_count) = (0.0, 0, 0);
-        let mut best_threshold = f64::NEG_INFINITY;
-        let (mut best_acc, mut best_sens, mut best_spec) = (0.0, 0.0, 0.0);
-    
-        let mut i = 0;
-        while i < data.len() {
-            let current_score = data[i].0;
-            let (mut current_tn, mut current_fn) = (0, 0);
-    
-            while i < data.len() && (data[i].0 - current_score).abs() < f64::EPSILON {
-                match data[i].1 {
-                    0 => current_tn += 1,
-                    1 => current_fn += 1,
-                    _ => unreachable!()
-                }
-                i += 1;
-            }
-    
-            let remaining_pos_before = total_pos - fn_count;
-            auc += current_tn as f64 * (remaining_pos_before - current_fn) as f64;
-            auc += 0.5 * (current_tn * current_fn) as f64;
-    
-            tn += current_tn;
-            fn_count += current_fn;
-    
-            let tp = total_pos - fn_count;
-    
-            // Include scores equal to the threshold as positive
-            let sensitivity = (tp + current_fn) as f64 / total_pos as f64;
-            let specificity = (tn - current_tn) as f64 / total_neg as f64;
-            let accuracy = (tp + current_fn + tn - current_tn) as f64 / (total_pos + total_neg) as f64;
-    
-            if let Some(p) = penalties {
-                if p.len() >= 2 {
-                    let objective = (p[0] * specificity + p[1] * sensitivity)/(p[0] + p[1]);
-                    if objective > best_objective || (objective == best_objective && current_score < best_threshold) {
-                        best_objective = objective;
-                        best_threshold = current_score;
-                        best_acc = accuracy;
-                        best_sens = sensitivity;
-                        best_spec = specificity;
-                    }
-                }
-            } else {
-                // Objective is Youden Maxima
-                let objective = sensitivity + specificity - 1.0;
-                if objective > best_objective || (objective == best_objective && current_score < best_threshold) {
-                    best_objective = objective;
-                    best_threshold = current_score;
-                    best_acc = accuracy;
-                    best_sens = sensitivity;
-                    best_spec = specificity;
-                }
-            }
-        }
-    
-        let auc = if total_pos * total_neg > 0 {
-            auc / (total_pos * total_neg) as f64
-        } else {
-            0.5
-        };
-    
-        (auc, best_threshold, best_acc, best_sens, best_spec, best_objective)
-    }    
 
     /// Calculate the confusion matrix at a given threshold
     pub fn calculate_confusion_matrix(&self,data: &Data) -> (usize, usize, usize, usize) {
@@ -1015,6 +888,35 @@ impl Individual {
         }
     }
 
+    pub fn get_coef(&self, idx: usize) -> i8 {
+        *self.features.get(&idx).unwrap_or(&0)
+    }
+
+    pub fn set_coef(&mut self, idx: usize, coef: i8) {
+        if coef == 0 {
+            self.features.remove(&idx);
+        } else {
+            self.features.insert(idx, coef);
+        }
+        self.k = self.features.len();
+    }
+
+    pub fn get_betas(&self) -> [f64;3] {
+        self.betas.as_ref().map(|b| b.get()).expect("β uninitialized")
+    }
+
+    pub fn set_beta(&mut self, idx: usize, val: f64) {
+        if let Some(b) = self.betas.as_mut() {
+            b.set(idx, val);
+        } else {
+            self.betas = Some(Betas::new(
+                if idx==0 {val} else {0.0},
+                if idx==1 {val} else {0.0},
+                if idx==2 {val} else {0.0},
+            ));
+        }
+    }
+
 }
 
 impl fmt::Debug for Individual {
@@ -1406,20 +1308,20 @@ mod tests {
         assert_eq!(0.7380952380952381, ind.compute_roc_and_metrics(&data, None).0, "bad calculation for AUC with compute_roc_and_metrics : this could be a ties issue");
         assert_eq!(ind.compute_auc(&data), ind.compute_auc_from_features(&data.X, data.sample_len, &data.y),
         "Individual.compute_auc_from_features(&data.X, &data.sample_len, &data.y) should return the same result as Individual.compute_auc(&data)");
-        assert_eq!(ind.compute_auc(&data), ind.compute_auc_from_value(&ind.evaluate(&data), &data.y),
+        assert_eq!(ind.compute_auc(&data), compute_auc_from_value(&ind.evaluate(&data), &data.y),
         "Individual.compute_auc_from_value(scores, &data.y) should return the same result as Individual.compute_auc(&data)");
-        assert_eq!(0.0, ind.compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8, 0_u8]),
+        assert_eq!(0.0, compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8, 0_u8]),
         "auc with a perfect classification and class1 < class0 should be 0.0");
-        assert_eq!(1.0, ind.compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]),
+        assert_eq!(1.0, compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]),
         "auc with a perfect classification and class0 < class1 should be 1.0");
-        assert_eq!(1.0, ind.compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]),
+        assert_eq!(1.0, compute_auc_from_value(&vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]),
         "auc with a perfect classification and class0 < class1 should be 1.0");
         // maybe add a verification inside compute_auc to avoid below cases ?
-        assert_eq!(0.5, ind.compute_auc_from_value(&vec![0.1_f64, 0.2_f64, 0.3_f64, 0.4_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8]),
+        assert_eq!(0.5, compute_auc_from_value(&vec![0.1_f64, 0.2_f64, 0.3_f64, 0.4_f64], &vec![0_u8, 0_u8, 0_u8, 0_u8]),
         "auc should be equal to 0 when there is no positive class");
-        assert_eq!(0.5, ind.compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.7_f64, 0.8_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8]),
+        assert_eq!(0.5, compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.7_f64, 0.8_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8]),
         "auc should be equal to 0 when there is no negative class to avoid positive biais in model selection");
-        assert_eq!(0.4166666666666667, ind.compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.3_f64, 0.1_f64, 0.9_f64, 0.1_f64], &vec![1_u8, 2_u8, 1_u8, 0_u8, 0_u8, 1_u8]),
+        assert_eq!(0.4166666666666667, compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.3_f64, 0.1_f64, 0.9_f64, 0.1_f64], &vec![1_u8, 2_u8, 1_u8, 0_u8, 0_u8, 1_u8]),
         "class 2 should be omited in AUC");
     }
 
@@ -1587,7 +1489,7 @@ mod tests {
         assert_eq!(0.8571428571428571_f64, results.3, "bad calculation for specificity");
 
         let scores: Vec<_> = ind.evaluate(&data);
-        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= ind.compute_roc_and_metrics_from_value(&scores, &data.y, None);
+        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= compute_roc_and_metrics_from_value(&scores, &data.y, None);
         assert_eq!(accuracy, ind.compute_threshold_and_metrics(&data).1, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(sensitivity, ind.compute_threshold_and_metrics(&data).2, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(specificity, ind.compute_threshold_and_metrics(&data).3, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
@@ -1602,7 +1504,7 @@ mod tests {
         assert_eq!((0.79_f64, 0.7777777777777778_f64, 0.6666666666666666_f64, 0.8333333333333334_f64), ind.compute_threshold_and_metrics(&data), "class 2 should be omitted in calculation");
         
         let scores: Vec<_> = ind.evaluate(&data);
-        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= ind.compute_roc_and_metrics_from_value(&scores, &data.y, None);
+        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= compute_roc_and_metrics_from_value(&scores, &data.y, None);
         assert_eq!(accuracy, ind.compute_threshold_and_metrics(&data).1, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(sensitivity, ind.compute_threshold_and_metrics(&data).2, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(specificity, ind.compute_threshold_and_metrics(&data).3, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
