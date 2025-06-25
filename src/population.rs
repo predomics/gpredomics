@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
-use crate::param::FitFunction;
-use crate::utils::{conf_inter_binomial,shuffle_row};
+use crate::param::{FitFunction, ImportanceAggregation};
+use crate::utils::{conf_inter_binomial,shuffle_row, compute_roc_and_metrics_from_value, compute_auc_from_value};
 use crate::cv::CV;
 use crate::data::Data;
 use crate::individual::Individual;
@@ -348,7 +348,7 @@ impl Population {
         data: &Data, 
         permutations: usize, 
         main_rng: &mut ChaCha8Rng, 
-        aggregation_method: &String,
+        aggregation_method: &ImportanceAggregation,
         scaled_importance: bool
     ) -> HashMap<usize, (f64, f64)> { 
         let mut all_features: Vec<usize> = self.individuals
@@ -414,9 +414,9 @@ impl Population {
         
         let mut result = HashMap::new();
         for (feature_idx, values) in feature_importances {
-            let aggregated_value = match aggregation_method.as_str() {
-                "mean" => values.iter().sum::<f64>() / values.len() as f64,
-                "median" => {
+            let aggregated_value = match aggregation_method {
+                ImportanceAggregation::Mean => values.iter().sum::<f64>() / values.len() as f64,
+                _ => {
                     let mut v = values.clone();
                     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     if v.len() % 2 == 1 {
@@ -424,12 +424,11 @@ impl Population {
                     } else {
                         (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
                     }
-                },
-                _ => values.iter().sum::<f64>() / values.len() as f64
+                }
             };
             
-            let dispersion = match aggregation_method.as_str() {
-                "median" => {
+            let dispersion = match aggregation_method {
+                ImportanceAggregation::Median => {
                     let mut v = values.clone();
                     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     let median = if v.len() % 2 == 1 {
@@ -498,16 +497,13 @@ impl Population {
     }
 
     pub fn bayesian_compute_roc_and_metrics(&self, data: &Data) -> (f64, f64, f64, f64, f64, f64) {
-        // A bit dirty at the moment, the ideal would be to export the functions that don't really depend on Individual in utils
-        let ind = Individual::new();
-        ind.compute_roc_and_metrics_from_value(&self.bayesian_predict(data), &data.y, None) 
+        compute_roc_and_metrics_from_value(&self.bayesian_predict(data), &data.y, None) 
     }
 
     pub fn bayesian_compute_metrics(&self, data: &Data, threshold: f64) -> (f64, f64, f64, f64) {
-        // A bit dirty at the moment, the ideal would be to export the functions that don't really depend on Individual in utils
         let ind = Individual::new();
         let (acc, se, sp) = ind.compute_metrics_from_classes(&self.bayesian_class(data, threshold), &data.y);
-        (ind.compute_auc_from_value(&self.bayesian_predict(&data), &data.y), acc, se, sp)
+        (compute_auc_from_value(&self.bayesian_predict(&data), &data.y), acc, se, sp)
     }
     
 }
@@ -949,7 +945,7 @@ mod tests {
         let data = create_test_data_disc();
         let mut rng = ChaCha8Rng::seed_from_u64(42); // Seed fixe pour reproductibilité
         
-        let importance = population.compute_pop_oob_feature_importance(&data, 10, &mut rng, &"mean".to_string(), false);
+        let importance = population.compute_pop_oob_feature_importance(&data, 10, &mut rng, &ImportanceAggregation::Mean, false);
         println!("{:?}", importance);
         assert!(importance.contains_key(&0));
         assert!(importance.contains_key(&1));

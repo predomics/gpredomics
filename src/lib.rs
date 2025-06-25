@@ -19,10 +19,12 @@ use std::collections::HashMap;
 use rand::prelude::*;
 use param::Param;
 
-use log::{debug, info, warn};
+use log::{debug, info, warn, error};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+
+use crate::param::ImportanceAggregation;
 
 /// a very basic use
 pub fn basic_test(param: &Param) {
@@ -383,8 +385,8 @@ pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     
         let stds = std_dev_values.get(key).unwrap_or(&EMPTY_VEC);
         
-        let agg_importance = match param.cv.importance_aggregation.as_str() {
-           "median" => {
+        let agg_importance = match param.cv.importance_aggregation {
+           ImportanceAggregation::Median => {
                 let mut v = values.clone();
                 v.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 if v.len() % 2 == 1 {
@@ -400,8 +402,8 @@ pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         };
         
         let agg_std_dev = if !stds.is_empty() {
-            match param.cv.importance_aggregation.as_str() {
-                "median" => {
+            match param.cv.importance_aggregation {
+                ImportanceAggregation::Median => {
                     // Simple médiane des mesures de dispersion (déjà des MAD si median était utilisé)
                     let mut v = stds.clone();
                     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -429,7 +431,7 @@ pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     importance_vec.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
     let n = 150;
     
-    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m", match param.cv.importance_aggregation.as_str() {"median" => "Importance (Median)\t\tMAD", _ => "Importance (Mean)\t\tStd. dev."});
+    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m", match param.cv.importance_aggregation {ImportanceAggregation::Median => "Importance (Median)\t\tMAD", _ => "Importance (Mean)\t\tStd. dev."});
 
     // Colouring if the feature is associated with the same class in all FBM models (or unassociated)
     for (rank, (feature_idx, (importance, std))) in importance_vec.iter().take(n).enumerate() {
@@ -464,6 +466,10 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
+    if param.general.data_type.split(',').count() > 1 {
+        error!("MCMC currently only allows one data type per launch");
+        panic!("MCMC currently only allows one data type per launch");
+    }
     // Load Data using Gpredomics Data structure
     let mut data = Data::new();
     let _ = data.load_data(param.data.X.as_str(), param.data.y.as_str());
@@ -512,7 +518,7 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     }
 
     // Building complete posterior distribution
-    let mut pop: Population = mcmc_result.get_pop(&param);
+    let mut pop: Population = mcmc_result.population;
 
     // Using MCMC models to compute prediction on test data
     let mut test_data = Data::new();

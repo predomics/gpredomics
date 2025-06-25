@@ -2,8 +2,6 @@ use log::{info, error};
 use gpredomics::{param, run_ga, run_cv, run_beam, run_mcmc};
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
-use std::fs;
-use toml::Value;
 
 use std::thread;
 use signal_hook::{iterator::Signals, consts::signal::*};

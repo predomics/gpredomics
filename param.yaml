@@ -23,7 +23,7 @@ cv:
   cv_best_models_ci_alpha: 0.05               # alpha for the family of best model confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
   n_permutations_oob: 500                     # number of permutations per feature for OOB importance.
   scaled_importance: true                     # scale importance by feature prevalence inside folds.
-  importance_aggregation: mean                # aggregation method for importances: "mean" or "median".     
+  importance_aggregation: Mean                # aggregation method for importances: "Mean" or "Median".     
 
 data:
   X: "samples/Qin2014/Xtrain.tsv"             # the features of the train data set 
@@ -56,7 +56,7 @@ ga:
   mutation_non_null_chance_pct: 20            # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
 
 beam:
-  method: combinatorial                       # combinatorial: generate all combinations (k out of features_to_keep). extend: increment each extendable_models of each 1 feature from features_to_keep.
+  method: combinatorial                       # combinatorial: generate all combinations (k out of features_to_keep). incremental: increment each extendable_models of each 1 feature from features_to_keep.
   kmin: 1                                     # the number of variables used in the initial population
   kmax: 100                                   # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
   best_models_ci_alpha: 1e-5                  # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
