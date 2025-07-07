@@ -10,11 +10,13 @@ pub mod population;
 mod ga;
 mod cv;
 pub mod gpu;
+pub mod experiment;
 
 use data::Data;
 use individual::Individual;
 use population::Population;
 use rand_chacha::ChaCha8Rng;
+use statrs::statistics::Statistics;
 use std::collections::HashMap;
 use rand::prelude::*;
 use param::Param;
@@ -24,6 +26,7 @@ use log::{debug, info, warn, error};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use crate::experiment::{Importance, ImportanceScope};
 use crate::param::ImportanceAggregation;
 
 /// a very basic use
@@ -336,124 +339,23 @@ pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     
     let mut cv_fbm_pop = Population::new();
 
+    debug!("Computing importances...");
     // Computing OOB with validation folds based on FBM
-    let mut importance_values: HashMap<usize, Vec<f64>> = HashMap::new();
-    let mut std_dev_values: HashMap<usize, Vec<f64>> = HashMap::new();
-    let mut features_significant_observations: HashMap<usize, usize> = Default::default();
-    let mut features_classes: HashMap<usize, i8> = Default::default();
-    for (i,(mut fold_last_population, train, mut test)) in results.into_iter().enumerate() {
-        
-        // Fit last population on validation folds instead of training folds in order to select the models most likely to generalize.
-        ga::fit_fn(&mut fold_last_population, &mut test, &mut None, &None, &None, &cv_param);
+    let (cv_importances, cv_fbm_pop) =
+        crossval.compute_importance_from_cv_results(
+            results,
+            param,
+            param.cv.cv_best_models_ci_alpha,
+            param.cv.n_permutations_oob,
+            &mut rng,
+            &param.cv.importance_aggregation,
+            param.cv.scaled_importance,
+            true
+        );
 
-        let mut fold_last_fbm = fold_last_population.select_best_population(param.cv.cv_best_models_ci_alpha);
-        fold_last_fbm = fold_last_fbm.sort();
-        
-        let fold_importances = fold_last_fbm.compute_pop_oob_feature_importance(&crossval.validation_folds[i], param.cv.n_permutations_oob, &mut rng, &param.cv.importance_aggregation, param.cv.scaled_importance);
-        for (key, (importance, std_dev)) in fold_importances.iter() {
-            importance_values.entry(*key).or_insert_with(Vec::new).push(*importance);
-            std_dev_values.entry(*key).or_insert_with(Vec::new).push(*std_dev);
-            if train.feature_class.contains_key(key) {
-                *features_significant_observations.entry(*key).or_insert(0) += 1;
-                let associated_class = train.feature_class[key];
-                if associated_class == 0 {
-                    *features_classes.entry(*key).or_insert(0) += -1;
-                } else if associated_class == 1 {
-                    *features_classes.entry(*key).or_insert(0) += 1;
-                }
-            }
-        }
+    println!("{}", cv_importances.display_feature_importance_terminal(&data, 30));
 
-        cv_fbm_pop.individuals.extend(fold_last_fbm.individuals);
-    }
-
-    // Sort best models according to their fit on validation folds
-    // Display them and their metrics on data and potential data_test
-    cv_fbm_pop = cv_fbm_pop.sort();
-
-    let mut data_test = Data::new();
-    if param.data.Xtest.len()>0 && param.data.ytest.len()>0 {
-         let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
-         data_test.set_classes(param.data.classes.clone());
-    }
-
-    let mut final_importances: HashMap<usize, (f64, f64)> = HashMap::new();
-
-    static EMPTY_VEC: Vec<f64> = Vec::new();
-    for key in importance_values.keys() {
-        let values = &importance_values[key];
-    
-        let stds = std_dev_values.get(key).unwrap_or(&EMPTY_VEC);
-        
-        let agg_importance = match param.cv.importance_aggregation {
-           ImportanceAggregation::Median => {
-                let mut v = values.clone();
-                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                if v.len() % 2 == 1 {
-                    v[v.len() / 2]
-                } else {
-                    (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
-                }
-            },
-            _ => {
-                let sum: f64 = values.iter().sum();
-                sum / values.len() as f64
-            }
-        };
-        
-        let agg_std_dev = if !stds.is_empty() {
-            match param.cv.importance_aggregation {
-                ImportanceAggregation::Median => {
-                    // Simple médiane des mesures de dispersion (déjà des MAD si median était utilisé)
-                    let mut v = stds.clone();
-                    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    if v.len() % 2 == 1 {
-                        v[v.len() / 2]
-                    } else {
-                        (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
-                    }
-                },
-                _ => {
-                    // Simple moyenne des mesures de dispersion (déjà des écarts-types si mean était utilisé)
-                    let sum: f64 = stds.iter().sum();
-                    sum / stds.len() as f64
-                }
-            }
-        } else {
-            0.0
-        };
-    
-    final_importances.insert(*key, (agg_importance, agg_std_dev));
-
-    }
-    
-    let mut importance_vec: Vec<(&usize, &(f64, f64))> = final_importances.iter().collect();
-    importance_vec.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
-    let n = 150;
-    
-    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m", match param.cv.importance_aggregation {ImportanceAggregation::Median => "Importance (Median)\t\tMAD", _ => "Importance (Mean)\t\tStd. dev."});
-
-    // Colouring if the feature is associated with the same class in all FBM models (or unassociated)
-    for (rank, (feature_idx, (importance, std))) in importance_vec.iter().take(n).enumerate() {
-        if features_classes[*feature_idx] == -(features_significant_observations[*feature_idx] as i8)  {
-             info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[95m{}\x1b[0m\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
-        } else if features_classes[*feature_idx] == features_significant_observations[*feature_idx] as i8 {
-            info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[96m{}\x1b[0m\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
-        } else {
-            info!("\x1b[1;93m#{}\x1b[0m\t\t{}\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
-        }
-    }
-
-    let feature_importance_chart = utils::display_feature_importance_terminal(
-        &data,
-        &final_importances,
-        30, 
-        &param.cv.importance_aggregation
-    );
-
-    info!("\n{}", feature_importance_chart);
-
-    (vec![cv_fbm_pop],data,data_test) 
+    (vec![cv_fbm_pop],data,Data::new()) 
 
 }
 

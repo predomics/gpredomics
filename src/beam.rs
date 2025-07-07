@@ -448,7 +448,9 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
             let mut sorted_pop = Population::new();
             sorted_pop.individuals = pop.individuals.clone();
 
-            collection.push(sorted_pop);
+            if sorted_pop.individuals.len() > 0 {
+                collection.push(sorted_pop);
+            }
 
             let best_model = &pop.individuals[0];
             debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}", 
@@ -471,7 +473,11 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
         let elapsed = time.elapsed();
         info!("Beam algorithm ({} mode) computed {:?} generations in {:.2?}", param.beam.method, collection.len(), elapsed);
 
-        if param.general.algo=="beam+cv" {
+        if collection.is_empty() {
+            error!("Beam did not produce any results because the criteria for selecting the best features was too restrictive. Please lower best_models_ci_alpha to allow results.")
+        }
+
+        if param.general.cv == true {
             // To enable cross-validation, best models in the collection are returned as the last population.
             collection.push(keep_n_best_model_within_collection(&collection, 20000));
         }

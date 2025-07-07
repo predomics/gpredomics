@@ -217,6 +217,57 @@ pub fn compute_roc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties:
     (auc, best_threshold, best_acc, best_sens, best_spec, best_objective)
 }    
 
+pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
+    let mut n = 0.0;
+    let (mut mean, mut m2) = (0.0, 0.0);            // Welford
+    for &x in values {
+        n += 1.0;
+        let delta = x - mean;
+        mean += delta / n;
+        m2   += delta * (x - mean);
+    }
+    (mean, (m2 / n).sqrt())
+}
+
+pub fn median(values: &mut [f64]) -> f64 {
+    let mid = values.len() / 2;
+    values.select_nth_unstable_by(mid, |a,b| a.partial_cmp(b).unwrap());
+    if values.len() % 2 == 1 {
+        values[mid]
+    } else {
+        let max_low = *values[..mid].iter().max_by(|a,b| a.partial_cmp(b).unwrap()).unwrap();
+        (max_low + values[mid]) / 2.0
+    }
+}
+
+pub fn mad(values: &[f64]) -> f64 {
+    let mut dev: Vec<f64> = {
+        let mut buf = values.to_vec();
+        let med = median(&mut buf);
+        values.iter().map(|&v| (v - med).abs()).collect()
+    };
+    1.4826 * median(&mut dev)                
+}
+
+pub fn cliff_delta_global(baselines: &[f64], permuted: &mut [f64]) -> (i64,u64) {
+    permuted.sort_by(|x,y| x.partial_cmp(y).unwrap());
+    let m      = permuted.len() as u64;
+    let mut gt = 0_u64;           // # baseline > perm
+    let mut lt = 0_u64;           // # baseline < perm
+
+    for &a in baselines {
+        // nb d’éléments strictement < a
+        let k  = permuted.partition_point(|&b| b < a) as u64;
+        // nb d’éléments strictement > a
+        let g  = m - permuted.partition_point(|&b| b <= a) as u64;
+        gt += k;
+        lt += g;
+    }
+    let diff  = gt as i64 - lt as i64;      // peut être négatif
+    let total = (baselines.len() as u64) * m;
+    (diff, total)
+}
+
 // Graphical functions
 pub fn display_feature_importance_terminal(
     data: &Data,
