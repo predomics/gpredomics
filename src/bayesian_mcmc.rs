@@ -15,10 +15,10 @@ use argmin::{
     core::{CostFunction, Error as ArgminError, Executor},  
     solver::brent::BrentOpt,
 };
+use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 
 use log::{debug, info, warn, error};
 use crate::individual;
-
 use crate::data::Data;
 use crate::individual::{Individual, data_type, MCMC_GENERIC_LANG};
 use crate::Population;
@@ -530,6 +530,44 @@ impl MCMCAnalysisTrace {
         
         Ok(())
     }
+
+    // Return the feature_prob in a ImportanceCollectiob
+    pub fn get_importance(&self) -> ImportanceCollection {
+        let mut importances = Vec::with_capacity(self.feature_prob.len() * 2);
+
+        for (&idx, &(p_pos, _p_neut, p_neg)) in &self.feature_prob {
+            // POS ------------------------------------------------------------
+            if p_pos > 0.0 {
+                importances.push(Importance {
+                    importance_type : ImportanceType::PosteriorProbability,
+                    feature_idx     : idx,
+                    scope           : ImportanceScope::Population { id: 0 }, 
+                    aggreg_method   : None,
+                    importance      : p_pos,                      
+                    dispersion      : (p_pos * (1.0 - p_pos) / self.population.individuals.len() as f64).sqrt(), // Bernoulli(P) repeated n_iter times
+                    is_scaled       : false,
+                    scope_pct       : 1.0,
+                    direction       : Some(1)
+                });
+            }
+            // NEG ------------------------------------------------------------
+            if p_neg > 0.0 {
+                importances.push(Importance {
+                    importance_type : ImportanceType::PosteriorProbability,
+                    feature_idx     : idx,
+                    scope           : ImportanceScope::Population { id: 0 }, 
+                    aggreg_method   : None,
+                    importance      : p_neg,                      
+                    dispersion      : (p_neg * (1.0 - p_neg) / self.population.individuals.len() as f64).sqrt(),
+                    is_scaled       : false,
+                    scope_pct       : 1.0,
+                    direction       : Some(0)
+                });
+            }
+        }
+        ImportanceCollection { importances }
+    }
+
 
 //     pub fn import_from_files(outdir: &str) -> std::io::Result<MCMCAnalysisTrace> {
 //         use std::fs::File;

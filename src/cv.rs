@@ -1,11 +1,16 @@
 use rayon::prelude::*;
-use crate::data::Data;
+use crate::{data::Data, param::ImportanceAggregation};
 use crate::population::Population;
 use crate::param::Param;
 use crate::utils;
 use std::sync::{Arc, Mutex};
 use rand_chacha::ChaCha8Rng;
 use log::info;
+use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
+use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
+use crate::ga::fit_fn;
+use crate::utils::{mean_and_std, median, mad};
 
 use std::sync::atomic::AtomicBool;
 
@@ -102,6 +107,105 @@ impl CV {
             .unwrap()
             .into_inner()
             .unwrap()
+    }
+
+    pub fn compute_importance_from_cv_results(&self, cv_results: Vec<(Population, Data, Data)>, cv_param: &Param, ci_alpha: f64, permutations: usize, main_rng: &mut ChaCha8Rng, aggregation_method: &ImportanceAggregation, scaled_importance: bool, cascade: bool) -> (ImportanceCollection, Population) {
+        let mut cv_fbm_pop = Population::new();
+        let mut importance_values: HashMap<usize, Vec<f64>> = HashMap::new();
+        let mut features_significant_observations: HashMap<usize, usize> = HashMap::new();
+        let mut features_classes: HashMap<usize, i8> = HashMap::new();
+        
+        let mut importances = Vec::new();
+        for (i, (mut fold_last_population, train, mut test)) in cv_results.clone().into_iter().enumerate() {
+            fit_fn(&mut fold_last_population, &mut test, &mut None, &None, &None, cv_param);
+            
+            let mut fold_last_fbm = fold_last_population.select_best_population(ci_alpha);
+            fold_last_fbm = fold_last_fbm.sort();
+            
+            let fold_importance_collection = fold_last_fbm.compute_pop_oob_feature_importance(
+                &self.validation_folds[i],
+                permutations,
+                main_rng,
+                aggregation_method,
+                scaled_importance,
+                cascade,
+                Some(i), // fold ID
+            );
+            
+            for importance in &fold_importance_collection.importances {
+                match importance.scope {
+                    ImportanceScope::Collection { .. } => { panic!("CV.compute_importance_from_cv_results: You should not be here!") }
+                    ImportanceScope::Individual { .. } => { importances.push(importance.clone())}
+                    ImportanceScope::Population { .. } => {
+                    importance_values
+                        .entry(importance.feature_idx)
+                        .or_insert_with(Vec::new)
+                        .push(importance.importance);
+                    
+                    importances.push(importance.clone());
+
+                    if train.feature_class.contains_key(&importance.feature_idx) {
+                        *features_significant_observations
+                            .entry(importance.feature_idx)
+                            .or_insert(0) += 1;
+                        
+                        let associated_class = train.feature_class[&importance.feature_idx];
+                        let class_value = if associated_class == 0 { 
+                            -1 
+                        } else if associated_class == 1 { 
+                            1 
+                        } else { 
+                            0 
+                        };
+                        features_classes.insert(importance.feature_idx, class_value);
+                    }      
+                }
+                }
+            }
+            cv_fbm_pop.individuals.extend(fold_last_fbm.individuals);
+        }
+        
+        let total_folds = cv_results.len();
+        
+        for (feature_idx, values) in importance_values {
+            if values.is_empty() { continue; }
+            
+            let (agg_importance, agg_dispersion) = match aggregation_method {
+                ImportanceAggregation::Mean   => mean_and_std(&values),
+                ImportanceAggregation::Median => {
+                    let mut buf = values.clone();
+                    let med = median(&mut buf);
+                    (med, mad(&buf))
+                }
+            };
+            
+            let fold_count = features_significant_observations
+                .get(&feature_idx)
+                .copied()
+                .unwrap_or(0);
+            let scope_pct = fold_count as f64 / total_folds as f64;
+            
+            let collection_importance = Importance {
+                importance_type: ImportanceType::OOB,
+                feature_idx,
+                scope: ImportanceScope::Collection,
+                aggreg_method: Some(aggregation_method.clone()),
+                importance: agg_importance,
+                is_scaled: scaled_importance,
+                dispersion: agg_dispersion,
+                scope_pct, 
+                direction: None
+            };
+            
+            importances.push(collection_importance);
+        }
+        
+        (
+            ImportanceCollection { 
+                importances: importances 
+            }, 
+            cv_fbm_pop
+        )
     }
 }
 
