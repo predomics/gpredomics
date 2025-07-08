@@ -24,6 +24,9 @@ use crate::individual::{Individual, data_type, MCMC_GENERIC_LANG};
 use crate::Population;
 use crate::param::Param;
 
+use crate::utils::serde_json_hashmap_numeric;
+use serde;
+
 const BIG_NUMBER: f64 = 100.0;
 
 //-----------------------------------------------------------------------------
@@ -304,7 +307,7 @@ impl CostFunction for NegLogPostToMinimize<'_> {
 // Structure for storing and processing results from MCMC sampling.
 // Contains model statistics, feature probabilities, parameter estimates,
 // and optional traces of the sampling process.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MCMCAnalysisTrace {
     pub population: Population,
     pub feature_selection: Vec<usize>,

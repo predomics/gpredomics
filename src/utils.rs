@@ -487,6 +487,262 @@ fn round_down_nicely(value: f64) -> f64 {
     }
 }
 
+// Serde functions
+// Serde functions pour la sérialisation JSON des HashMap avec clés non-string
+pub mod serde_json_hashmap_numeric {
+    use serde::{Serialize, Deserialize, Serializer, Deserializer};
+    use std::collections::HashMap;
+    
+    // ===== FONCTIONS GÉNÉRIQUES =====
+    
+    /// Sérialisation pour HashMap<usize, T>
+    pub fn serialize_usize<S, T>(
+        map: &HashMap<usize, T>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize + Clone,
+    {
+        let map_as_string: HashMap<String, T> = map.iter()
+            .map(|(&k, v)| (k.to_string(), v.clone()))
+            .collect();
+        map_as_string.serialize(serializer)
+    }
+    
+    /// Désérialisation pour HashMap<usize, T>
+    pub fn deserialize_usize<'de, D, T>(
+        deserializer: D,
+    ) -> Result<HashMap<usize, T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        let map_as_string: HashMap<String, T> = HashMap::deserialize(deserializer)?;
+        let mut map = HashMap::new();
+        for (k, v) in map_as_string {
+            if let Ok(idx) = k.parse() {
+                map.insert(idx, v);
+            }
+        }
+        Ok(map)
+    }
+    
+    /// Sérialisation pour HashMap<u32, T>
+    pub fn serialize_u32<S, T>(
+        map: &HashMap<u32, T>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize + Clone,
+    {
+        let map_as_string: HashMap<String, T> = map.iter()
+            .map(|(&k, v)| (k.to_string(), v.clone()))
+            .collect();
+        map_as_string.serialize(serializer)
+    }
+    
+    /// Désérialisation pour HashMap<u32, T>
+    pub fn deserialize_u32<'de, D, T>(
+        deserializer: D,
+    ) -> Result<HashMap<u32, T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        let map_as_string: HashMap<String, T> = HashMap::deserialize(deserializer)?;
+        let mut map = HashMap::new();
+        for (k, v) in map_as_string {
+            if let Ok(idx) = k.parse() {
+                map.insert(idx, v);
+            }
+        }
+        Ok(map)
+    }
+    
+    /// Sérialisation pour HashMap<(usize, usize), T>
+    pub fn serialize_tuple_usize<S, T>(
+        map: &HashMap<(usize, usize), T>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize + Clone,
+    {
+        let map_as_string: HashMap<String, T> = map.iter()
+            .map(|(&(i, j), v)| (format!("{},{}", i, j), v.clone()))
+            .collect();
+        map_as_string.serialize(serializer)
+    }
+    
+    /// Désérialisation pour HashMap<(usize, usize), T>
+    pub fn deserialize_tuple_usize<'de, D, T>(
+        deserializer: D,
+    ) -> Result<HashMap<(usize, usize), T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        let map_as_string: HashMap<String, T> = HashMap::deserialize(deserializer)?;
+        let mut map = HashMap::new();
+        for (k, v) in map_as_string {
+            let parts: Vec<&str> = k.split(',').collect();
+            if parts.len() == 2 {
+                if let (Ok(i), Ok(j)) = (parts[0].parse(), parts[1].parse()) {
+                    map.insert((i, j), v);
+                }
+            }
+        }
+        Ok(map)
+    }
+    
+    // ===== MODULES SPÉCIALISÉS =====
+    
+    /// Module pour HashMap<usize, i8> (Individual.features)
+    pub mod usize_i8 {
+        use super::*;
+        
+        pub fn serialize<S>(
+            map: &HashMap<usize, i8>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serialize_usize(map, serializer)
+        }
+        
+        pub fn deserialize<'de, D>(
+            deserializer: D,
+        ) -> Result<HashMap<usize, i8>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserialize_usize(deserializer)
+        }
+    }
+    
+    /// Module pour HashMap<usize, u8> (Data.featureclass)
+    pub mod usize_u8 {
+        use super::*;
+        
+        pub fn serialize<S>(
+            map: &HashMap<usize, u8>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serialize_usize(map, serializer)
+        }
+        
+        pub fn deserialize<'de, D>(
+            deserializer: D,
+        ) -> Result<HashMap<usize, u8>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserialize_usize(deserializer)
+        }
+    }
+    
+    /// Module pour HashMap<u32, String> (Population.featurenames)
+    pub mod u32_string {
+        use super::*;
+        
+        pub fn serialize<S>(
+            map: &HashMap<u32, String>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serialize_u32(map, serializer)
+        }
+        
+        pub fn deserialize<'de, D>(
+            deserializer: D,
+        ) -> Result<HashMap<u32, String>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserialize_u32(deserializer)
+        }
+    }
+    
+    /// Module pour HashMap<(usize, usize), f64> (Data.X)
+    pub mod tuple_usize_f64 {
+        use super::*;
+        
+        pub fn serialize<S>(
+            map: &HashMap<(usize, usize), f64>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serialize_tuple_usize(map, serializer)
+        }
+        
+        pub fn deserialize<'de, D>(
+            deserializer: D,
+        ) -> Result<HashMap<(usize, usize), f64>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserialize_tuple_usize(deserializer)
+        }
+    }
+    
+    /// Module pour HashMap<usize, (f64, f64, f64)> (MCMC.featureprob)
+    pub mod usize_tuple3_f64 {
+        use super::*;
+        
+        pub fn serialize<S>(
+            map: &HashMap<usize, (f64, f64, f64)>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serialize_usize(map, serializer)
+        }
+        
+        pub fn deserialize<'de, D>(
+            deserializer: D,
+        ) -> Result<HashMap<usize, (f64, f64, f64)>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserialize_usize(deserializer)
+        }
+    }
+    
+    /// Module pour HashMap<usize, (f64, f64)> (MCMC.modelstats)
+    pub mod usize_tuple2_f64 {
+        use super::*;
+        
+        pub fn serialize<S>(
+            map: &HashMap<usize, (f64, f64)>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serialize_usize(map, serializer)
+        }
+        
+        pub fn deserialize<'de, D>(
+            deserializer: D,
+        ) -> Result<HashMap<usize, (f64, f64)>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserialize_usize(deserializer)
+        }
+    }
+}
 
 // unit tests
 #[cfg(test)]

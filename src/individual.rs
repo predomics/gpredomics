@@ -17,9 +17,11 @@ use rand::SeedableRng;
 use rand::RngCore;
 use log::{debug, error};
 use statrs::function::logistic::logistic;
+use crate::utils::serde_json_hashmap_numeric;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Individual {
+    #[serde(with = "serde_json_hashmap_numeric::usize_i8")]
     pub features: HashMap<usize,i8>, /// a vector of feature indices with their corresponding signs
     pub auc: f64, // accuracy of the model
     pub fit: f64, // fit value of the model

@@ -15,6 +15,7 @@ use crate::utils::{mean_and_std, median, mad};
 use std::sync::atomic::AtomicBool;
 
 /// This class implement Cross Validation dataset, e.g. split the Data in N validation_folds and create N subset of Data each with its test subset.
+ #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CV {
     pub validation_folds: Vec<Data>,
     pub training_sets: Vec<Data>
