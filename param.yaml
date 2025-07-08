@@ -17,6 +17,7 @@ general:
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
   keep_trace: false                           # keep this setting to false when using gpredomics as a binary
+  save_exp: test.bin
 
 cv:
   fold_number: 5                              # number of folds for cross-validation (k-folds strategy).

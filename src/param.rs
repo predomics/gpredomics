@@ -50,7 +50,7 @@ pub struct General {
     pub thread_number: usize,
     #[serde(default = "log_base_default")]  
     pub log_base: String,
-    #[serde(default = "log_suffix_default")]  
+    #[serde(default = "log_suffix_default")]   
     pub log_suffix: String,
     #[serde(default = "log_level_default")]  
     pub log_level: String,
@@ -73,7 +73,10 @@ pub struct General {
     #[serde(default = "display_colorful_default")] 
     pub display_colorful: bool,
     #[serde(default = "feature_keep_trace_default")]   
-    pub keep_trace: bool
+    pub keep_trace: bool,
+    #[serde(default = "save_experiment_default")] 
+    pub save_exp: String
+    
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -266,6 +269,7 @@ fn data_type_epsilon_default() -> f64 { 1e-5 }
 fn thread_number_default() -> usize { 1 }
 fn feature_kminkmax_default() -> usize { 0 }
 fn feature_keep_trace_default() -> bool { true }
+fn save_experiment_default() -> String { "".to_string() }
 fn log_base_default() -> String { "".to_string() }
 fn log_suffix_default() -> String { "log".to_string() }
 fn log_level_default() -> String { "info".to_string() }

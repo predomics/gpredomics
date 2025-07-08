@@ -11,13 +11,17 @@ use log::{info,warn};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use fishers_exact::fishers_exact;
+use crate::utils::serde_json_hashmap_numeric;
+
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Data {
+    #[serde(with = "serde_json_hashmap_numeric::tuple_usize_f64")]
     pub X: HashMap<(usize,usize),f64>,         // Matrix for feature values
     pub y: Vec<u8>,              // Vector for target values
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
     pub samples: Vec<String>,
+    #[serde(with = "serde_json_hashmap_numeric::usize_u8")]
     pub feature_class: HashMap<usize, u8>, // Sign for each feature
     pub feature_selection: Vec<usize>,
     pub feature_len: usize,

@@ -2,6 +2,8 @@ use log::{info, error};
 use gpredomics::{param, run_ga, run_cv, run_beam, run_mcmc};
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
+use gpredomics::experiment::Experiment;
+use std::env;
 
 use std::thread;
 use signal_hook::{iterator::Signals, consts::signal::*};
@@ -29,11 +31,36 @@ fn custom_format(
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
 
-    let param= param::get("param.yaml".to_string()).unwrap();
+    let param = param::get("param.yaml".to_string()).unwrap();
 
     if param.general.overfit_penalty != 0.0 {
         error!("overfit_penalty parameter is deprecated, please set it to 0.");
         panic!("overfit_penalty parameter is deprecated, please set it to 0.");
+    }
+
+    let args: Vec<String> = env::args().collect();
+    
+    // CLI first
+    let load_path = if let Some(load_arg) = parse_load_argument(&args) {
+        Some(load_arg)
+    } else {
+        None
+    };
+    
+    // Load experiment if args, else launch new experiment
+    if let Some(path) = load_path {
+        match Experiment::load_auto(&path) {
+            Ok(experiment) => {
+                info!("Loading experiment from: {}", path);
+                experiment.display_results();
+                return; // Sortie directe après affichage
+            }
+            Err(e) => {
+                error!("Loading failed: {}", e);
+                eprintln!("Error while loading experiment: {}", e);
+                return;
+            }
+        }
     }
 
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
@@ -68,28 +95,57 @@ fn main() {
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
+    let running_clone_for_signal = Arc::clone(&running);
     let mut signals = Signals::new(&[SIGTERM, SIGHUP]).expect("Failed to set up signal handler");
 
-    // Register signal handler in this thread
-    flag::register(SIGHUP, Arc::clone(&running_clone)).expect("Failed to register SIGHUP handler");
+    // Register signal handler with original Arc
+    flag::register(SIGHUP, Arc::clone(&running)).expect("Failed to register SIGHUP handler");
     info!("Signal handler thread started. Send `kill -1 {}` to stop the application.", std::process::id());
-    info!("Signal registration state is {}",running_clone.load(Ordering::Relaxed));
+    info!("Signal registration state is {}", running.load(Ordering::Relaxed));
 
-    let sub_thread = thread::spawn(move || {
-        let _result = if param.general.cv {
-            run_cv(&param, running)
+    let thread_param = param.clone();
+    let start = std::time::Instant::now();
+
+    let handle = thread::spawn(move || {
+        if thread_param.general.cv {
+            run_cv(&thread_param, running_clone)
         } else {
-            match param.general.algo.as_str() {
-                "ga" => run_ga(&param, running),
-                "beam" => run_beam(&param, running),
-                "mcmc"  => run_mcmc(&param, running),
+            match thread_param.general.algo.as_str() {
+                "ga" => run_ga(&thread_param, running_clone),
+                "beam" => run_beam(&thread_param, running_clone),
+                "mcmc" => run_mcmc(&thread_param, running_clone),
                 other => {
-                    error!("ERROR! No such algorithm {}", other);
                     panic!("ERROR! No such algorithm {}", other);
                 }
             }
-        };
+        }
     });
+
+    let (collection, data_train, data_test) = handle.join().expect("Thread panicked!");
+    let exec_time = start.elapsed().as_secs_f64();
+    
+    let exp = Experiment {
+        id: "Test".to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
+
+        train_data: data_train,
+        test_data: Some(data_test),
+
+        final_population: collection.last().cloned(),
+        collection: if param.general.keep_trace { Some(collection) } else { None },
+        
+        importance_collection: None,
+        execution_time: exec_time,
+
+        cv_data: None,
+        parameters: param.clone()
+    };
+
+    if param.general.save_exp != "".to_string() {
+        exp.save_auto(&param.general.save_exp).expect("Error while exporting experiment");
+    }
+    
 
     // Main thread now monitors the signal
     let _signal_thread = thread::spawn(move || {
@@ -97,7 +153,7 @@ fn main() {
             match sig {
                 SIGTERM | SIGHUP => {
                     info!("Received signal: {}", sig);
-                    running_clone.store(false, Ordering::Relaxed);
+                    running_clone_for_signal.store(false, Ordering::Relaxed);
                     break;
                 }
                 _ => {}
@@ -105,8 +161,23 @@ fn main() {
         }
     });
 
-    sub_thread.join().expect("Computation thread panicked");
-
     logger.flush();
 }
 
+// Load previous experiment
+fn parse_load_argument(args: &[String]) -> Option<String> {
+    for i in 0..args.len() {
+        match args[i].as_str() {
+            "--load" | "-l" => {
+                if i + 1 < args.len() {
+                    return Some(args[i + 1].clone());
+                }
+            }
+            arg if arg.starts_with("--load=") => {
+                return Some(arg.strip_prefix("--load=").unwrap().to_string());
+            }
+            _ => {}
+        }
+    }
+    None
+}
