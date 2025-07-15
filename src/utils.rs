@@ -249,25 +249,6 @@ pub fn mad(values: &[f64]) -> f64 {
     1.4826 * median(&mut dev)                
 }
 
-pub fn cliff_delta_global(baselines: &[f64], permuted: &mut [f64]) -> (i64,u64) {
-    permuted.sort_by(|x,y| x.partial_cmp(y).unwrap());
-    let m      = permuted.len() as u64;
-    let mut gt = 0_u64;           // # baseline > perm
-    let mut lt = 0_u64;           // # baseline < perm
-
-    for &a in baselines {
-        // nb d’éléments strictement < a
-        let k  = permuted.partition_point(|&b| b < a) as u64;
-        // nb d’éléments strictement > a
-        let g  = m - permuted.partition_point(|&b| b <= a) as u64;
-        gt += k;
-        lt += g;
-    }
-    let diff  = gt as i64 - lt as i64;      // peut être négatif
-    let total = (baselines.len() as u64) * m;
-    (diff, total)
-}
-
 // Graphical functions
 pub fn display_feature_importance_terminal(
     data: &Data,
@@ -315,13 +296,13 @@ pub fn display_feature_importance_terminal(
     let mut result = String::new();
     
     result.push_str(match aggregation_method {
-        ImportanceAggregation::Median => "Feature importance using median aggregation method\n",
-        ImportanceAggregation::Mean => "Feature importance using mean aggregation method\n",
+        ImportanceAggregation::median => "Feature importance using median aggregation method\n",
+        ImportanceAggregation::mean => "Feature importance using mean aggregation method\n",
     });
 
     result.push_str(match aggregation_method {
-        ImportanceAggregation::Median => "Legend: • = importance value, <- - -> = confidence interval (±MAD)\n\n",
-        ImportanceAggregation::Mean => "Legend: • = importance value, <- - -> = confidence interval (±std dev)\n\n",
+        ImportanceAggregation::median => "Legend: • = importance value, <- - -> = confidence interval (±MAD)\n\n",
+        ImportanceAggregation::mean => "Legend: • = importance value, <- - -> = confidence interval (±std dev)\n\n",
     });
     
     let header_line = format!("{:<LEFT_MARGIN$}|{:^VALUE_AREA_WIDTH$}|", "Feature", "Feature importance");
@@ -386,7 +367,12 @@ pub fn display_feature_importance_terminal(
     
     for i in 0..VALUE_AREA_WIDTH {
         if tick_positions.contains(&i) {
-            marker_line.push('|');
+            if i==0 {
+                marker_line.push('-');
+            } else {
+                marker_line.push('|');
+            }
+            
         } else {
             marker_line.push('-');
         }
@@ -487,15 +473,14 @@ fn round_down_nicely(value: f64) -> f64 {
     }
 }
 
-// Serde functions
-// Serde functions pour la sérialisation JSON des HashMap avec clés non-string
+// Serde functions for JSONize HashMaps
 pub mod serde_json_hashmap_numeric {
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
     use std::collections::HashMap;
     
-    // ===== FONCTIONS GÉNÉRIQUES =====
+    // ===== General =====
     
-    /// Sérialisation pour HashMap<usize, T>
+    /// HashMap<usize, T>
     pub fn serialize_usize<S, T>(
         map: &HashMap<usize, T>,
         serializer: S,
@@ -510,7 +495,7 @@ pub mod serde_json_hashmap_numeric {
         map_as_string.serialize(serializer)
     }
     
-    /// Désérialisation pour HashMap<usize, T>
+    /// HashMap<usize, T>
     pub fn deserialize_usize<'de, D, T>(
         deserializer: D,
     ) -> Result<HashMap<usize, T>, D::Error>
@@ -528,7 +513,7 @@ pub mod serde_json_hashmap_numeric {
         Ok(map)
     }
     
-    /// Sérialisation pour HashMap<u32, T>
+    /// HashMap<u32, T>
     pub fn serialize_u32<S, T>(
         map: &HashMap<u32, T>,
         serializer: S,
@@ -543,7 +528,7 @@ pub mod serde_json_hashmap_numeric {
         map_as_string.serialize(serializer)
     }
     
-    /// Désérialisation pour HashMap<u32, T>
+    /// HashMap<u32, T>
     pub fn deserialize_u32<'de, D, T>(
         deserializer: D,
     ) -> Result<HashMap<u32, T>, D::Error>
@@ -561,7 +546,7 @@ pub mod serde_json_hashmap_numeric {
         Ok(map)
     }
     
-    /// Sérialisation pour HashMap<(usize, usize), T>
+    /// HashMap<(usize, usize), T>
     pub fn serialize_tuple_usize<S, T>(
         map: &HashMap<(usize, usize), T>,
         serializer: S,
@@ -576,7 +561,7 @@ pub mod serde_json_hashmap_numeric {
         map_as_string.serialize(serializer)
     }
     
-    /// Désérialisation pour HashMap<(usize, usize), T>
+    /// HashMap<(usize, usize), T>
     pub fn deserialize_tuple_usize<'de, D, T>(
         deserializer: D,
     ) -> Result<HashMap<(usize, usize), T>, D::Error>
@@ -597,9 +582,9 @@ pub mod serde_json_hashmap_numeric {
         Ok(map)
     }
     
-    // ===== MODULES SPÉCIALISÉS =====
+    // ===== Specialized modules  =====
     
-    /// Module pour HashMap<usize, i8> (Individual.features)
+    /// HashMap<usize, i8> (Individual.features)
     pub mod usize_i8 {
         use super::*;
         
@@ -623,7 +608,7 @@ pub mod serde_json_hashmap_numeric {
         }
     }
     
-    /// Module pour HashMap<usize, u8> (Data.featureclass)
+    /// HashMap<usize, u8> (Data.featureclass)
     pub mod usize_u8 {
         use super::*;
         
@@ -647,7 +632,7 @@ pub mod serde_json_hashmap_numeric {
         }
     }
     
-    /// Module pour HashMap<u32, String> (Population.featurenames)
+    /// HashMap<u32, String> (Population.featurenames)
     pub mod u32_string {
         use super::*;
         
@@ -671,7 +656,7 @@ pub mod serde_json_hashmap_numeric {
         }
     }
     
-    /// Module pour HashMap<(usize, usize), f64> (Data.X)
+    /// HashMap<(usize, usize), f64> (Data.X)
     pub mod tuple_usize_f64 {
         use super::*;
         
@@ -695,7 +680,7 @@ pub mod serde_json_hashmap_numeric {
         }
     }
     
-    /// Module pour HashMap<usize, (f64, f64, f64)> (MCMC.featureprob)
+    /// HashMap<usize, (f64, f64, f64)> (MCMC.featureprob)
     pub mod usize_tuple3_f64 {
         use super::*;
         
@@ -719,7 +704,7 @@ pub mod serde_json_hashmap_numeric {
         }
     }
     
-    /// Module pour HashMap<usize, (f64, f64)> (MCMC.modelstats)
+    /// HashMap<usize, (f64, f64)> (MCMC.modelstats)
     pub mod usize_tuple2_f64 {
         use super::*;
         

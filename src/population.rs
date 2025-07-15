@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 use crate::param::{FitFunction, ImportanceAggregation};
-use crate::utils::{conf_inter_binomial,shuffle_row, compute_roc_and_metrics_from_value, compute_auc_from_value};
+use crate::utils::{conf_inter_binomial, compute_roc_and_metrics_from_value, compute_auc_from_value};
 use crate::cv::CV;
 use crate::data::Data;
 use crate::individual::Individual;
@@ -48,11 +48,11 @@ impl Population {
             let (train_auc, train_best_threshold, train_best_acc, train_best_sens, train_best_spec, _) = self.bayesian_compute_roc_and_metrics(&data);
             if let Some(data_to_test) = data_to_test {
                 let (test_auc, test_best_acc, test_best_sens, test_best_spec) = self.bayesian_compute_metrics(&data_to_test, train_best_threshold);
-                str = format!("{}\n\nBayesian model {}:{} [n_it = {}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}", str,
+                str = format!("{}\n\nBayesian model {}:{} [n_st = {}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}", str,
                 self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), train_auc, test_auc, train_best_acc, test_best_acc, 
                 train_best_sens, test_best_sens, train_best_spec, test_best_spec)
             } else {
-                str = format!("{}\nBayesian model {}:{} [n_it = {}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}", str,
+                str = format!("{}\nBayesian model {}:{} [n_st = {}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}", str,
                 self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), train_auc, train_best_acc, train_best_sens,
                 train_best_sens)
             }   
@@ -68,7 +68,12 @@ impl Population {
                 limit = param.general.nb_best_model_to_test
             }
 
-            let mut str: String = format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit);
+            let mut str: String = if param.general.cv == false {
+                format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit)
+            } else {
+                format!("Displaying {} models. Metrics are shown in the following order: Validation fold/Complete train.", limit)
+            };
+            
             for i in 0..=(limit-1) as usize {
                 if param.general.keep_trace == false {
                     match param.general.fit {
@@ -384,14 +389,12 @@ impl Population {
             .par_iter()          
             .map(|&idx| {
 
-                let mut rng = ChaCha8Rng::seed_from_u64(42 + idx as u64);
                 self.individuals[idx]
                     .compute_oob_feature_importance(
                         data,
                         permutations,
                         &all_features,
                         &feature_seeds,
-                        &mut rng,
                     )
             })
             .collect();
@@ -427,8 +430,8 @@ impl Population {
             
             // Calculate aggregated value based on method
             let (aggregated_value, dispersion) = match aggregation_method {
-                ImportanceAggregation::Mean   => mean_and_std(&values),
-                ImportanceAggregation::Median => {
+                ImportanceAggregation::mean   => mean_and_std(&values),
+                ImportanceAggregation::median => {
                     let mut buf = values.clone();
                     let med = median(&mut buf);
                     (med, mad(&buf))

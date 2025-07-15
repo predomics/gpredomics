@@ -1,8 +1,9 @@
-use log::{info, error};
+use log::{info, error,};
 use gpredomics::{param, run_ga, run_cv, run_beam, run_mcmc};
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
 use gpredomics::experiment::Experiment;
+use clap::Parser;
 use std::env;
 
 use std::thread;
@@ -38,30 +39,7 @@ fn main() {
         panic!("overfit_penalty parameter is deprecated, please set it to 0.");
     }
 
-    let args: Vec<String> = env::args().collect();
-    
-    // CLI first
-    let load_path = if let Some(load_arg) = parse_load_argument(&args) {
-        Some(load_arg)
-    } else {
-        None
-    };
-    
-    // Load experiment if args, else launch new experiment
-    if let Some(path) = load_path {
-        match Experiment::load_auto(&path) {
-            Ok(experiment) => {
-                info!("Loading experiment from: {}", path);
-                experiment.display_results();
-                return; // Sortie directe après affichage
-            }
-            Err(e) => {
-                error!("Loading failed: {}", e);
-                eprintln!("Error while loading experiment: {}", e);
-                return;
-            }
-        }
-    }
+    let args = Cli::parse();
 
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
@@ -89,6 +67,35 @@ fn main() {
             .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e))
     };
 
+    if let Some(experiment_path) = args.load {
+        match Experiment::load_auto(&experiment_path) {
+            Ok(mut experiment) => {
+                info!("Loading experiment from: {}", experiment_path);
+                
+                if args.evaluate {
+                    // Evaluation mode
+                    let x_path = args.x_test.expect("X test path required for evaluation");
+                    let y_path = args.y_test.expect("Y test path required for evaluation");
+                    
+                    info!("Evaluating on new dataset: {} | {}", x_path, y_path);
+                    
+                    match experiment.evaluate_on_new_dataset(&x_path, &y_path) {
+                        Ok(results) => println!("{}", results),
+                        Err(e) => error!("Evaluation failed: {}", e),
+                    }
+                } else {
+                    // Display mode
+                    experiment.display_results();
+                }
+                return;
+            }
+            Err(e) => {
+                error!("Failed to load experiment: {}", e);
+                return;
+            }
+        }
+    }
+
     info!("GPREDOMICS v{}", version);
     info!("Loading param.yaml");
     info!("\x1b[2;97m{:?}\x1b[0m", &param);
@@ -104,8 +111,6 @@ fn main() {
     info!("Signal registration state is {}", running.load(Ordering::Relaxed));
 
     let thread_param = param.clone();
-    let start = std::time::Instant::now();
-
     let handle = thread::spawn(move || {
         if thread_param.general.cv {
             run_cv(&thread_param, running_clone)
@@ -121,32 +126,25 @@ fn main() {
         }
     });
 
-    let (collection, data_train, data_test) = handle.join().expect("Thread panicked!");
-    let exec_time = start.elapsed().as_secs_f64();
+    let mut exp = handle.join().expect("Thread panicked!");
     
-    let exp = Experiment {
-        id: "Test".to_string(),
-        timestamp: timestamp,
-        algorithm: param.general.algo.clone(),
-
-        train_data: data_train,
-        test_data: Some(data_test),
-
-        final_population: collection.last().cloned(),
-        collection: if param.general.keep_trace { Some(collection) } else { None },
+    if param.general.compute_importance {
+        info!("Computing feature importance...");
+        let start_importance = std::time::Instant::now();
         
-        importance_collection: None,
-        execution_time: exec_time,
-
-        cv_data: None,
-        parameters: param.clone()
-    };
+        exp.compute_importance();
+        
+        let importance_time = start_importance.elapsed().as_secs_f64();
+        info!("Importance calculation completed in {:.2}s", importance_time);
+    } else {
+        info!("Skipping importance calculation (disabled in parameters)");
+    }
 
     if param.general.save_exp != "".to_string() {
+        info!("Saving experiment...");
         exp.save_auto(&param.general.save_exp).expect("Error while exporting experiment");
     }
     
-
     // Main thread now monitors the signal
     let _signal_thread = thread::spawn(move || {
         for sig in signals.forever() {
@@ -164,20 +162,22 @@ fn main() {
     logger.flush();
 }
 
-// Load previous experiment
-fn parse_load_argument(args: &[String]) -> Option<String> {
-    for i in 0..args.len() {
-        match args[i].as_str() {
-            "--load" | "-l" => {
-                if i + 1 < args.len() {
-                    return Some(args[i + 1].clone());
-                }
-            }
-            arg if arg.starts_with("--load=") => {
-                return Some(arg.strip_prefix("--load=").unwrap().to_string());
-            }
-            _ => {}
-        }
-    }
-    None
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+pub struct Cli {
+    /// Load experiment from file
+    #[arg(short, long)]
+    load: Option<String>,
+    
+    /// Evaluate loaded experiment on new dataset
+    #[arg(long, requires = "load")]
+    evaluate: bool,
+    
+    /// X test data path (required if --evaluate is used)
+    #[arg(long, required_if_eq("evaluate", "true"))]
+    x_test: Option<String>,
+    
+    /// y test data path (required if --evaluate is used)
+    #[arg(long, required_if_eq("evaluate", "true"))]
+    y_test: Option<String>,
 }

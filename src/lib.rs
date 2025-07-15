@@ -12,12 +12,12 @@ mod cv;
 pub mod gpu;
 pub mod experiment;
 
+use crate::experiment::{Experiment, ExperimentMetadata};
 use data::Data;
 use individual::Individual;
 use population::Population;
 use rand_chacha::ChaCha8Rng;
-use statrs::statistics::Statistics;
-use std::collections::HashMap;
+use chrono::Local;
 use rand::prelude::*;
 use param::Param;
 
@@ -25,9 +25,6 @@ use log::{debug, info, warn, error};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-
-use crate::experiment::{Importance, ImportanceScope};
-use crate::param::ImportanceAggregation;
 
 /// a very basic use
 pub fn basic_test(param: &Param) {
@@ -160,7 +157,8 @@ pub fn gpu_random_run(param: &Param) {
 }
 
 /// the Genetic Algorithm test
-pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+    let start = std::time::Instant::now();
     info!("Genetic algorithm\n-----------------------------------------------------");
     let mut my_data = Data::new();
     
@@ -175,7 +173,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         (Some(cv.validation_folds.remove(0)),Some(cv.training_sets.remove(0)))
     } else { (None,None) };
 
-    let mut populations = if let Some(mut this_data)=run_data {
+    let populations = if let Some(mut this_data)=run_data {
         ga::ga(&mut this_data, &mut run_test_data, &param, running)
     } else {
         ga::ga(&mut my_data, &mut run_test_data, &param, running)
@@ -233,11 +231,11 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     //        }
     //    };
     let generations = populations.len();
-    let population= &mut populations[generations-1];
+    let mut population = populations[generations-1].clone();
 
-        debug!("Length of population {}",population.individuals.len());
-        let nb_model_to_test = if param.general.nb_best_model_to_test>0 {param.general.nb_best_model_to_test as usize} else {population.individuals.len()};
-        debug!("Testing {} models",nb_model_to_test);
+    debug!("Length of population {}",population.individuals.len());
+    let nb_model_to_test = if param.general.nb_best_model_to_test>0 {param.general.nb_best_model_to_test as usize} else {population.individuals.len()};
+    debug!("Testing {} models",nb_model_to_test);
 
     let mut test_data=Data::new();
     if param.data.Xtest.len()>0 && param.data.ytest.len()>0  {
@@ -273,11 +271,32 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
         info!("{}", population.display(&my_data, None, param));
     }
 
-    (populations,my_data,test_data) 
+    let exec_time = start.elapsed().as_secs_f64();
+    let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    Experiment {
+        id: format!("{}_ga_{}", param.general.save_exp.split('.').next().unwrap(), timestamp).to_string(),
+        gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
+
+        train_data: my_data,
+        test_data: Some(test_data),
+
+        final_population: Some(population),
+        collection: Some(populations),
+        
+        importance_collection: None,
+        execution_time: exec_time,
+        parameters: param.clone(),
+
+        cv_folds_ids: None,
+        others: None
+    }
 
 }
 
-pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+    let start = std::time::Instant::now();
     let mut data = Data::new();
     let _ = data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
     data.set_classes(param.data.classes.clone());
@@ -305,12 +324,31 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
         info!("{}", top_ten_pop.display(&data, None, param));
     }
 
+    let exec_time = start.elapsed().as_secs_f64();
+    let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    Experiment {
+        id: format!("{}_beam_{}", param.general.save_exp.split('.').next().unwrap(), timestamp).to_string(),
+        gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
 
-    (collection, data, data_test)
+        train_data: data,
+        test_data: Some(data_test),
+
+        final_population: Some(final_pop),
+        collection: Some(collection),
+        
+        importance_collection: None,
+        execution_time: exec_time,
+        parameters: param.clone(),
+
+        cv_folds_ids:None,
+        others:None
+    }
 }
 
-pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
-
+pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+    let start = std::time::Instant::now();
     info!("\x1b[1;93mCross-Validation\x1b[0m\n-----------------------------------------------------");
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
     let mut data = Data::new();
@@ -319,47 +357,72 @@ pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,
     info!("\x1b[2;97m{:?}\x1b[0m", data); 
 
     // CV
-    let mut crossval = cv::CV::new(&data, param.cv.fold_number, &mut rng);
+    let mut cv_data = cv::CV::new(&data, param.cv.fold_number, &mut rng);
     let mut cv_param = param.clone();
     cv_param.general.thread_number = param.general.thread_number/param.cv.fold_number; 
     cv_param.general.gpu = false;
 
-    if cv_param.general.thread_number>= param.cv.fold_number {
+    if cv_param.general.thread_number >= param.cv.fold_number {
         info!("\x1b[1;93mCross-validation parallelization using {} threads per fold\x1b[0m", cv_param.general.thread_number);
     }
 
-    let results = crossval.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
+    cv_data.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
         match param.general.algo.as_str() {
             "ga" => ga::ga(d, &mut None, p, r),
             "beam" => beam::beam(d, &mut None, p, r),
             _ => panic!("Such algorithm is not available with cross-validation."),
         }
     }, &cv_param, cv_param.general.thread_number, running);
-    
-    
-    let mut cv_fbm_pop = Population::new();
 
-    debug!("Computing importances...");
-    // Computing OOB with validation folds based on FBM
-    let (cv_importances, cv_fbm_pop) =
-        crossval.compute_importance_from_cv_results(
-            results,
-            param,
-            param.cv.cv_best_models_ci_alpha,
-            param.cv.n_permutations_oob,
-            &mut rng,
-            &param.cv.importance_aggregation,
-            param.cv.scaled_importance,
-            true
-        );
+    let cv_folds_train_test_ids: Vec<(Vec<String>, Vec<String>)> = cv_data.training_sets
+        .iter()
+        .zip(cv_data.validation_folds.iter())
+        .map(|(train_data, valid_data)| {
+            (train_data.samples.clone(), valid_data.samples.clone())
+        })
+        .collect();
 
-    println!("{}", cv_importances.display_feature_importance_terminal(&data, 30));
+    let all_fold_fbms: Vec<(Population, Data)> = (0..cv_data.validation_folds.len())
+        .map(|i| cv_data.extract_fold_fbm(i, param.cv.cv_best_models_ci_alpha))
+        .collect();
 
-    (vec![cv_fbm_pop],data,Data::new()) 
+    let mut merged_fbm = Population::new();
+    for (fold_fbm, _) in &all_fold_fbms {
+        merged_fbm.individuals.extend(fold_fbm.individuals.clone());
+    }
+
+    for (i, (fold_fbm, valid_data)) in all_fold_fbms.iter().enumerate() {
+        info!("\x1b[1;93mFold #{}\x1b[0m", i+1);
+        // Validation fold = valid_data, train complet = &self.train_data
+        info!("{}", fold_fbm.clone().display(valid_data, Some(&data), &param));
+    }
+
+    let exec_time = start.elapsed().as_secs_f64();
+    let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    Experiment {
+        id: format!("{}_cv_{}_{}", param.general.save_exp.split('.').next().unwrap(), param.general.algo, timestamp).to_string(),
+        gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
+
+        train_data: data,
+        test_data: None,
+
+        final_population: Some(merged_fbm),
+        collection: cv_data.fold_populations,
+        
+        importance_collection: None,
+        execution_time: exec_time,
+
+        cv_folds_ids: Some(cv_folds_train_test_ids),
+        parameters: param.clone(),
+        others: None
+    }
 
 }
 
-pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+    let start = std::time::Instant::now();
     warn!("MCMC algorithm is still in beta!");
     warn!(" - results cannot be guaranteed,");
     warn!(" - isn't GPU-compatible,");
@@ -389,7 +452,7 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                 data.feature_selection.len(), param.mcmc.nmin as usize)
     }
         
-    let mcmc_result;
+    let mut mcmc_result;
     if param.mcmc.nmin != 0 && data.feature_selection.len() > param.mcmc.nmin as usize {
         // Executing SBS
         info!("Launching MCMC with SBS (λ={}, {}<->{} features...)", 
@@ -421,6 +484,7 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
     // Building complete posterior distribution
     let mut pop: Population = mcmc_result.population;
+    mcmc_result.population = Population::new();
 
     // Using MCMC models to compute prediction on test data
     let mut test_data = Data::new();
@@ -432,5 +496,25 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
     info!("{}", pop.display(&data, Some(&test_data), &param));
     
-    (vec![pop], data, test_data)
+    let exec_time = start.elapsed().as_secs_f64();
+    let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    Experiment {
+        id: format!("{}_mcmc_{}_{}", param.general.save_exp.split('.').next().unwrap(), param.general.algo, timestamp).to_string(),
+        gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
+
+        train_data: data,
+        test_data: Some(test_data),
+
+        final_population: Some(pop),
+        collection: None,
+        
+        importance_collection: None,
+        execution_time: exec_time,
+
+        cv_folds_ids: None,
+        parameters: param.clone(),
+        others: Some(ExperimentMetadata::MCMC { trace: mcmc_result })
+    }
 }

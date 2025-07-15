@@ -17,14 +17,15 @@ general:
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
   keep_trace: false                           # keep this setting to false when using gpredomics as a binary
-  save_exp: test.bin
+  save_exp: exp.json                          # uncomment to save experiment in save_exp, which can be reloaded with --load save_exp. Extention should be json, msgpack or bin
+  compute_importance: false                   # should importance be computed ?
 
 cv:
   fold_number: 5                              # number of folds for cross-validation (k-folds strategy).
   cv_best_models_ci_alpha: 0.05               # alpha for the family of best model confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
   n_permutations_oob: 500                     # number of permutations per feature for OOB importance.
   scaled_importance: true                     # scale importance by feature prevalence inside folds.
-  importance_aggregation: Mean                # aggregation method for importances: "Mean" or "Median".     
+  importance_aggregation: mean                # aggregation method for importances: "mean" or "median".     
 
 data:
   X: "samples/Qin2014/Xtrain.tsv"             # the features of the train data set 
@@ -68,7 +69,6 @@ mcmc:
   n_burn: 5000                                # number of MCMC iterations ignored (typically first half of all iterations)
   lambda: 0.001                               # bayesian prior parameter for coefficients a, b, c 
   nmin: 10                                    # minimum number of features in a model after feature elimination | 0 : keep all features (deactivate SBS search)
-  #save_trace_outdir: "./"                    # outdir to save trace of the MCMC model used for the final prediction
 
 gpu:
   fallback_to_cpu: true                       # executes the code on the CPU (integrated graphics) if there is no GPU available (recommanded)

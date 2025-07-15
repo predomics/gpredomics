@@ -14,8 +14,7 @@ use crate::Population;
 use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value};
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use rand::SeedableRng;
-use rand::RngCore;
-use log::{debug, error};
+use log::{debug};
 use statrs::function::logistic::logistic;
 use crate::utils::serde_json_hashmap_numeric;
 
@@ -707,7 +706,7 @@ impl Individual {
 
     /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
 /// uses mean decreased AUC
-    pub fn compute_oob_feature_importance(&self, data: &Data, permutations: usize, features_to_process: &[usize], feature_seeds: &HashMap<usize, Vec<u64>>, rng: &mut ChaCha8Rng) -> ImportanceCollection {
+    pub fn compute_oob_feature_importance(&self, data: &Data, permutations: usize, features_to_process: &[usize], feature_seeds: &HashMap<usize, Vec<u64>>) -> ImportanceCollection {
         let baseline_auc = self.compute_new_auc(data);
         let mut importances = Vec::new();
         
