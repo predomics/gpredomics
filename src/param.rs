@@ -15,6 +15,7 @@ pub struct Param {
 }
 
 #[derive(Debug,Serialize,Deserialize,Clone)]
+#[allow(non_camel_case_types)]
 pub enum FitFunction {
     auc,
     specificity,
@@ -30,9 +31,10 @@ pub enum GpuMemoryPolicy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(non_camel_case_types)]
 pub enum ImportanceAggregation {
-    Mean,
-    Median
+    mean,
+    median
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -75,7 +77,9 @@ pub struct General {
     #[serde(default = "feature_keep_trace_default")]   
     pub keep_trace: bool,
     #[serde(default = "save_experiment_default")] 
-    pub save_exp: String
+    pub save_exp: String,
+    #[serde(default = "false_default")] 
+    pub compute_importance: bool,
     
 }
 
@@ -277,7 +281,7 @@ fn fold_number_default() -> usize { 5 }
 fn cv_best_models_ci_alpha_default() -> f64 { 0.05 }
 fn n_permutations_oob_default() -> usize { 100 }
 fn scaled_importance_default() -> bool { false }
-fn importance_aggregation_default() -> ImportanceAggregation { ImportanceAggregation::Mean }
+fn importance_aggregation_default() -> ImportanceAggregation { ImportanceAggregation::mean }
 fn penalty_default() -> f64 { 0.0 }
 fn fit_default() -> FitFunction { FitFunction::auc }
 fn nb_best_model_to_test_default() -> u32 { 10 }

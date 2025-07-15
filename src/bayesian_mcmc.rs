@@ -24,7 +24,6 @@ use crate::individual::{Individual, data_type, MCMC_GENERIC_LANG};
 use crate::Population;
 use crate::param::Param;
 
-use crate::utils::serde_json_hashmap_numeric;
 use serde;
 
 const BIG_NUMBER: f64 = 100.0;
@@ -473,67 +472,6 @@ impl MCMCAnalysisTrace {
     //     self.clone()
     // }
 
-    pub fn export_to_files(&self, data: &Data, outdir: &str) -> std::io::Result<()> {
-        use std::fs::File;
-        use std::io::{BufWriter, Write};
-        use std::fs;
-        
-        fs::create_dir_all(outdir)?;
-        
-        // Export p_mean
-        let p_mean_path = format!("{}/P_mean.tsv", outdir);
-        let mut file = BufWriter::new(File::create(&p_mean_path)?);
-        writeln!(file, "FEATURE\tPOS\tNUL\tNEG")?;
-        let mut feature_idx: Vec<_> = self.feature_prob.keys().collect();
-        feature_idx.sort();
-        for idx in &feature_idx {
-            let (pos, neutral, neg) = self.feature_prob.get(idx).unwrap();
-            writeln!(file, "{}\t{}\t{}\t{}", data.features[**idx], pos, neutral, neg)?;
-        }
-        
-        // Export betas coefficients
-        let beta_trace_path = format!("{}/betas.tsv", outdir);
-        let mut file = BufWriter::new(File::create(&beta_trace_path)?);
-        writeln!(file, "a\tb\tc")?;
-        for ind in &self.population.individuals {
-            let beta = ind.betas.as_ref().expect("MCMC individual without betas");
-            writeln!(file, "\t{}\t{}\t{}", beta.a, beta.b, beta.c)?;
-        }
-
-        // Export features
-        let model_trace_path = format!("{}/features.tsv", outdir);
-        let mut file = BufWriter::new(File::create(&model_trace_path)?);
-        let names: Vec<String> = feature_idx.iter()
-            .map(|&idx| data.features[*idx].clone())
-            .collect();
-        writeln!(file, "{}", names.join("\t"))?;
-        for ind in &self.population.individuals {
-            let row: Vec<String> = feature_idx
-                .iter()
-                .map(|orig| ind.features.get(orig).copied().unwrap_or(0).to_string())
-                .collect();
-            writeln!(file, "\t{}", row.join("\t"))?;
-        }
-            
-        // Export statistics
-        let means_vars_path = format!("{}/means_vars.tsv", outdir);
-        let mut file = BufWriter::new(File::create(&means_vars_path)?);
-        
-        writeln!(file, "parameter\tmean\tvariance")?;
-        writeln!(file, "a\t{}\t{}", self.beta_mean[0], self.beta_var[0])?;
-        writeln!(file, "b\t{}\t{}", self.beta_mean[1], self.beta_var[1])?;
-        writeln!(file, "c\t{}\t{}", self.beta_mean[2], self.beta_var[2])?;
-        
-        for (idx, (mean, variance)) in self.model_stats.iter() {
-                writeln!(file, "{}\t{}\t{}", data.features[*idx], mean, variance)?;
-        }
-        
-        writeln!(file, "logPost\t{}\t{}", self.log_post_mean, self.log_post_var)?;
-        writeln!(file, "Post\t{}\t{}", self.post_mean, self.post_var)?;
-        
-        Ok(())
-    }
-
     // Return the feature_prob in a ImportanceCollectiob
     pub fn get_importance(&self) -> ImportanceCollection {
         let mut importances = Vec::with_capacity(self.feature_prob.len() * 2);
@@ -879,14 +817,6 @@ pub fn get_best_mcmc_sbs(data: &Data, results: &[(u32, f64, f64, f64, usize, Cha
     let bp = BayesPred::new(&data_filtered, param.mcmc.lambda,individual::data_type(data_type), param.general.data_type_epsilon);
     let rng = &mut best_models.5.clone();
     let res: MCMCAnalysisTrace = compute_mcmc(&bp, param, rng);
-
-    if param.mcmc.save_trace_outdir.len() > 0 {
-        if let Err(e) = res.clone().export_to_files(&data, &param.mcmc.save_trace_outdir.to_string()) {
-            error!("Failed to export MCMC results: {}", e);
-        } else {
-            info!("Best MCMC trace saved to {}", &param.mcmc.save_trace_outdir.to_string())
-        }
-    }
     
     let elapsed = now.elapsed();
     info!("Elapsed: {:.2?}", elapsed);
@@ -968,20 +898,3 @@ mod tests {
     }
 
 }
-
-  
-// pub fn save_results_to_tsv(results: &[(u32, f64, f64, f64, String)], path: &str) -> std::io::Result<()> {
-//     let file = File::create(path)?;
-//     let mut writer = BufWriter::new(file);
-    
-//     
-//     writeln!(writer, "nfeat\tPosterior mean\tLog Posterior mean\tLog Evidence\tFeature to drop")?;
-    
-//     
-//     for (nfeat, post_mean, log_post, log_evidence, feature_name) in results {
-//         writeln!(writer, "{}\t{}\t{}\t{}\t{}", nfeat, post_mean, log_post, log_evidence, feature_name)?;
-//     }
-    
-//     Ok(())
-// }
-

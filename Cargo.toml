@@ -25,6 +25,7 @@ fishers_exact = "1.0.1"
 toml = "0.5"
 argmin = "0.10.0"
 rmp-serde = "1.1"
+clap = { version = "4.0", features = ["derive"] }
 
 [profile.flamegraph]
 inherits = "release"        # Inherit most settings from the release profile

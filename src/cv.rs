@@ -3,7 +3,7 @@ use crate::{data::Data, param::ImportanceAggregation};
 use crate::population::Population;
 use crate::param::Param;
 use crate::utils;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use rand_chacha::ChaCha8Rng;
 use log::info;
 use serde::{Serialize, Deserialize};
@@ -18,7 +18,8 @@ use std::sync::atomic::AtomicBool;
  #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CV {
     pub validation_folds: Vec<Data>,
-    pub training_sets: Vec<Data>
+    pub training_sets: Vec<Data>,
+    pub fold_populations: Option<Vec<Population>>
 }
 
 impl CV {
@@ -54,126 +55,132 @@ impl CV {
 
         CV {
             validation_folds: validation_folds,
-            training_sets: training_sets
+            training_sets: training_sets,
+            fold_populations: None
         }
     }
 
-    pub fn pass<F>(
-        &mut self,
-        algo: F,
-        param: &Param,
-        thread_number: usize,
-        running: Arc<AtomicBool>
-    ) -> Vec<(Population, Data, Data)>
-    where F: Fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population> + std::marker::Send + std::marker::Sync, {
-        // Configure the thread pool with the specified thread number
-        let thread_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(thread_number)
-            .build()
-            .unwrap();
+    pub fn pass<F>(&mut self, algo: F, param: &Param, thread_number: usize, running: Arc<AtomicBool>)
+        where F: Fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population> + Send + Sync 
+        {
+            let thread_pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(thread_number)
+                .build()
+                .unwrap();
 
-        // Arc-Mutex to collect results from threads safely
-        let results_per_fold = Arc::new(Mutex::new(Vec::new()));
+            let populations: Vec<Population> = thread_pool.install(|| {
+                self.training_sets
+                    .par_iter_mut()
+                    .zip(self.validation_folds.par_iter_mut())
+                    .enumerate()
+                    .filter_map(|(i, (train, test))| {
+                        info!("\x1b[1;93mCompleting fold #{}...\x1b[0m", i+1);
 
-        thread_pool.install(|| {
-            self.training_sets
-                .par_iter_mut()
-                .zip(self.validation_folds.par_iter_mut())
-                .enumerate()
-                .for_each(|(i, (train, test))| {
-                    // Train and evaluate model
-                    info!("\x1b[1;93mCompleting fold #{}...\x1b[0m", i+1);
+                        let last_generation: Population = algo(train, param, Arc::clone(&running)).pop().unwrap();
+                        
+                        if let Some(best_model) = last_generation.clone().individuals.into_iter().take(1).next() {
+                            let train_auc = best_model.auc;
+                            let test_auc = best_model.compute_new_auc(test);
 
-                    let last_generation: Population =
-                        algo(train, param, Arc::clone(&running)).pop().unwrap();
-                    let best_model = last_generation.clone().individuals.into_iter().take(1).next().unwrap();
-                    let train_auc = best_model.auc;
-                    let test_auc = best_model.compute_new_auc(test);
+                            info!(
+                                "\x1b[1;93mFold #{} completed | Best train AUC: {:.3} | Associated validation fold AUC: {:.3}\x1b[0m",
+                                i+1, train_auc, test_auc
+                            );
 
-                    info!(
-                        "\x1b[1;93mFold #{} completed | Best train AUC: {:.3} | Associated validation fold AUC: {:.3}\x1b[0m",
-                        i+1, train_auc, test_auc
-                    );
+                            Some(last_generation)
+                        } else {
+                            info!("\x1b[1;93mFold #{} skipped - no individuals found\x1b[0m", i+1);
+                            None
+                        }
+                    })
+                    .collect()
+                    
+            });
 
-                    // Store the results
-                    results_per_fold
-                        .lock()
-                        .unwrap()
-                        .push((last_generation, train.clone(), test.clone()));
-                });
-        });
+            self.fold_populations = Some(populations);
+        }
 
-        // Extract results from the Arc-Mutex
-        Arc::try_unwrap(results_per_fold)
-            .unwrap()
-            .into_inner()
-            .unwrap()
-    }
-
-    pub fn compute_importance_from_cv_results(&self, cv_results: Vec<(Population, Data, Data)>, cv_param: &Param, ci_alpha: f64, permutations: usize, main_rng: &mut ChaCha8Rng, aggregation_method: &ImportanceAggregation, scaled_importance: bool, cascade: bool) -> (ImportanceCollection, Population) {
-        let mut cv_fbm_pop = Population::new();
+    pub fn compute_importance_from_cv(
+        &self, 
+        cv_param: &Param, 
+        ci_alpha: f64,
+        permutations: usize, 
+        main_rng: &mut ChaCha8Rng, 
+        aggregation_method: &ImportanceAggregation, 
+        scaled_importance: bool, 
+        cascade: bool,
+        on_validation: bool,
+    ) -> Result<ImportanceCollection, String> {
+        let fold_populations = self.fold_populations
+            .as_ref()
+            .ok_or("No population available. Run pass() first.")?;
+        
+        if fold_populations.len() != self.training_sets.len() || 
+        fold_populations.len() != self.validation_folds.len() {
+            return Err(format!(
+                "Inconsistency: {} populations, {} training sets, {} validation folds",
+                fold_populations.len(),
+                self.training_sets.len(),
+                self.validation_folds.len()
+            ));
+        }
+        
         let mut importance_values: HashMap<usize, Vec<f64>> = HashMap::new();
         let mut features_significant_observations: HashMap<usize, usize> = HashMap::new();
-        let mut features_classes: HashMap<usize, i8> = HashMap::new();
-        
         let mut importances = Vec::new();
-        for (i, (mut fold_last_population, train, mut test)) in cv_results.clone().into_iter().enumerate() {
-            fit_fn(&mut fold_last_population, &mut test, &mut None, &None, &None, cv_param);
+        
+        for i in 0..fold_populations.len() {
+            // 2.1. Extraire FBM et Data validation
+            let (mut fold_last_fbm, valid_data) = self.extract_fold_fbm(i, ci_alpha);
+            let train_data = &self.training_sets[i];
             
-            let mut fold_last_fbm = fold_last_population.select_best_population(ci_alpha);
-            fold_last_fbm = fold_last_fbm.sort();
+            // 2.2. Appliquer la fonction de fitting sur la FBM avec les bonnes données
+            fit_fn(&mut fold_last_fbm, &mut valid_data.clone(), &mut None, &None, &None, cv_param);
             
-            let fold_importance_collection = fold_last_fbm.compute_pop_oob_feature_importance(
-                &self.validation_folds[i],
+            // 2.3. Choisir le dataset pour l’importance
+            let importance_data = if on_validation { &valid_data } else { train_data };
+            
+            // 2.4. Calculer l’importance OOB intra-fold
+            let fold_imp = fold_last_fbm.compute_pop_oob_feature_importance(
+                importance_data,
                 permutations,
                 main_rng,
                 aggregation_method,
                 scaled_importance,
                 cascade,
-                Some(i), // fold ID
+                Some(i),
             );
             
-            for importance in &fold_importance_collection.importances {
-                match importance.scope {
-                    ImportanceScope::Collection { .. } => { panic!("CV.compute_importance_from_cv_results: You should not be here!") }
-                    ImportanceScope::Individual { .. } => { importances.push(importance.clone())}
+            // 2.5. Récolter les importances et comptages
+            for imp in &fold_imp.importances {
+                match imp.scope {
+                    ImportanceScope::Individual { .. } => importances.push(imp.clone()),
                     ImportanceScope::Population { .. } => {
-                    importance_values
-                        .entry(importance.feature_idx)
-                        .or_insert_with(Vec::new)
-                        .push(importance.importance);
-                    
-                    importances.push(importance.clone());
-
-                    if train.feature_class.contains_key(&importance.feature_idx) {
-                        *features_significant_observations
-                            .entry(importance.feature_idx)
-                            .or_insert(0) += 1;
-                        
-                        let associated_class = train.feature_class[&importance.feature_idx];
-                        let class_value = if associated_class == 0 { 
-                            -1 
-                        } else if associated_class == 1 { 
-                            1 
-                        } else { 
-                            0 
-                        };
-                        features_classes.insert(importance.feature_idx, class_value);
-                    }      
-                }
+                        importance_values
+                            .entry(imp.feature_idx)
+                            .or_default()
+                            .push(imp.importance);
+                        importances.push(imp.clone());
+                        if train_data.feature_class.contains_key(&imp.feature_idx) {
+                            *features_significant_observations
+                                .entry(imp.feature_idx)
+                                .or_insert(0) += 1;
+                        }
+                    }
+                    _ => {}
                 }
             }
-            cv_fbm_pop.individuals.extend(fold_last_fbm.individuals);
+            
         }
-        
-        let total_folds = cv_results.len();
+
+        let total_folds = fold_populations.len();
         
         for (feature_idx, values) in importance_values {
             if values.is_empty() { continue; }
             
             let (agg_importance, agg_dispersion) = match aggregation_method {
-                ImportanceAggregation::Mean   => mean_and_std(&values),
-                ImportanceAggregation::Median => {
+                ImportanceAggregation::mean   => mean_and_std(&values),
+                ImportanceAggregation::median => {
                     let mut buf = values.clone();
                     let med = median(&mut buf);
                     (med, mad(&buf))
@@ -201,13 +208,56 @@ impl CV {
             importances.push(collection_importance);
         }
         
-        (
-            ImportanceCollection { 
-                importances: importances 
-            }, 
-            cv_fbm_pop
-        )
+        Ok(ImportanceCollection { importances: importances })
     }
+
+    pub fn extract_fold_fbm(&self, fold_idx: usize, ci_alpha: f64) -> (Population, Data) {
+        let pop = &self.fold_populations
+            .as_ref().expect("No population available. Run pass() first.")[fold_idx];
+        let fbm = pop.select_best_population(ci_alpha).sort();
+        let valid = self.validation_folds[fold_idx].clone();
+        (fbm, valid)
+    }
+
+    pub fn reconstruct(data: &Data, fold_train_valid_names: Vec<(Vec<String>, Vec<String>)>, fold_populations: Vec<Population>) -> Result<CV, String> {
+        let mut validation_folds = Vec::new();
+        let mut training_sets = Vec::new();
+        
+        if fold_train_valid_names.len() != fold_populations.len() {
+            return Err(format!(
+                "Mismatch: {} folds vs {} populations", 
+                fold_train_valid_names.len(), 
+                fold_populations.len()
+            ));
+        }
+        
+        for (train_names, test_names) in &fold_train_valid_names {
+            let train_indices: Vec<usize> = train_names
+                .iter()
+                .map(|name| data.samples.iter().position(|s| s == name))
+                .collect::<Option<Vec<_>>>()
+                .ok_or("Sample name can not be found (Train)")?;
+            
+            let test_indices: Vec<usize> = test_names
+                .iter()
+                .map(|name| data.samples.iter().position(|s| s == name))
+                .collect::<Option<Vec<_>>>()
+                .ok_or("Sample name can not be found (Validation)")?;
+            
+            let training_set = data.subset(train_indices);
+            let validation_fold = data.subset(test_indices);
+            
+            training_sets.push(training_set);
+            validation_folds.push(validation_fold);
+        }
+        
+        Ok(CV {
+            validation_folds,
+            training_sets,
+            fold_populations: Some(fold_populations),
+        })
+    }
+
 }
 
 // unit tests
