@@ -84,7 +84,7 @@ fn random_normal(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 
 // Structure for making predictions using an ensemble of models from MCMC sampling.
 // Contains multiple model configurations and their parameters for robust prediction.
 // <=> Density
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct Betas {
     pub a: f64,
     pub b: f64,
@@ -306,7 +306,7 @@ impl CostFunction for NegLogPostToMinimize<'_> {
 // Structure for storing and processing results from MCMC sampling.
 // Contains model statistics, feature probabilities, parameter estimates,
 // and optional traces of the sampling process.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MCMCAnalysisTrace {
     pub population: Population,
     pub feature_selection: Vec<usize>,

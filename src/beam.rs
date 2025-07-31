@@ -126,17 +126,17 @@ fn beam_pop_from_combinations(features_combination: Vec<Vec<usize>>, ind:Individ
     Population { individuals: ind_vec }
 }
 
-fn count_feature_appearances(population: &Population) -> HashMap<usize, usize> {
-    let mut feature_counts = HashMap::new();
+// fn count_feature_appearances(population: &Population) -> HashMap<usize, usize> {
+//     let mut feature_counts = HashMap::new();
 
-    for individual in &population.individuals {
-        for feature in individual.features.keys() {
-            *feature_counts.entry(*feature).or_insert(0) += 1;
-        }
-    }
+//     for individual in &population.individuals {
+//         for feature in individual.features.keys() {
+//             *feature_counts.entry(*feature).or_insert(0) += 1;
+//         }
+//     }
 
-    feature_counts
-}
+//     feature_counts
+// }
 
 // fn get_important_features(feature_counts: HashMap<usize, usize>, nb_features_to_keep: usize) -> Vec<usize> {
 //     let mut important_features: Vec<_> = feature_counts.into_iter().collect();
@@ -202,7 +202,11 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
 
     let mut collection: Vec<Population> = vec![];
     let mut pop = Population::new();
-    data.select_features(&param);
+    
+    info!("Selecting features...");
+    data.select_features(param);
+    info!("{} features selected.",data.feature_selection.len());
+    debug!("FEATURES {:?}",data.feature_class);
 
     // Building lang_and_type_pop population 
     let mut languages: Vec<u8> = param.general.language.split(",").map(language).collect();
@@ -220,8 +224,8 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
 
     // Cross-validation initialization
     let mut cv: Option<CV> = None;
-    if param.general.overfit_penalty != 0.0 {
-        let folds_nb = if param.cv.fold_number > 1 { param.cv.fold_number } else { 3 };
+    if param.cv.overfit_penalty != 0.0 {
+        let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 3 };
         info!("Learning on {:?}-folds.", folds_nb);
         let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
         cv = Some(CV::new(&data, folds_nb, &mut rng));
@@ -229,7 +233,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
 
     // Building the GPU assay and checking the prerequisites
     let gpu_assay = if param.general.gpu  {
-        if param.general.overfit_penalty == 0.0 {
+        if param.cv.overfit_penalty == 0.0 {
             let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
             let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
             if param.beam.max_nb_of_models == 0 {
@@ -271,15 +275,12 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
     // Fitting first Population composed of all k_start combinations
     let test_assay: Option<GpuAssay> = None;
     if let Some(ref cv) = cv {
-        debug!("Computing penalized AUC (with cross-validation)...");
-        pop.fit_on_folds(&data, cv, &param);
-        if param.general.keep_trace {
-            pop.compute_all_metrics(&data);
-        } 
+        debug!("Fitting population on folds...");
+        pop.fit_on_folds(cv, &param, &vec![None; param.cv.inner_folds]);
+        if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
     }  else {
         debug!("Fitting population...");
         ga::fit_fn(&mut pop, data, &mut None, &gpu_assay, &test_assay, param);
-        //pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_trace);
     }
 
     pop = pop.sort();
@@ -298,6 +299,10 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
 
             // Dynamically select the best_models where features_to_keep are picked
             debug!("Selecting models...");
+
+            if param.ga.forced_diversity_pct > 0.0 {
+                pop = pop.filter_by_signed_jaccard_dissimilarity(param.ga.forced_diversity_pct, true)
+            }
             let best_pop = pop.select_best_population(param.beam.best_models_ci_alpha);
 
             debug!("Kept {:?} individuals from the family of best models of k={:?}", best_pop.individuals.len(), ind_k-1);
@@ -431,15 +436,12 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
             }
 
             if let Some(ref cv) = cv {
-                debug!("Computing penalized AUC (with cross-validation)...");
-                pop.fit_on_folds(&data, cv, &param);
-                if param.general.keep_trace {
-                    pop.compute_all_metrics(&data);
-                } 
+                debug!("Fitting population on folds...");
+                pop.fit_on_folds(cv, &param, &vec![None; param.cv.inner_folds]);
+                if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
             }  else {
                 debug!("Fitting population...");
                 ga::fit_fn(&mut pop, data, &mut None, &gpu_assay, &test_assay, param);
-                //pop.auc_fit(&data, param.general.k_penalty, param.general.thread_number, param.general.keep_trace);
             }
 
             debug!("Sorting population...");
@@ -452,17 +454,19 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
                 collection.push(sorted_pop);
             }
 
-            let best_model = &pop.individuals[0];
-            debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}", 
-                best_model.auc,
-                best_model.get_language(),
-                best_model.get_data_type(),
-                best_model.fit, 
-                best_model.specificity,
-                best_model.sensitivity,
-                &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/pop.individuals.len() as f64,
-                &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/pop.individuals.len() as f64
-            );
+            if pop.individuals.len() > 0 {
+                let best_model = &pop.individuals[0];
+                debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}", 
+                    best_model.auc,
+                    best_model.get_language(),
+                    best_model.get_data_type(),
+                    best_model.fit, 
+                    best_model.specificity,
+                    best_model.sensitivity,
+                    &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/pop.individuals.len() as f64,
+                    &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/pop.individuals.len() as f64
+                );
+            }
 
             // Stop the loop if someone kill the program
             if !running.load(Ordering::Relaxed) {
@@ -470,16 +474,13 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
             }
         }});
 
+        
+
         let elapsed = time.elapsed();
         info!("Beam algorithm ({} mode) computed {:?} generations in {:.2?}", param.beam.method, collection.len(), elapsed);
 
         if collection.is_empty() {
             error!("Beam did not produce any results because the criteria for selecting the best features was too restrictive. Please lower best_models_ci_alpha to allow results.")
-        }
-
-        if param.general.cv == true {
-            // To enable cross-validation, best models in the collection are returned as the last population.
-            collection.push(keep_n_best_model_within_collection(&collection, 20000));
         }
         
         collection

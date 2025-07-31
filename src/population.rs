@@ -1,23 +1,25 @@
 use serde::{Serialize, Deserialize};
-use crate::param::{FitFunction, ImportanceAggregation};
-use crate::utils::{conf_inter_binomial, compute_roc_and_metrics_from_value, compute_auc_from_value};
+use crate::param::{FitFunction};
+use crate::experiment::ImportanceAggregation;
+use crate::utils::{conf_inter_binomial, compute_roc_and_metrics_from_value, compute_auc_from_value, compute_metrics_from_classes};
 use crate::cv::CV;
 use crate::data::Data;
 use crate::individual::Individual;
 use crate::param::Param;
 use rand::RngCore;
-use rand::SeedableRng;
 use rand::prelude::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use std::mem;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
-use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use crate::utils::{mean_and_std, median, mad};
+use crate::gpu::GpuAssay;
+use crate::ga;
+use log::{warn};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Population {
     pub individuals: Vec<Individual>
 }
@@ -43,8 +45,15 @@ impl Population {
     }
 
     pub fn display(&mut self, data: &Data, data_to_test: Option<&Data>, param: &Param) -> String {
+        let other_set;
+        if param.data.n_validation_samples > 0 {
+            other_set = "Validation"
+        } else {
+            other_set = "Test"
+        }
+
         if param.general.algo == "mcmc" {
-            let mut str: String = format!("Displaying bayesian model with the greatest log evidence. Metrics are shown in the following order: Train/Test.");
+            let mut str: String = format!("Displaying bayesian model with the greatest log evidence. Metrics are shown in the following order: Train/{}.", other_set);
             let (train_auc, train_best_threshold, train_best_acc, train_best_sens, train_best_spec, _) = self.bayesian_compute_roc_and_metrics(&data);
             if let Some(data_to_test) = data_to_test {
                 let (test_auc, test_best_acc, test_best_sens, test_best_spec) = self.bayesian_compute_metrics(&data_to_test, train_best_threshold);
@@ -59,8 +68,7 @@ impl Population {
             str = format!("{}\n\nThese metrics were calculated by optimizing the probability of decision (threshold={:.3} instead of 0.5)", str, train_best_threshold);
             str = format!("{}\nNote: the number of iterations corresponds to the sum of the number of betas and feature coefficient variations, resulting in a number greater than n_iter-n_burn)", str);
             format!("{}\nTo reproduce these results, relaunch this exact training with data to be predicted and/or export the MCMC trace with save_trace_outdir", str)
-        }
-        else {
+        } else {
             let limit:u32;
             if (self.individuals.len() as u32) < param.general.nb_best_model_to_test || param.general.nb_best_model_to_test == 0 {
                 limit = self.individuals.len() as u32
@@ -69,7 +77,7 @@ impl Population {
             }
 
             let mut str: String = if param.general.cv == false {
-                format!("Displaying {} models. Metrics are shown in the following order: Train/Test.", limit)
+                format!("Displaying {} models. Metrics are shown in the following order: Train/{}.", limit, other_set)
             } else {
                 format!("Displaying {} models. Metrics are shown in the following order: Validation fold/Complete train.", limit)
             };
@@ -79,7 +87,8 @@ impl Population {
                     match param.general.fit {
                         FitFunction::sensitivity =>  {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![param.general.fr_penalty, 1.0]));},
                         FitFunction::specificity => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![1.0, param.general.fr_penalty]));},
-                        _ => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, None);}
+                        FitFunction::auc => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, None);},
+                        FitFunction::mcc => {(_, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_mcc_and_metrics(data);}
                     }
                 }
                 if param.general.display_colorful == true && param.general.log_base == "" {
@@ -148,10 +157,27 @@ impl Population {
                 });
         });
     }
+
+    pub fn mcc_fit(&mut self, data: &Data, k_penalty: f64, fr_penalty: f64, thread_number: usize) {
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(thread_number)
+            .build()
+            .unwrap();
+
+        pool.install(|| {
+            self.individuals
+                .par_iter_mut()
+                .for_each(|i| {
+                    (i.fit, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_mcc_and_metrics(&data);
+                    if i.sensitivity < 0.5 { i.fit = i.fit - (1.0 - i.sensitivity) * fr_penalty } 
+                    if i.specificity < 0.5 { i.fit = i.fit - (1.0 - i.specificity) * fr_penalty } 
+                    i.fit = i.fit - i.k as f64 * k_penalty;
+                });
+        });
+    }
     
     pub fn auc_nooverfit_fit(& mut self, data: &Data, k_penalty: f64, test_data: &Data, overfit_penalty: f64,
             thread_number: usize, compute_metrics: bool) {
-        // Create a custom thread pool with 4 threads
         let pool = ThreadPoolBuilder::new()
             .num_threads(thread_number)
             .build()
@@ -231,32 +257,46 @@ impl Population {
     }
 
     // Function for cross-validation
-    pub fn fit_on_folds(&mut self, data: &Data, cv: &CV, param: &Param) {
-        let chunk_size = max(1, self.individuals.len() / (4 * rayon::current_num_threads()));
+    pub fn fit_on_folds(&mut self, cv: &CV, param: &Param, gpu_assays: &Vec<Option<GpuAssay>>) {
+        let num_individuals = self.individuals.len();
+        let num_folds = cv.validation_folds.len();
         
-        self.individuals.par_chunks_mut(chunk_size).for_each(|chunk| {
-            for individual in chunk {
-                let (auc_sum, auc_squared_sum) = cv.validation_folds.par_iter()
-                    .map(|fold| {
-                        let auc = individual.compute_new_auc(fold);
-                        (auc, auc * auc)
-                    })
-                    .reduce(
-                        || (0.0, 0.0),
-                        |(auc_sum1, auc_squared_sum1), (auc_sum2, auc_squared_sum2)| {
-                            (auc_sum1 + auc_sum2, auc_squared_sum1 + auc_squared_sum2)
-                        }
-                    );
-    
-                let num_folds = cv.validation_folds.len() as f64;
-                let average_auc = auc_sum / num_folds;
-                let variance = (auc_squared_sum / (num_folds - 1.0)) - (average_auc * average_auc);
-                individual.auc = individual.compute_auc(&data);
-                individual.fit = average_auc - (param.general.overfit_penalty * variance) - (individual.k as f64 * param.general.k_penalty);
+        let mut fold_fits = vec![vec![0.0; num_folds]; num_individuals];
+        
+        for (fold_idx, fold) in cv.validation_folds.iter().enumerate() {
+            let mut fold_data = fold.clone();
+            let fold_gpu_assay = &gpu_assays[fold_idx];
+            ga::fit_fn(self, &mut fold_data, &mut None, fold_gpu_assay, &None, param);
+
+            for (ind_idx, individual) in self.individuals.iter().enumerate() {
+                fold_fits[ind_idx][fold_idx] = individual.fit;
             }
-        });
+        }
+
+        for (ind_idx, individual) in self.individuals.iter_mut().enumerate() {
+            let scores = &fold_fits[ind_idx];
+            let num_folds = scores.len() as f64;
+            
+            let average_score = scores.iter().sum::<f64>() / num_folds;
+            
+            let variance = if num_folds > 1.0 {
+                let sum_squared_diffs = scores.iter()
+                    .map(|&x| (x - average_score).powi(2))
+                    .sum::<f64>();
+                sum_squared_diffs / (num_folds - 1.0)
+            } else {
+                0.0
+            };
+
+            // let min_fit = scores.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+
+            // individual.fit = min_fit - individual.k as f64 * param.general.k_penalty;
+
+            individual.fit = average_score - variance.sqrt() * param.cv.overfit_penalty - individual.k as f64 * param.general.k_penalty;
+            
+        }
     }
-    
+
 
     pub fn select_best_population(&self, alpha:f64) -> Population { 
         // (Family of best models)
@@ -272,19 +312,21 @@ impl Population {
         }
 
         // Control the distribution of evaluation metric
-        if eval[0] > 1.0 && eval.last().unwrap_or(&0.0) < &0.0 {
-            panic!("Evaluation metric should be in the [0, 1] interval");
-        } 
+        if &eval[0] > &1.0 || &eval[0] < &0.0 {
+           warn!("Evaluation metric should be in the [0, 1] interval to compute Family of Best Models");
+           warn!("Keeping only Top 5%...");
+           best_pop = self.select_first_pct(5.0).0;
+        } else {
+            let (lower_bound, _, _) = conf_inter_binomial(eval[0], self.individuals.len(), alpha);
 
-        let (lower_bound, _, _) = conf_inter_binomial(eval[0], self.individuals.len(), alpha);
-
-        for ind in &self.individuals {
-            if ind.fit > lower_bound {
-                best_pop.individuals.push(ind.clone());
-            } 
-            // indivduals are theoricaly sorted by fit
-            else {
-                break
+            for ind in &self.individuals {
+                if ind.fit > lower_bound {
+                    best_pop.individuals.push(ind.clone());
+                } 
+                // indivduals are theoricaly sorted by fit
+                else {
+                    break
+                }
             }
         }
 
@@ -333,12 +375,24 @@ impl Population {
 
     }
 
-    pub fn compute_all_metrics(&mut self, data: &Data) {
-        self.individuals
-            .par_iter_mut()
-            .for_each(|ind| {
-                (ind.auc, ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity, _) = ind.compute_roc_and_metrics(data, None);
-            });
+    pub fn compute_all_metrics(&mut self, data: &Data, method: &FitFunction) {
+        match method {
+            FitFunction::mcc => {
+                self.individuals
+                    .par_iter_mut()
+                    .for_each(|ind| {
+                        (_, ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity) = ind.compute_mcc_and_metrics(data);
+                    });
+                },
+                
+            _ => {
+                self.individuals
+                    .par_iter_mut()
+                    .for_each(|ind| {
+                        (ind.auc, ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity, _) = ind.compute_roc_and_metrics(data, None);
+                    });
+            }
+        }
     }
 
     // Genealogy functions
@@ -399,7 +453,6 @@ impl Population {
             })
             .collect();
 
-        
         // Aggregate results across individuals for Population-level importances
         let mut feature_importance_values: HashMap<usize, Vec<f64>> = HashMap::new();
         let mut feature_counts: HashMap<usize, usize> = HashMap::new();
@@ -466,6 +519,8 @@ impl Population {
             population_importances.push(population_importance);
         }
         
+        population_importances.sort_by_key(|imp| imp.feature_idx);
+
         // Build final result based on cascade mode
         let mut final_importances = Vec::new();
         
@@ -512,9 +567,66 @@ impl Population {
     }
 
     pub fn bayesian_compute_metrics(&self, data: &Data, threshold: f64) -> (f64, f64, f64, f64) {
-        let ind = Individual::new();
-        let (acc, se, sp) = ind.compute_metrics_from_classes(&self.bayesian_class(data, threshold), &data.y);
+        let (acc, se, sp) = compute_metrics_from_classes(&self.bayesian_class(data, threshold), &data.y);
         (compute_auc_from_value(&self.bayesian_predict(&data), &data.y), acc, se, sp)
+    }
+
+    pub fn filter_by_signed_jaccard_dissimilarity(&self, threshold: f64, considere_niche: bool) -> Population {
+        if self.individuals.is_empty() || threshold <= 0.0 {
+            return Population { individuals: Vec::new() };
+        }
+        
+        let threshold_normalized = threshold / 100.0;
+        
+        let groups: Vec<Vec<usize>> = if considere_niche {
+            let mut niches: HashMap<(u8, u8), Vec<usize>> = HashMap::new();
+            for (idx, individual) in self.individuals.iter().enumerate() {
+                let niche_key = (individual.language, individual.data_type);
+                niches.entry(niche_key).or_insert_with(Vec::new).push(idx);
+            }
+            niches.into_values().collect()
+        } else {
+            vec![(0..self.individuals.len()).collect()]
+        };
+        
+        let all_filtered: Vec<Individual> = groups
+            .par_iter()
+            .filter(|group| !group.is_empty())
+            .flat_map(|group| {
+                let mut sorted_indices = group.clone();
+                sorted_indices.par_sort_unstable_by(|&a, &b| {
+                    self.individuals[b].fit.partial_cmp(&self.individuals[a].fit)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                
+                if sorted_indices.is_empty() {
+                    return Vec::new();
+                }
+                
+                let mut filtered = Vec::with_capacity(sorted_indices.len());
+                filtered.push(self.individuals[sorted_indices[0]].clone());
+                
+                for &candidate_idx in sorted_indices.iter().skip(1) {
+                    let candidate = &self.individuals[candidate_idx];
+                    let mut is_different = true;
+                    
+                    for selected in &filtered {
+                        if candidate.signed_jaccard_dissimilarity_with(selected) < threshold_normalized {
+                            is_different = false;
+                            break;
+                        }
+                    }
+                    
+                    if is_different {
+                        filtered.push(candidate.clone());
+                    }
+                }
+                
+                filtered
+            })
+            .collect();
+        
+        Population { individuals: all_filtered }
     }
     
 }
@@ -535,104 +647,81 @@ mod tests {
     use std::{collections::HashMap, f64::MAX};
     use crate::individual::{DEFAULT_MINIMUM, RAW_TYPE, TERNARY_LANG};
 
-    fn create_test_population() -> Population {
-        let mut pop = Population {
-            individuals: Vec::new(),
-        };
-    
-        for i in 0..10 {
-            let ind = Individual {
-                features: vec![(0, i), (1, -i), (2, i * 2), (3, i % 3)].into_iter().collect(),
-                auc: 0.4 + (i as f64 * 0.05),
-                fit: 0.8 - (i as f64 * 0.02),
-                specificity: 0.15 + (i as f64 * 0.01),
-                sensitivity: 0.16 + (i as f64 * 0.01),
-                accuracy: 0.23 + (i as f64 * 0.03),
-                threshold: 42.0 + (i as f64),
-                k: (42 + i) as usize,
-                epoch: (42 + i) as usize,
-                language: (i % 4) as u8,
-                data_type: (i % 3) as u8,
-                hash: i as u64,
-                epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
-                parents : None,
-                betas: None 
+    impl Population {
+        pub fn test() -> Population {
+            let mut pop = Population {
+                individuals: Vec::new(),
             };
-            pop.individuals.push(ind);
+        
+            for i in 0..10 {
+                let ind = Individual {
+                    features: vec![(0, i), (1, -i), (2, i * 2), (3, i % 3)].into_iter().collect(),
+                    auc: 0.4 + (i as f64 * 0.05),
+                    fit: 0.8 - (i as f64 * 0.02),
+                    specificity: 0.15 + (i as f64 * 0.01),
+                    sensitivity: 0.16 + (i as f64 * 0.01),
+                    accuracy: 0.23 + (i as f64 * 0.03),
+                    threshold: 42.0 + (i as f64),
+                    k: (42 + i) as usize,
+                    epoch: (42 + i) as usize,
+                    language: (i % 4) as u8,
+                    data_type: (i % 3) as u8,
+                    hash: i as u64,
+                    epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
+                    parents : None,
+                    betas: None 
+                };
+                pop.individuals.push(ind);
+            }
+        
+            pop.individuals.push(pop.individuals[9].clone());
+
+            pop
         }
+
+        pub fn test_with_n_overlapping_features(num_individuals: usize, features_per_individual: usize) -> Population {
+            let mut individuals = Vec::new();
+            for i in 0..num_individuals {
+                let mut features_map = HashMap::new();
+                for feature_idx in 0..features_per_individual {
+                    features_map.insert(feature_idx + i, 1i8); // Features shift with i for variety
+                }
+                individuals.push(Individual {
+                    features: features_map,
+                    auc: 0.8,
+                    fit: 0.7,
+                    specificity: 0.75,
+                    sensitivity: 0.85,
+                    accuracy: 0.80,
+                    threshold: 0.5,
+                    k: features_per_individual,
+                    epoch: 0,
+                    language: BINARY_LANG,
+                    data_type: RAW_TYPE,
+                    hash: i as u64,
+                    epsilon: DEFAULT_MINIMUM,
+                    parents: None,
+                    betas: None,
+                });
+            }
+            Population { individuals }
+        }
+
+        pub fn test_with_these_features(feature_indices: &[usize]) -> Population {
+            let mut pop = Population::new();
+            for &feature_idx in feature_indices {
+                let mut individual = Individual::new();
+                individual.features.insert(feature_idx, 1i8);
+                individual.k = 1;
+                pop.individuals.push(individual);
+            }
+            pop
+        }
+    }
     
-        pop.individuals.push(pop.individuals[9].clone());
-
-        pop
-    }
-
-    fn create_test_data_disc() -> Data {
-        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
-        let mut feature_class: HashMap<usize, u8> = HashMap::new();
-
-        // Simulate data
-        X.insert((0, 0), 0.9); // Sample 0, Feature 0
-        X.insert((0, 1), 0.01); // Sample 0, Feature 1
-        X.insert((1, 0), 0.91); // Sample 1, Feature 0
-        X.insert((1, 1), 0.12); // Sample 1, Feature 1
-        X.insert((2, 0), 0.75); // Sample 2, Feature 0
-        X.insert((2, 1), 0.01); // Sample 2, Feature 1
-        X.insert((3, 0), 0.19); // Sample 3, Feature 0
-        X.insert((3, 1), 0.92); // Sample 3, Feature 1
-        X.insert((4, 0), 0.9);  // Sample 4, Feature 0
-        X.insert((4, 1), 0.01); // Sample 4, Feature 1
-        feature_class.insert(0, 0);
-        feature_class.insert(1, 1);
-
-        Data {
-            X,
-            y: vec![1, 0, 1, 0, 0], // Vraies étiquettes
-            features: vec!["feature1".to_string(), "feature2".to_string()],
-            samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(),
-            "sample4".to_string(), "sample5".to_string()],
-            feature_class,
-            feature_selection: vec![0, 1],
-            feature_len: 2,
-            sample_len: 5,
-            classes: vec!["a".to_string(),"b".to_string()]
-        }
-    }
-
-    fn create_test_data_valid() -> Data {
-        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
-        let mut feature_class: HashMap<usize, u8> = HashMap::new();
-
-        // Simulate data
-        X.insert((5, 0), 0.91); // Sample 5, Feature 0
-        X.insert((5, 1), 0.12); // Sample 5, Feature 1
-        X.insert((6, 0), 0.75); // Sample 6, Feature 0
-        X.insert((6, 1), 0.01); // Sample 6, Feature 1
-        X.insert((7, 0), 0.19); // Sample 7, Feature 0
-        X.insert((7, 1), 0.92); // Sample 7, Feature 1
-        X.insert((8, 0), 0.9);  // Sample 8, Feature 0
-        X.insert((8, 1), 0.01); // Sample 8, Feature 1
-        X.insert((9, 0), 0.91); // Sample 9, Feature 0
-        X.insert((9, 1), 0.12); // Sample 9, Feature 1
-        feature_class.insert(0, 0);
-        feature_class.insert(1, 1);
-
-        Data {
-            X,
-            y: vec![0, 0, 0, 1, 0], // Vraies étiquettes
-            features: vec!["feature1".to_string(), "feature2".to_string()],
-            samples: vec!["sample6".to_string(), "sample7".to_string(), 
-            "sample8".to_string(), "sample9".to_string(), "sample10".to_string()],
-            feature_class,
-            feature_selection: vec![0, 1],
-            feature_len: 2,
-            sample_len: 5,
-            classes: vec!["a".to_string(),"b".to_string()]
-        }
-    }
-
     // #[test] outdated - betas are now used to compute hash
     // fn test_hash_reproductibility() {
-    //     let mut pop = create_test_population();
+    //     let mut pop = Population::test();
     //     let test_stdout ="hashes of Individuals of the Population are not the same as generated in the past, indicating a reproducibility problem.";
     //     pop.compute_hash();
     //     assert_eq!(8828241517069783773, pop.individuals[0].hash, "{}", test_stdout);
@@ -650,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_remove_clone() {
-        let mut pop = create_test_population();
+        let mut pop = Population::test();
         assert_eq!(1, pop.remove_clone(), "remove_clone() should return the number of clone eliminated");
         assert_eq!(10, pop.individuals.len(), "remove_clone() should eliminate clones");
         assert_eq!(0, pop.remove_clone(), "remove_clone() should return 0 when there is no clone");
@@ -659,9 +748,9 @@ mod tests {
 
     #[test]
     fn test_auc_fit() {
-        let data = &&create_test_data_disc();
-        let mut pop = create_test_population();
-        let mut pop_clone = create_test_population();
+        let data = &&Data::test_disc_data();
+        let mut pop = Population::test();
+        let mut pop_clone = Population::test();
         let mut pop_1ind = Population::new();
         pop_1ind.individuals.push(pop.individuals[0].clone());
 
@@ -682,10 +771,10 @@ mod tests {
 
     #[test]
     fn test_auc_nooverfit_fit() {
-        let data_disc = create_test_data_disc();
-        let data_valid = create_test_data_valid();
-        let mut pop = create_test_population();
-        let mut pop_clone = create_test_population();
+        let data_disc = Data::test_disc_data();
+        let data_valid = Data::test_valid_data();
+        let mut pop = Population::test();
+        let mut pop_clone = Population::test();
         let mut pop_1ind = Population::new();
         pop_1ind.individuals.push(pop.individuals[0].clone());
 
@@ -706,10 +795,10 @@ mod tests {
 
     #[test]
     fn test_auc_fit_vs_aucnooverfit_fit() {
-        let data_disc = create_test_data_disc();
-        let data_valid = create_test_data_valid();
-        let mut pop1 = create_test_population();
-        let mut pop2 = create_test_population();
+        let data_disc = Data::test_disc_data();
+        let data_valid = Data::test_valid_data();
+        let mut pop1 = Population::test();
+        let mut pop2 = Population::test();
 
         pop1.auc_fit(&data_disc, 10.0, 4, false);
         pop2.auc_nooverfit_fit(&data_disc, 10.0, &data_valid, 20.0, 4, false);
@@ -721,9 +810,9 @@ mod tests {
 
     #[test]
     fn test_objective_fit() {
-        let data = &&create_test_data_disc();
-        let mut pop = create_test_population();
-        let mut pop_clone = create_test_population();
+        let data = &&Data::test_disc_data();
+        let mut pop = Population::test();
+        let mut pop_clone = Population::test();
         let mut pop_1ind = Population::new();
         pop_1ind.individuals.push(pop.individuals[0].clone());
 
@@ -744,10 +833,10 @@ mod tests {
 
     #[test]
     fn test_objective_nooverfit_fit() {
-        let data_disc = create_test_data_disc();
-        let data_valid = create_test_data_valid();
-        let mut pop = create_test_population();
-        let mut pop_clone = create_test_population();
+        let data_disc = Data::test_disc_data();
+        let data_valid = Data::test_valid_data();
+        let mut pop = Population::test();
+        let mut pop_clone = Population::test();
         let mut pop_1ind = Population::new();
         pop_1ind.individuals.push(pop.individuals[0].clone());
 
@@ -769,10 +858,10 @@ mod tests {
 
     #[test]
     fn test_objective_fit_vs_objective_nooverfit_fit() {
-        let data_disc = create_test_data_disc();
-        let data_valid = create_test_data_valid();
-        let mut pop1 = create_test_population();
-        let mut pop2 = create_test_population();
+        let data_disc = Data::test_disc_data();
+        let data_valid = Data::test_valid_data();
+        let mut pop1 = Population::test();
+        let mut pop2 = Population::test();
 
         pop1.objective_fit(&data_disc, 1.0, 1.0, 10.0, 4, false);
         pop2.objective_nooverfit_fit(&data_disc, 1.0, 1.0, 10.0, &data_valid, 20.0, 4, false);
@@ -785,7 +874,7 @@ mod tests {
     // smaller, better ? 
     #[test]
     fn test_sort() {
-        let mut pop = create_test_population();
+        let mut pop = Population::test();
         let mut previous_fit = MAX as f64;
         pop = pop.sort();
         for i in 1..pop.individuals.len(){
@@ -796,7 +885,7 @@ mod tests {
 
     #[test]
     fn test_generate() {
-        let data = &create_test_data_disc();
+        let data = &Data::test_disc_data();
         let mut pop = Population::new();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let expected_features:Vec<(usize, i8)> = vec![(1, 1), (1, 1), (0, -1), (1, 1), (0, -1), (0, -1), (0, -1), (1, 1), (1, 1), (0, -1)];
@@ -821,7 +910,7 @@ mod tests {
     
     #[test]
     fn test_add(){
-        let mut pop = create_test_population();
+        let mut pop = Population::test();
         let mut pop_to_add= Population::new();
         let ind1 = Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
             specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42, language: 0, data_type: 0, hash: 0, 
@@ -855,7 +944,7 @@ mod tests {
 
     #[test]
     fn test_select_first_pct() {
-        let mut pop = create_test_population();
+        let mut pop = Population::test();
         
         let (selected_pop, n) = pop.select_first_pct(0.0);
         assert_eq!(selected_pop.individuals.len(), 0, "test_select_first_pct() should return the reduced Population and its number of Individuals");
@@ -883,7 +972,7 @@ mod tests {
 
     #[test]
     fn test_select_random_above_n() {
-        let mut pop = create_test_population();
+        let mut pop = Population::test();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         
         let selected_pop = pop.select_random_above_n(0.0, 0, &mut rng);
@@ -912,7 +1001,7 @@ mod tests {
 
     #[test]
     fn test_get_ind_from_hash() {
-        let mut pop = create_test_population();
+        let mut pop = Population::test();
         pop.individuals[0].hash = 42;
         assert_eq!(pop.get_ind_from_hash(3).unwrap().hash, 3, "Wrong individual selected");
         assert_eq!(pop.get_ind_from_hash(3).unwrap().auc, 0.55, "Selected individual has wrong auc");
@@ -922,47 +1011,575 @@ mod tests {
     #[test]
     #[should_panic(expected = "Hash should be computed to allow Individual selection")]
     fn test_get_ind_from_hash_zero() {
-        let pop = create_test_population();
+        let pop = Population::test();
         assert_eq!(pop.get_ind_from_hash(3).unwrap().hash, 3, "Wrong individual selected");
     }
 
-    // #[test]
-    // fn test_compute_pop_oob_feature_importance_reproductibility() {
-    //     let mut pop = create_test_population();
-    //     let mut rng = ChaCha8Rng::seed_from_u64(42);
-    //     let data = create_test_data_disc();
-    
-    //     let mut expected_map: HashMap<usize, f64> = HashMap::new();
-    //     expected_map.insert(0, -0.061363636363636315);
-    //     expected_map.insert(1, 0.13484848484848488);
-    //     expected_map.insert(2, 3.027880976250427e-17);
-    //     expected_map.insert(3, 3.027880976250427e-17);
-    
-    //     let result_map = pop.compute_pop_oob_feature_importance(&data, 10, &mut rng, &"mean".to_string(), false);
-    
-    //     // Tiny variations can be observed due to floating point and depending on the execution order of the threads
-    //     let tolerance = 1e-10;
-    //     for (key, expected_value) in &expected_map {
-    //         let result_value = result_map.get(key).unwrap_or(&(0.0 as f64, 0.0 as f64));
-    //         assert!((expected_value - result_value).abs() < tolerance,
-    //                 "Mismatch at key {} indicating a reproducibility problem: expected = {:?}, found = {:?}", key, expected_value, result_value);
-    //     }
-    // }
+    use crate::individual::BINARY_LANG;
 
-    // #[test]
-    // fn test_compute_pop_oob_feature_importance_basic() {
-    //     let mut population = create_test_population();
+    fn create_simple_test_data(num_samples: usize, num_features: usize) -> Data {
+        let mut X = HashMap::new();
+        for sample in 0..num_samples {
+            for feature in 0..num_features {
+                X.insert((sample, feature), (sample * feature) as f64 * 0.1);
+            }
+        }
+        let y: Vec<u8> = (0..num_samples).map(|i| if i % 2 == 0 { 1 } else { 0 }).collect();
+        Data {
+            X,
+            y,
+            sample_len: num_samples,
+            feature_class: HashMap::new(),
+            features: (0..num_features).map(|i| format!("feature_{}", i)).collect(),
+            samples: (0..num_samples).map(|i| format!("sample_{}", i)).collect(),
+            feature_selection: (0..num_features).collect(),
+            feature_len: num_features,
+            classes: vec!["class_0".to_string(), "class_1".to_string()],
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_basic_population_scope() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let pop = Population::test_with_n_overlapping_features(3, 2);
+        let data = create_simple_test_data(10, 10);
+        let agg_method = ImportanceAggregation::mean;
+
+        let importances = pop.compute_pop_oob_feature_importance(&data, 5, &mut rng, &agg_method, false, false, Some(1));
+
+        // All results should be from Population scope
+        for imp in &importances.importances {
+            assert_eq!(imp.scope, ImportanceScope::Population { id: 1 });
+            assert_eq!(imp.importance_type, ImportanceType::OOB);
+            assert_eq!(imp.aggreg_method, Some(agg_method.clone()));
+            assert!(!imp.is_scaled);
+            assert!(imp.scope_pct >= 0.0 && imp.scope_pct <= 1.0, "Prevalence should be valid");
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_prevalence_calculation() {
+        let mut rng = ChaCha8Rng::seed_from_u64(123);
+        let mut pop = Population { individuals: Vec::new() };
         
-    //     let data = create_test_data_disc();
-    //     let mut rng = ChaCha8Rng::seed_from_u64(42); // Seed fixe pour reproductibilité
+        // Individual 0: feature [0]
+        let mut features1 = HashMap::new();
+        features1.insert(0, 1i8);
+        pop.individuals.push(Individual {
+            features: features1,
+            hash: 0,
+            k: 1,
+            ..Individual::test()
+        });
+
+        // Individual 1: feature [0]  
+        let mut features2 = HashMap::new();
+        features2.insert(0, 1i8);
+        pop.individuals.push(Individual {
+            features: features2,
+            hash: 1,
+            k: 1,
+            ..Individual::test()
+        });
+
+        // Individual 2: feature [1]
+        let mut features3 = HashMap::new();
+        features3.insert(1, 1i8);
+        pop.individuals.push(Individual {
+            features: features3,
+            hash: 2,
+            k: 1,
+            ..Individual::test()
+        });
+
+        let data = create_simple_test_data(15, 3);
+        let agg_method = ImportanceAggregation::mean;
+
+        let importances = pop.compute_pop_oob_feature_importance(&data, 5, &mut rng, &agg_method, false, false, None);
+
+        for imp in &importances.importances {
+            if imp.feature_idx == 0 {
+                assert!((imp.scope_pct - 2.0/3.0).abs() < 1e-10, "Feature 0 prevalence should be 2/3");
+            } else if imp.feature_idx == 1 {
+                assert!((imp.scope_pct - 1.0/3.0).abs() < 1e-10, "Feature 1 prevalence should be 1/3");
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_handles_empty_values() {
+        let mut rng = ChaCha8Rng::seed_from_u64(555);
+        let mut pop = Population { individuals: Vec::new() };
         
-    //     let importance = population.compute_pop_oob_feature_importance(&data, 10, &mut rng, &ImportanceAggregation::Mean, false);
-    //     println!("{:?}", importance);
-    //     assert!(importance.contains_key(&0));
-    //     assert!(importance.contains_key(&1));
-    //     assert!(importance.contains_key(&2));
-    //     assert!(importance.contains_key(&3));
-    //     assert!(importance.values().any(|&val| val != (0.0, 0.0)));
-    // }
+        // Testing `if values.is_empty() { continue; }`
+        let mut features = HashMap::new();
+        features.insert(999, 1i8); // Unexistent feature
+        pop.individuals.push(Individual {
+            features,
+            hash: 0,
+            k: 1,
+            ..Individual::test()
+        });
+
+        let data = create_simple_test_data(10, 5); // Only 0-4 features
+        let agg_method = ImportanceAggregation::mean;
+
+        let importances = pop.compute_pop_oob_feature_importance(&data, 3, &mut rng, &agg_method, false, false, None);
+
+        for imp in &importances.importances {
+            assert!(imp.importance.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_cascade_mode_includes_individuals() {
+        let pop = Population::test_with_n_overlapping_features(2, 3);
+        let data = create_simple_test_data(8, 8);
+        let agg_method = ImportanceAggregation::mean;
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(789);
+        let no_cascade = pop.compute_pop_oob_feature_importance(&data, 3, &mut rng1, &agg_method, false, false, Some(42));
+        
+        let mut rng2 = ChaCha8Rng::seed_from_u64(789);
+        let with_cascade = pop.compute_pop_oob_feature_importance(&data, 3, &mut rng2, &agg_method, false, true, Some(42));
+
+        // Cascade mode should include more importances (individual + population)
+        assert!(with_cascade.importances.len() > no_cascade.importances.len(), 
+            "Cascade mode should include individual-level importances");
+
+        // Check Individual scope count
+        let individual_scopes = with_cascade.importances.iter()
+            .filter(|imp| matches!(imp.scope, ImportanceScope::Individual { .. }))
+            .count();
+        assert!(individual_scopes > 0, "Cascade mode should include Individual scope importances");
+
+        // Population scopes should be identical with and without cascade
+        let pop_count_without = no_cascade.importances.iter()
+            .filter(|imp| matches!(imp.scope, ImportanceScope::Population { .. }))
+            .count();
+        let pop_count_with = with_cascade.importances.iter()
+            .filter(|imp| matches!(imp.scope, ImportanceScope::Population { .. }))
+            .count();
+        assert_eq!(pop_count_without, pop_count_with, "Population importances should be same in both modes");
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_empty_population() {
+        let mut rng = ChaCha8Rng::seed_from_u64(999);
+        let pop = Population { individuals: Vec::new() };
+        let data = create_simple_test_data(10, 10);
+        let agg_method = ImportanceAggregation::mean;
+
+        let importances = pop.compute_pop_oob_feature_importance(&data, 5, &mut rng, &agg_method, false, false, None);
+
+        assert!(importances.importances.is_empty(), "Empty population should yield empty importance collection");
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_aggregation_methods() {
+        let pop = Population::test_with_n_overlapping_features(5, 2);
+        let data = create_simple_test_data(15, 6);
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(111);
+        let mean_result = pop.compute_pop_oob_feature_importance(&data, 4, &mut rng1, &ImportanceAggregation::mean, false, false, None);
+        
+        let mut rng2 = ChaCha8Rng::seed_from_u64(111);
+        let median_result = pop.compute_pop_oob_feature_importance(&data, 4, &mut rng2, &ImportanceAggregation::median, false, false, None);
+
+        assert_eq!(mean_result.importances.len(), median_result.importances.len());
+
+        for (mean_imp, median_imp) in mean_result.importances.iter().zip(median_result.importances.iter()) {
+            assert_eq!(mean_imp.aggreg_method, Some(ImportanceAggregation::mean));
+            assert_eq!(median_imp.aggreg_method, Some(ImportanceAggregation::median));
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_reproducibility_hash_sorting() {
+        let mut pop = Population { individuals: Vec::new() };
+        
+        // Individuals avec hashes dans un ordre spécifique
+        for i in [3, 1, 2, 0] { // Intentionally unordered hashes
+            let mut features = HashMap::new();
+            features.insert(i, 1i8);
+            pop.individuals.push(Individual {
+                features,
+                hash: i as u64,
+                k: 1,
+                ..Individual::test()
+            });
+        }
+
+        let data = create_simple_test_data(10, 6);
+        let agg_method = ImportanceAggregation::mean;
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(222);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(222);
+
+        let result1 = pop.compute_pop_oob_feature_importance(&data, 5, &mut rng1, &agg_method, false, false, None);
+        let result2 = pop.compute_pop_oob_feature_importance(&data, 5, &mut rng2, &agg_method, false, false, None);
+
+        // Hash sorting should ensure reproducibility
+        assert_eq!(result1.importances.len(), result2.importances.len());
+        
+        for (imp1, imp2) in result1.importances.iter().zip(result2.importances.iter()) {
+            assert!((imp1.importance - imp2.importance).abs() < 1e-5, "Hash-sorted processing should ensure reproducible results");
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_population_id_assignment() {
+        let pop = Population::test_with_n_overlapping_features(3, 2);
+        let data = create_simple_test_data(12, 5);
+        let agg_method = ImportanceAggregation::mean;
+
+        // ✅ Test with specific population ID
+        let mut rng1 = ChaCha8Rng::seed_from_u64(333);
+        let with_id = pop.compute_pop_oob_feature_importance(&data, 4, &mut rng1, &agg_method, false, false, Some(99));
+        
+        // ✅ Test with None (should default to 0)
+        let mut rng2 = ChaCha8Rng::seed_from_u64(333);
+        let without_id = pop.compute_pop_oob_feature_importance(&data, 4, &mut rng2, &agg_method, false, false, None);
+
+        for imp in &with_id.importances {
+            assert_eq!(imp.scope, ImportanceScope::Population { id: 99 });
+        }
+
+        for imp in &without_id.importances {
+            assert_eq!(imp.scope, ImportanceScope::Population { id: 0 });
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_feature_collection_across_individuals() {
+        let mut rng = ChaCha8Rng::seed_from_u64(444);
+        let mut pop = Population { individuals: Vec::new() };
+        
+        // Individual 0: features [0, 1]
+        let mut features1 = HashMap::new();
+        features1.insert(0, 1i8);
+        features1.insert(1, 1i8);
+        pop.individuals.push(Individual {
+            features: features1,
+            hash: 0,
+            k: 2,
+            ..Individual::test()
+        });
+
+        // Individual 1: features [2, 3]
+        let mut features2 = HashMap::new();
+        features2.insert(2, 1i8);
+        features2.insert(3, 1i8);
+        pop.individuals.push(Individual {
+            features: features2,
+            hash: 1,
+            k: 2,
+            ..Individual::test()
+        });
+
+        let data = create_simple_test_data(10, 5);
+        let agg_method = ImportanceAggregation::mean;
+
+        let importances = pop.compute_pop_oob_feature_importance(&data, 3, &mut rng, &agg_method, false, false, None);
+
+        // is flat_map collecting all unique features ?
+        let feature_indices: HashSet<usize> = importances.importances.iter()
+            .map(|imp| imp.feature_idx)
+            .collect();
+        
+        let expected_features: HashSet<usize> = [0, 1, 2, 3].iter().cloned().collect();
+        assert_eq!(feature_indices, expected_features, "Should collect all features from all individuals");
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_zero_permutations() {
+        let rng = ChaCha8Rng::seed_from_u64(666);
+        let pop = Population::test_with_n_overlapping_features(2, 2);
+        let data = create_simple_test_data(8, 5);
+        let agg_method = ImportanceAggregation::mean;
+
+        // Edge case: zero permutations (should be handled by individual level)
+        let result = std::panic::catch_unwind(|| {
+            let mut rng_clone = rng.clone();
+            pop.compute_pop_oob_feature_importance(&data, 0, &mut rng_clone, &agg_method, false, false, None)
+        });
+        
+        // Population level -> Individual level (edge case protection)
+        assert!(result.is_err(), "Zero permutations should cause panic due to individual level division by zero");
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_disjoint_individuals() {
+        let mut pop = Population { individuals: Vec::new() };
+        
+        // Individual avec features complètement en dehors des données
+        let mut features = HashMap::new();
+        features.insert(100, 1i8);
+        features.insert(101, 1i8);
+        pop.individuals.push(Individual {
+            features,
+            hash: 0,
+            k: 2,
+            ..Individual::test()
+        });
+
+        let data = create_simple_test_data(10, 5); // Features 0-4 seulement
+        let agg_method = ImportanceAggregation::mean;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(789);
+        let importances = pop.compute_pop_oob_feature_importance(&data, 3, &mut rng, &agg_method, false, false, None);
+
+        // Toutes les importances devraient être 0 car aucune feature match
+        for imp in &importances.importances {
+            assert_eq!(imp.importance, 0.0, "Disjoint features should have zero importance");
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_scaling_behavior() {
+        let pop1 = Population::test_with_n_overlapping_features(4, 2);
+        let data = create_simple_test_data(12, 8);
+        let agg_method = ImportanceAggregation::median;
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(456);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(456);
+
+        let unscaled = pop1.compute_pop_oob_feature_importance(&data, 5, &mut rng1, &agg_method, false, false, None);
+        let scaled = pop1.compute_pop_oob_feature_importance(&data, 5, &mut rng2, &agg_method, true, false, None);
+
+        assert_eq!(unscaled.importances.len(), scaled.importances.len());
+
+        for (unscaled_imp, scaled_imp) in unscaled.importances.iter().zip(scaled.importances.iter()) {
+            assert!(!unscaled_imp.is_scaled);
+            assert!(scaled_imp.is_scaled);
+            
+            assert!(scaled_imp.importance.is_finite());
+            assert!(scaled_imp.dispersion.is_finite());
+            
+            assert_eq!(unscaled_imp.scope_pct, scaled_imp.scope_pct);
+        }
+    }
+
+    #[test]
+    fn test_compute_pop_oob_feature_importance_dispersion_calculation() {
+        let pop = Population::test_with_n_overlapping_features(3, 2);
+        let data = create_simple_test_data(12, 6);
+        
+        let mut rng1 = ChaCha8Rng::seed_from_u64(123);
+        let mean_result = pop.compute_pop_oob_feature_importance(&data, 5, &mut rng1, &ImportanceAggregation::mean, false, false, None);
+        
+        let mut rng2 = ChaCha8Rng::seed_from_u64(123);
+        let median_result = pop.compute_pop_oob_feature_importance(&data, 5, &mut rng2, &ImportanceAggregation::median, false, false, None);
+        
+        // Vérifier que dispersion differs between mean (std) vs median (MAD)
+        for (mean_imp, median_imp) in mean_result.importances.iter().zip(median_result.importances.iter()) {
+            assert!(mean_imp.dispersion.is_finite());
+            assert!(median_imp.dispersion.is_finite());
+            // Mean utilise std, median utilise MAD - peuvent différer
+        }
+    }
+    
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_empty_population() {
+        // Test with empty population should return empty
+        let pop = Population { individuals: vec![] };
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(50.0, false);
+        assert!(filtered.individuals.is_empty());
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_zero_threshold() {
+        // Test with threshold <= 0 should return empty
+        let ind = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.9, 0, 0);
+        let pop = Population { individuals: vec![ind] };
+        
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(0.0, false);
+        assert!(filtered.individuals.is_empty());
+        
+        let filtered_negative = pop.filter_by_signed_jaccard_dissimilarity(-10.0, false);
+        assert!(filtered_negative.individuals.is_empty());
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_single_individual() {
+        // Test with single individual should always keep it
+        let ind = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.9, 0, 0);
+        let pop = Population { individuals: vec![ind.clone()] };
+        
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(50.0, false);
+        assert_eq!(filtered.individuals.len(), 1);
+        assert_eq!(filtered.individuals[0].fit, 0.9);
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_without_niche() {
+        // Test filtering without niche consideration
+        // Create individuals with different features and fitness values
+        let ind1 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.95, 0, 0);
+        let ind2 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, -1)], 0.90, 0, 0);
+        let ind3 = Individual::test_with_these_given_features_fit_lang_types(vec![(2, 1)], 0.85, 0, 0);
+        let ind4 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.80, 0, 0); // Same as ind1
+        
+        let pop = Population {
+            individuals: vec![ind1.clone(), ind2.clone(), ind3.clone(), ind4.clone()],
+        };
+
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(50.0, false);
+
+        // ind1: highest fit, always kept
+        // ind2: dissimilarity with ind1 = 1.0 (same feature ID, opposite signs) > 0.5, kept
+        // ind3: dissimilarity with ind1 = 1.0 (completely different feature IDs) > 0.5, kept
+        // ind4: dissimilarity with ind1 = 0.0 (identical features) < 0.5, filtered out
+
+        assert_eq!(filtered.individuals.len(), 3);
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95));
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.90));
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.85));
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.80));
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_niche() {
+        // Test filtering with niche consideration
+        // Create individuals with different niches (language, data_type)
+        let ind1 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.95, 0, 0); // Niche A
+        let ind2 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.90, 0, 0); // Niche A, same features as ind1
+        let ind3 = Individual::test_with_these_given_features_fit_lang_types(vec![(2, 1)], 0.85, 1, 1); // Niche B
+        let ind4 = Individual::test_with_these_given_features_fit_lang_types(vec![(2, -1)], 0.80, 1, 1); // Niche B
+        
+        let pop = Population {
+            individuals: vec![ind1.clone(), ind2.clone(), ind3.clone(), ind4.clone()],
+        };
+
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(50.0, true);
+
+        // Niche A (0,0): ind1 kept (highest fit), ind2 filtered out (identical features, dissimilarity = 0.0)
+        // Niche B (1,1): ind3 kept (highest fit), ind4 kept (same feature ID, opposite signs, dissimilarity = 1.0 > 0.5)
+
+        assert_eq!(filtered.individuals.len(), 3);
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95));
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.90));
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.85));
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.80));
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_high_threshold() {
+        // Test with threshold = 100% (only completely different individuals kept)
+        let ind1 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.95, 0, 0);
+        let ind2 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, -1)], 0.90, 0, 0); // Opposite sign
+        let ind3 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1), (2, 1)], 0.85, 0, 0); // Partial overlap
+        
+        let pop = Population {
+            individuals: vec![ind1.clone(), ind2.clone(), ind3.clone()],
+        };
+
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(100.0, false);
+
+        // ind1: kept (highest fit)
+        // ind2: dissimilarity with ind1 = 1.0 (same feature ID, opposite signs) >= 1.0, kept
+        // ind3: dissimilarity with ind1 = 1 - 1/2 = 0.5 < 1.0, filtered out
+        //   (intersection: {(1,+1)}, union: {(1,+1), (2,+1)})
+
+        assert_eq!(filtered.individuals.len(), 2);
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95));
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.90));
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.85));
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_low_threshold() {
+        // Test with threshold = 1% (very permissive, almost all kept)
+        let ind1 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.95, 0, 0);
+        let ind2 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.90, 0, 0); // Identical
+        let ind3 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, -1)], 0.85, 0, 0); // Different
+        
+        let pop = Population {
+            individuals: vec![ind1.clone(), ind2.clone(), ind3.clone()],
+        };
+
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(1.0, false);
+
+        // ind1: kept (highest fit)
+        // ind2: dissimilarity with ind1 = 0.0 (identical features) < 0.01, filtered out
+        // ind3: dissimilarity with ind1 = 1.0 (same feature ID, opposite signs) > 0.01, kept
+
+        assert_eq!(filtered.individuals.len(), 2);
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95));
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.90));
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.85));
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_complex_features() {
+        // Test with more complex feature sets
+        let ind1 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1), (2, -1), (3, 1)], 0.95, 0, 0);
+        let ind2 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1), (2, -1)], 0.90, 0, 0);
+        let ind3 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, -1), (2, 1), (3, -1)], 0.85, 0, 0);
+        
+        let pop = Population {
+            individuals: vec![ind1.clone(), ind2.clone(), ind3.clone()],
+        };
+
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(60.0, false);
+
+        // Manual calculation:
+        // ind1 vs ind2: intersection={(1,+1), (2,-1)}, union={(1,+1), (2,-1), (3,+1)}, dissim = 1 - 2/3 ≈ 0.33
+        // ind1 vs ind3: intersection={}, union={(1,+1), (1,-1), (2,-1), (2,+1), (3,+1), (3,-1)}, dissim = 1 - 0/6 = 1.0
+        // Since 0.33 < 0.6, ind2 filtered out; ind3 kept (1.0 > 0.6)
+
+        assert_eq!(filtered.individuals.len(), 2);
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95));
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.90));
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.85));
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_empty_features() {
+        // Test with individuals having no features
+        let ind1 = Individual::test_with_these_given_features_fit_lang_types(vec![], 0.95, 0, 0);
+        let ind2 = Individual::test_with_these_given_features_fit_lang_types(vec![], 0.90, 0, 0);
+        let ind3 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.85, 0, 0);
+        
+        let pop = Population {
+            individuals: vec![ind1.clone(), ind2.clone(), ind3.clone()],
+        };
+
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(50.0, false);
+
+        // ind1: kept (highest fit)
+        // ind2: dissimilarity with ind1 = 0.0 (both empty, intersection=0, union=0) < 0.5, filtered out
+        // ind3: dissimilarity with ind1 = 1.0 (empty vs non-empty, intersection=0, union=1) > 0.5, kept
+
+        assert_eq!(filtered.individuals.len(), 2);
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95));
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.90));
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.85));
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_with_multiple_niches() {
+        // Test with multiple niches to ensure proper grouping
+        let ind1 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.95, 0, 0); // Niche (0,0)
+        let ind2 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.90, 0, 1); // Niche (0,1)
+        let ind3 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.85, 1, 0); // Niche (1,0)
+        let ind4 = Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.80, 0, 0); // Niche (0,0), same as ind1
+        
+        let pop = Population {
+            individuals: vec![ind1.clone(), ind2.clone(), ind3.clone(), ind4.clone()],
+        };
+
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(50.0, true);
+
+        // Niche (0,0): ind1 kept (highest fit), ind4 filtered out (identical features, dissimilarity = 0.0)
+        // Niche (0,1): ind2 kept (only individual in this niche)
+        // Niche (1,0): ind3 kept (only individual in this niche)
+
+        assert_eq!(filtered.individuals.len(), 3);
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95)); // Niche (0,0)
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.90)); // Niche (0,1)
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.85)); // Niche (1,0)
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.80)); // Filtered from niche (0,0)
+    }
 
 }

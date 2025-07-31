@@ -1,8 +1,9 @@
-use log::{info, error,};
+use log::{info, error, warn};
 use gpredomics::{param, run_ga, run_cv, run_beam, run_mcmc};
+use gpredomics::experiment::Court;
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
-use gpredomics::experiment::Experiment;
+use gpredomics::experiment::{Experiment, ExperimentMetadata, WeightingMethod};
 use clap::Parser;
 use std::env;
 
@@ -34,10 +35,10 @@ fn main() {
 
     let param = param::get("param.yaml".to_string()).unwrap();
 
-    if param.general.overfit_penalty != 0.0 {
-        error!("overfit_penalty parameter is deprecated, please set it to 0.");
-        panic!("overfit_penalty parameter is deprecated, please set it to 0.");
-    }
+    // if param.cv.overfit_penalty != 0.0 {
+    //     error!("overfit_penalty parameter is deprecated, please set it to 0.");
+    //     panic!("overfit_penalty parameter is deprecated, please set it to 0.");
+    // }
 
     let args = Cli::parse();
 
@@ -79,10 +80,7 @@ fn main() {
                     
                     info!("Evaluating on new dataset: {} | {}", x_path, y_path);
                     
-                    match experiment.evaluate_on_new_dataset(&x_path, &y_path) {
-                        Ok(results) => println!("{}", results),
-                        Err(e) => error!("Evaluation failed: {}", e),
-                    }
+                    experiment.evaluate_on_new_dataset(&x_path, &y_path);
                 } else {
                     // Display mode
                     experiment.display_results();
@@ -103,7 +101,27 @@ fn main() {
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
     let running_clone_for_signal = Arc::clone(&running);
-    let mut signals = Signals::new(&[SIGTERM, SIGHUP]).expect("Failed to set up signal handler");
+    let mut signals = Signals::new(&[SIGTERM, SIGHUP, SIGINT]).expect("Failed to set up signal handler");
+
+    // Main thread now monitors the signal
+    let mut soft_kill = false;
+    let _signal_thread = thread::spawn(move || {
+        for sig in signals.forever() {
+            if soft_kill == false {
+                match sig {
+                    SIGTERM | SIGHUP | SIGINT => {
+                        info!("Received signal: {}", sig);
+                        info!("Algorithm will be stopped at next iteration and results returned... You can force the kill by pressing Ctrl+C again.");
+                        soft_kill = true;
+                        running_clone_for_signal.store(false, Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            } else {
+                std::process::exit(1);
+            }
+        }
+    });
 
     // Register signal handler with original Arc
     flag::register(SIGHUP, Arc::clone(&running)).expect("Failed to register SIGHUP handler");
@@ -127,8 +145,8 @@ fn main() {
     });
 
     let mut exp = handle.join().expect("Thread panicked!");
-    
-    if param.general.compute_importance {
+
+    if param.importance.compute_importance {
         info!("Computing feature importance...");
         let start_importance = std::time::Instant::now();
         
@@ -140,24 +158,41 @@ fn main() {
         info!("Skipping importance calculation (disabled in parameters)");
     }
 
+    // Voting
+    if param.voting.vote {
+        let mut court;
+        let mut voting_pop;
+        if param.voting.use_fbm {
+            voting_pop = exp.final_population.clone().unwrap().select_best_population(0.05);
+        } else {
+            voting_pop = exp.final_population.clone().unwrap();
+        }
+        if exp.parameters.voting.specialized {
+            voting_pop.compute_all_metrics(&exp.train_data, &exp.parameters.general.fit);
+            court = Court::new(&voting_pop, &exp.parameters.voting.min_perf, &exp.parameters.voting.min_diversity, &exp.parameters.voting.method, &exp.parameters.voting.method_threshold,
+                &WeightingMethod::Specialized {sensitivity_threshold: exp.parameters.voting.specialized_pos_threshold, specificity_threshold: exp.parameters.voting.specialized_neg_threshold},
+            );
+        } else {
+            court = Court::new(&voting_pop, &exp.parameters.voting.min_perf, &exp.parameters.voting.min_diversity, &exp.parameters.voting.method, &exp.parameters.voting.method_threshold, 
+                &WeightingMethod::Uniform,
+            );
+        }
+        if court.judges.individuals.len() > 1 {
+            court.evaluate(&exp.train_data);
+            court.display(&exp.train_data, exp.test_data.as_ref(), &exp.parameters.clone());
+            exp.others = Some(ExperimentMetadata::Court { court: court })
+        } else {
+            warn!("An informative vote is requiring more than one judge!")
+        }
+        
+    } else {
+        info!("Voting stage ignored (disabled in settings)");
+    }
+    
     if param.general.save_exp != "".to_string() {
         info!("Saving experiment...");
         exp.save_auto(&param.general.save_exp).expect("Error while exporting experiment");
     }
-    
-    // Main thread now monitors the signal
-    let _signal_thread = thread::spawn(move || {
-        for sig in signals.forever() {
-            match sig {
-                SIGTERM | SIGHUP => {
-                    info!("Received signal: {}", sig);
-                    running_clone_for_signal.store(false, Ordering::Relaxed);
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
 
     logger.flush();
 }

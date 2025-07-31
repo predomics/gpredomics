@@ -444,6 +444,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
+name = "fast-float"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95765f67b4b18863968b4a1bd5bb576f732b29a4a28c7cd84c09fa3e2875f33c"
+
+[[package]]
 name = "fishers_exact"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -559,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "gpredomics"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "argmin",
  "bincode",
@@ -567,6 +573,7 @@ dependencies = [
  "chrono",
  "clap",
  "csv",
+ "fast-float",
  "fishers_exact",
  "flexi_logger",
  "log",
@@ -575,6 +582,7 @@ dependencies = [
  "rand_chacha",
  "rayon",
  "rmp-serde",
+ "rustc-hash",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1736,7 +1744,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
