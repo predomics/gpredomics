@@ -4,7 +4,7 @@ use rand_chacha::ChaCha8Rng;
 use rand::seq::SliceRandom;
 use statrs::distribution::{Normal, ContinuousCDF};
 use crate::data::Data;
-use crate::param::ImportanceAggregation;
+use crate::experiment::ImportanceAggregation;
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -20,9 +20,6 @@ pub fn generate_random_vector(reference_size: usize, rng: &mut ChaCha8Rng) -> Ve
     // Generate a vector of random values: 1, 0, or -1
     (0..reference_size).map(|_| { rng.gen_range(-1..2) }).collect()
 }
-
-
-
 
 /// a function used essentially in CV that split randomly a Vec<T> into p Vec<T> of approximatively the same size
 pub fn split_into_balanced_random_chunks<T: std::clone::Clone>(vec: Vec<T>, p: usize, rng: &mut ChaCha8Rng) -> Vec<Vec<T>> {
@@ -134,6 +131,44 @@ pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
     u / (n1 as f64 * n0 as f64)
 }
 
+pub fn compute_metrics_from_classes(predicted: &Vec<u8>, y: &Vec<u8>, ) -> (f64, f64, f64) {
+        let mut tp = 0;
+        let mut fn_count = 0;
+        let mut tn = 0;
+        let mut fp = 0;
+
+        for (&pred, &real) in predicted.iter().zip(y.iter()) {
+            if real == 2 {
+                continue;
+            }
+            match (pred, real) {
+                (1, 1) => tp += 1,
+                (1, 0) => fp += 1,
+                (0, 0) => tn += 1,
+                (0, 1) => fn_count += 1,
+                _ => {} //warn!("A predicted vs real class of {:?} should not exist", other),
+            }
+        }
+
+        let sensitivity = if tp + fn_count > 0 {
+            tp as f64 / (tp + fn_count) as f64
+        } else {
+            0.0
+        };
+        let specificity = if fp + tn > 0 {
+            tn as f64 / (fp + tn) as f64
+        } else {
+            0.0
+        };
+        let accuracy = if tp + tn + fp + fn_count > 0 {
+            (tp + tn) as f64 / (tp + tn + fp + fn_count) as f64
+        } else {
+            0.0
+        };
+
+        (accuracy, sensitivity, specificity)
+    }
+
 pub fn compute_roc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
     let mut best_objective: f64 = f64::MIN;
 
@@ -215,7 +250,68 @@ pub fn compute_roc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties:
     };
 
     (auc, best_threshold, best_acc, best_sens, best_spec, best_objective)
-}    
+}
+
+pub fn compute_mcc_and_metrics_from_value(value: &[f64], y: &Vec<u8>) -> (f64, f64, f64, f64, f64) {
+    let mut best_mcc: f64 = f64::MIN;
+
+    let mut data: Vec<_> = value.iter()
+        .zip(y.iter())
+        .filter(|(_, &y)| y == 0 || y == 1)
+        .map(|(&v, &y)| (v, y))
+        .collect();
+
+    data.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total_pos = data.iter().filter(|(_, y)| *y == 1).count();
+    let total_neg = data.len() - total_pos;
+
+    if total_pos == 0 || total_neg == 0 {
+        return (0.0, f64::NAN, 0.0, 0.0, 0.0);
+    }
+
+    let (mut tn, mut fn_count) = (0, 0);
+    let mut best_threshold = f64::NEG_INFINITY;
+    let (mut best_acc, mut best_sens, mut best_spec) = (0.0, 0.0, 0.0);
+
+    let mut i = 0;
+    while i < data.len() {
+        let current_score = data[i].0;
+        let (mut current_tn, mut current_fn) = (0, 0);
+
+        while i < data.len() && (data[i].0 - current_score).abs() < f64::EPSILON {
+            match data[i].1 {
+                0 => current_tn += 1,
+                1 => current_fn += 1,
+                _ => unreachable!()
+            }
+            i += 1;
+        }
+
+        tn += current_tn;
+        fn_count += current_fn;
+
+        let tp = total_pos - fn_count;
+        let fp = total_neg - tn;
+        
+        let numerator = (tp as f64 * tn as f64) - (fp as f64 * fn_count as f64);
+        let denominator = ((tp + fp) as f64 * (tp + fn_count) as f64 * 
+                          (tn + fp) as f64 * (tn + fn_count) as f64).sqrt();
+        
+        let mcc = if denominator == 0.0 { 0.0 } else { numerator / denominator };
+
+        if mcc > best_mcc || (mcc == best_mcc && current_score < best_threshold) {
+            best_mcc = mcc;
+            best_threshold = current_score;
+            best_acc = (tp + tn) as f64 / (total_pos + total_neg) as f64;
+            best_sens = tp as f64 / total_pos as f64;
+            best_spec = tn as f64 / total_neg as f64;
+        }
+    }
+
+    (best_mcc, best_threshold, best_acc, best_sens, best_spec)
+}
+
 
 pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
     let mut n = 0.0;
@@ -231,6 +327,15 @@ pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
 
 pub fn median(values: &mut [f64]) -> f64 {
     let mid = values.len() / 2;
+
+    if values.is_empty() {
+        return f64::NAN;
+    }
+    
+    if values.iter().any(|&x| x.is_nan()) {
+        return f64::NAN;
+    }
+
     values.select_nth_unstable_by(mid, |a,b| a.partial_cmp(b).unwrap());
     if values.len() % 2 == 1 {
         values[mid]
@@ -406,6 +511,7 @@ pub fn display_feature_importance_terminal(
 
 fn format_tick_value(value: f64) -> String {
     let abs_value = value.abs();
+    
     if abs_value == 0.0 {
         return "0".to_string();
     } else if abs_value < 0.001 || abs_value >= 10000.0 {
@@ -417,9 +523,13 @@ fn format_tick_value(value: f64) -> String {
     } else if abs_value < 1.0 {
         return format!("{:.2}", value);
     } else if abs_value < 10.0 {
-        return format!("{:.1}", value);
+        if (value - value.round()).abs() < 1e-10 {
+            return format!("{:.0}", value);
+        } else {
+            return format!("{:.1}", value);
+        }
     } else {
-        if value == value.round() {
+        if (value - value.round()).abs() < 1e-10 {
             return format!("{:.0}", value);
         } else {
             return format!("{:.1}", value);
@@ -434,6 +544,10 @@ fn round_up_nicely(value: f64) -> f64 {
     
     if value < 0.0 {
         return -round_down_nicely(value.abs());
+    }
+
+    if value.abs() < 1e-10 {
+        return if value >= 0.0 { 1e-10 } else { -1e-10 };
     }
     
     let magnitude = value.log10().floor();
@@ -513,53 +627,24 @@ pub mod serde_json_hashmap_numeric {
         Ok(map)
     }
     
-    /// HashMap<u32, T>
-    pub fn serialize_u32<S, T>(
-        map: &HashMap<u32, T>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        T: Serialize + Clone,
-    {
-        let map_as_string: HashMap<String, T> = map.iter()
-            .map(|(&k, v)| (k.to_string(), v.clone()))
-            .collect();
-        map_as_string.serialize(serializer)
-    }
-    
-    /// HashMap<u32, T>
-    pub fn deserialize_u32<'de, D, T>(
-        deserializer: D,
-    ) -> Result<HashMap<u32, T>, D::Error>
-    where
-        D: Deserializer<'de>,
-        T: Deserialize<'de>,
-    {
-        let map_as_string: HashMap<String, T> = HashMap::deserialize(deserializer)?;
-        let mut map = HashMap::new();
-        for (k, v) in map_as_string {
-            if let Ok(idx) = k.parse() {
-                map.insert(idx, v);
-            }
-        }
-        Ok(map)
-    }
-    
     /// HashMap<(usize, usize), T>
     pub fn serialize_tuple_usize<S, T>(
         map: &HashMap<(usize, usize), T>,
         serializer: S,
-    ) -> Result<S::Ok, S::Error>
+        ) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
         T: Serialize + Clone,
     {
-        let map_as_string: HashMap<String, T> = map.iter()
-            .map(|(&(i, j), v)| (format!("{},{}", i, j), v.clone()))
+        let map_as_string: Result<HashMap<String, T>, _> = map.iter()
+            .map(|(&(i, j), v)| {
+                Ok((format!("{},{}", i, j), v.clone()))
+            })
             .collect();
-        map_as_string.serialize(serializer)
+        
+        map_as_string?.serialize(serializer)
     }
+
     
     /// HashMap<(usize, usize), T>
     pub fn deserialize_tuple_usize<'de, D, T>(
@@ -571,11 +656,17 @@ pub mod serde_json_hashmap_numeric {
     {
         let map_as_string: HashMap<String, T> = HashMap::deserialize(deserializer)?;
         let mut map = HashMap::new();
+        
         for (k, v) in map_as_string {
             let parts: Vec<&str> = k.split(',').collect();
             if parts.len() == 2 {
-                if let (Ok(i), Ok(j)) = (parts[0].parse(), parts[1].parse()) {
-                    map.insert((i, j), v);
+                match (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                    (Ok(i), Ok(j)) => {
+                        map.insert((i, j), v);
+                    }
+                    _ => {
+                        return Err(serde::de::Error::custom("Invalid tuple key format"));
+                    }
                 }
             }
         }
@@ -632,30 +723,6 @@ pub mod serde_json_hashmap_numeric {
         }
     }
     
-    /// HashMap<u32, String> (Population.featurenames)
-    pub mod u32_string {
-        use super::*;
-        
-        pub fn serialize<S>(
-            map: &HashMap<u32, String>,
-            serializer: S,
-        ) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serialize_u32(map, serializer)
-        }
-        
-        pub fn deserialize<'de, D>(
-            deserializer: D,
-        ) -> Result<HashMap<u32, String>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            deserialize_u32(deserializer)
-        }
-    }
-    
     /// HashMap<(usize, usize), f64> (Data.X)
     pub mod tuple_usize_f64 {
         use super::*;
@@ -679,54 +746,7 @@ pub mod serde_json_hashmap_numeric {
             deserialize_tuple_usize(deserializer)
         }
     }
-    
-    /// HashMap<usize, (f64, f64, f64)> (MCMC.featureprob)
-    pub mod usize_tuple3_f64 {
-        use super::*;
-        
-        pub fn serialize<S>(
-            map: &HashMap<usize, (f64, f64, f64)>,
-            serializer: S,
-        ) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serialize_usize(map, serializer)
-        }
-        
-        pub fn deserialize<'de, D>(
-            deserializer: D,
-        ) -> Result<HashMap<usize, (f64, f64, f64)>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            deserialize_usize(deserializer)
-        }
-    }
-    
-    /// HashMap<usize, (f64, f64)> (MCMC.modelstats)
-    pub mod usize_tuple2_f64 {
-        use super::*;
-        
-        pub fn serialize<S>(
-            map: &HashMap<usize, (f64, f64)>,
-            serializer: S,
-        ) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serialize_usize(map, serializer)
-        }
-        
-        pub fn deserialize<'de, D>(
-            deserializer: D,
-        ) -> Result<HashMap<usize, (f64, f64)>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            deserialize_usize(deserializer)
-        }
-    }
+
 }
 
 // unit tests
@@ -917,6 +937,875 @@ mod tests {
 
         let resultErrSup = panic::catch_unwind(|| { conf_inter_binomial(1.3, 50, 0.05) });
         assert!(resultErrSup.is_err(), "function should panic! for an accuracy greater than 1");
+    }
+
+    #[test]
+    fn test_compute_auc_from_value_perfect_classification() {
+        let value = vec![0.1, 0.2, 0.8, 0.9];
+        let y = vec![0, 0, 1, 1];
+        let auc = compute_auc_from_value(&value, &y);
+        assert_eq!(auc, 1.0, "Perfect classification should yield AUC = 1.0");
+    }
+
+    #[test]
+    fn test_compute_auc_from_value_random_classification() {
+        let value = vec![0.5, 0.5, 0.5, 0.5];
+        let y = vec![0, 1, 0, 1];
+        let auc = compute_auc_from_value(&value, &y);
+        assert_eq!(auc, 0.5, "Random classification should yield AUC = 0.5");
+    }
+
+    #[test]
+    fn test_compute_auc_from_value_empty_vectors() {
+        let value = vec![];
+        let y = vec![];
+        let auc = compute_auc_from_value(&value, &y);
+        assert_eq!(auc, 0.5, "Empty vectors should yield AUC = 0.5");
+    }
+
+    #[test]
+    fn test_compute_auc_from_value_single_class_only() {
+        let value = vec![0.1, 0.2, 0.3, 0.4];
+        let y = vec![0, 0, 0, 0];
+        let auc = compute_auc_from_value(&value, &y);
+        assert_eq!(auc, 0.5, "Single class only should yield AUC = 0.5");
+    }
+
+    #[test]
+    fn test_compute_auc_from_value_ties_handling() {
+        let value = vec![0.5, 0.5, 0.5, 0.5];
+        let y = vec![0, 0, 1, 1];
+        let auc = compute_auc_from_value(&value, &y);
+        assert_eq!(auc, 0.5, "Ties should be handled correctly");
+    }
+
+    #[test]
+    fn test_compute_auc_from_value_infinite_values() {
+        let value = vec![f64::NEG_INFINITY, 0.5, f64::INFINITY];
+        let y = vec![0, 1, 1];
+        let auc = compute_auc_from_value(&value, &y);
+        assert!(auc >= 0.0 && auc <= 1.0, "Should handle infinite values gracefully");
+    }
+
+    #[test]
+    fn test_compute_auc_large_dataset() {
+        let n = 10000;
+        let value: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+        let y: Vec<u8> = (0..n).map(|i| if i < n/2 { 0 } else { 1 }).collect();
+        let auc = compute_auc_from_value(&value, &y);
+        assert!((auc - 1.0).abs() < 1e-10, "Large sorted dataset should yield perfect AUC");
+    }
+
+    #[test]
+    fn test_compute_metrics_from_classes_perfect_predictions() {
+        let predicted = vec![0, 1, 0, 1];
+        let y = vec![0, 1, 0, 1];
+        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        assert_eq!(accuracy, 1.0, "Perfect predictions should yield 100% accuracy");
+        assert_eq!(sensitivity, 1.0, "Perfect predictions should yield 100% sensitivity");
+        assert_eq!(specificity, 1.0, "Perfect predictions should yield 100% specificity");
+    }
+
+    #[test]
+    fn test_compute_metrics_from_classes_all_wrong_predictions() {
+        let predicted = vec![1, 0, 1, 0];
+        let y = vec![0, 1, 0, 1];
+        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        assert_eq!(accuracy, 0.0, "All wrong predictions should yield 0% accuracy");
+        assert_eq!(sensitivity, 0.0, "All wrong predictions should yield 0% sensitivity");
+        assert_eq!(specificity, 0.0, "All wrong predictions should yield 0% specificity");
+    }
+
+    #[test]
+    fn test_compute_metrics_from_classes_mixed_predictions() {
+        let predicted = vec![0, 1, 0, 0];
+        let y = vec![0, 1, 1, 0];
+        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        assert_eq!(accuracy, 0.75, "Mixed predictions should yield expected accuracy");
+        assert_eq!(sensitivity, 0.5, "Mixed predictions should yield expected sensitivity");
+        assert_eq!(specificity, 1.0, "Mixed predictions should yield expected specificity");
+    }
+
+    #[test]
+    fn test_compute_metrics_from_classes_class_2_ignored() {
+        let predicted = vec![0, 1, 0, 1];
+        let y = vec![0, 1, 2, 1];
+        let (accuracy, _, _) = compute_metrics_from_classes(&predicted, &y);
+        assert_eq!(accuracy, 1.0, "Class 2 should be ignored in calculations");
+    }
+
+    #[test]
+    fn test_compute_metrics_from_classes_empty_vectors() {
+        let predicted = vec![];
+        let y = vec![];
+        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        assert_eq!(accuracy, 0.0, "Empty vectors should yield 0 metrics");
+        assert_eq!(sensitivity, 0.0, "Empty vectors should yield 0 metrics");
+        assert_eq!(specificity, 0.0, "Empty vectors should yield 0 metrics");
+    }
+
+    #[test]
+    fn test_compute_metrics_extreme_imbalance() {
+        let predicted = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let y = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        assert_eq!(accuracy, 1.0, "Perfect predictions should yield 100% accuracy even with imbalance");
+        assert_eq!(sensitivity, 1.0, "Perfect predictions should yield 100% sensitivity");
+        assert_eq!(specificity, 1.0, "Perfect predictions should yield 100% specificity");
+    }
+
+    #[test]
+    fn test_compute_roc_and_metrics_from_value_basic_case() {
+        let value = vec![0.1, 0.4, 0.6, 0.9];
+        let y = vec![0, 0, 1, 1];
+        let (auc, threshold, accuracy, sensitivity, specificity, _) = 
+            compute_roc_and_metrics_from_value(&value, &y, None);
+        assert!(auc >= 0.0 && auc <= 1.0, "AUC should be between 0 and 1");
+        assert!(accuracy >= 0.0 && accuracy <= 1.0, "Accuracy should be between 0 and 1");
+        assert!(sensitivity >= 0.0 && sensitivity <= 1.0, "Sensitivity should be between 0 and 1");
+        assert!(specificity >= 0.0 && specificity <= 1.0, "Specificity should be between 0 and 1");
+        assert!(!threshold.is_nan(), "Threshold should not be NaN");
+    }
+
+    #[test]
+    fn test_compute_roc_and_metrics_from_value_with_penalties() {
+        let value = vec![0.1, 0.4, 0.6, 0.9];
+        let y = vec![0, 0, 1, 1];
+        let penalties = Some(vec![2.0, 1.0]);
+        let (_, _, _, _, _, objective) = 
+            compute_roc_and_metrics_from_value(&value, &y, penalties.as_deref());
+        assert!(objective >= 0.0, "Objective should be non-negative");
+    }
+
+    #[test]
+    fn test_compute_roc_and_metrics_from_value_without_penalties() {
+        let value = vec![0.1, 0.4, 0.6, 0.9];
+        let y = vec![0, 0, 1, 1];
+        let (_, _, _, sensitivity, specificity, objective) = 
+            compute_roc_and_metrics_from_value(&value, &y, None);
+        let expected_youden = sensitivity + specificity - 1.0;
+        assert!((objective - expected_youden).abs() < 1e-10, "Without penalties, objective should be Youden index");
+    }
+
+    #[test]
+    fn test_compute_roc_and_metrics_from_value_single_class_only() {
+        let value = vec![0.1, 0.2, 0.3, 0.4];
+        let y = vec![0, 0, 0, 0];
+        let (auc, threshold, _, _, _, _) = 
+            compute_roc_and_metrics_from_value(&value, &y, None);
+        assert_eq!(auc, 0.5, "Single class should yield AUC = 0.5");
+        assert!(threshold.is_nan(), "Single class should yield NaN threshold");
+    }
+
+    #[test]
+    fn test_compute_mcc_and_metrics_from_value_perfect_classification() {
+        let value = vec![0.1, 0.2, 0.8, 0.9];
+        let y = vec![0, 0, 1, 1];
+        let (mcc, _, accuracy, sensitivity, specificity) = 
+            compute_mcc_and_metrics_from_value(&value, &y);
+        assert_eq!(mcc, 1.0, "Perfect classification should yield MCC = 1.0");
+        assert_eq!(accuracy, 1.0, "Perfect classification should yield accuracy = 1.0");
+        assert_eq!(sensitivity, 1.0, "Perfect classification should yield sensitivity = 1.0");
+        assert_eq!(specificity, 1.0, "Perfect classification should yield specificity = 1.0");
+    }
+
+    #[test]
+    fn test_compute_mcc_and_metrics_from_value_random_classification() {
+        let value = vec![0.5, 0.5, 0.5, 0.5];
+        let y = vec![0, 1, 0, 1];
+        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        assert!(mcc.abs() < 0.1, "Random classification should yield MCC ≈ 0");
+    }
+
+    #[test]
+    fn test_compute_mcc_and_metrics_from_value_single_class_only() {
+        let value = vec![0.1, 0.2, 0.3, 0.4];
+        let y = vec![0, 0, 0, 0];
+        let (mcc, threshold, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        assert_eq!(mcc, 0.0, "Single class should yield MCC = 0.0");
+        assert!(threshold.is_nan(), "Single class should yield NaN threshold");
+    }
+
+    #[test]
+    fn test_compute_mcc_zero_division_case() {
+        let value = vec![0.5, 0.5, 0.5, 0.5];
+        let y = vec![1, 1, 1, 1];
+        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        assert_eq!(mcc, 0.0, "MCC with single class should be 0.0");
+    }
+
+    #[test]
+    fn test_compute_mcc_and_metrics_from_value_empty_input() {
+        let value = vec![];
+        let y = vec![];
+        let (mcc, threshold, _, _, _) = 
+            compute_mcc_and_metrics_from_value(&value, &y);
+        assert_eq!(mcc, 0.0, "Empty input should yield MCC = 0.0");
+        assert!(threshold.is_nan(), "Empty input should yield NaN threshold");
+    }
+
+    #[test]
+    fn test_mean_and_std_normal_values() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (mean, std) = mean_and_std(&values);
+        assert_eq!(mean, 3.0, "Mean of 1-5 should be 3.0");
+        assert!((std - 2.0f64.sqrt()).abs() < 1e-10, "Standard deviation should be √2");
+    }
+
+    #[test]
+    fn test_mean_and_std_single_value() {
+        let values = vec![42.0];
+        let (mean, std) = mean_and_std(&values);
+        assert_eq!(mean, 42.0, "Mean of single value should be that value");
+        assert_eq!(std, 0.0, "Standard deviation of single value should be 0");
+    }
+
+    #[test]
+    fn test_mean_and_std_empty_slice() {
+        let values: Vec<f64> = vec![];
+        let (mean, std) = mean_and_std(&values);
+        assert_eq!(mean, 0.0, "Welford algorithm starts with mean = 0.0");
+        assert!(std.is_nan(), "Standard deviation of empty slice should be NaN");
+    }
+
+    #[test]
+    fn test_mean_and_std_identical_values() {
+        let values = vec![5.0, 5.0, 5.0, 5.0];
+        let (mean, std) = mean_and_std(&values);
+        assert_eq!(mean, 5.0, "Mean of identical values should be that value");
+        assert_eq!(std, 0.0, "Standard deviation of identical values should be 0");
+    }
+
+    #[test]
+    fn test_mean_and_std_negative_values() {
+        let values = vec![-1.0, -2.0, -3.0];
+        let (mean, std) = mean_and_std(&values);
+        assert_eq!(mean, -2.0, "Mean should handle negative values");
+        assert!(std > 0.0, "Standard deviation should be positive for varying values");
+    }
+
+    #[test]
+    fn test_mean_and_std_with_nan() {
+        let values = vec![1.0, f64::NAN, 3.0];
+        let (mean, std) = mean_and_std(&values);
+        assert!(mean.is_nan(), "Welford with NaN should propagate NaN to mean");
+        assert!(std.is_nan(), "Welford with NaN should propagate NaN to std");
+    }
+
+    #[test]
+    fn test_mean_and_std_large_dataset() {
+        let values: Vec<f64> = (0..100000).map(|i| i as f64).collect();
+        let (mean, std) = mean_and_std(&values);
+        let expected_mean = 49999.5;
+        assert!((mean - expected_mean).abs() < 1e-6, "Large dataset mean should be accurate");
+        assert!(std > 0.0, "Large dataset std should be positive");
+    }
+
+    #[test]
+    fn test_median_odd_length() {
+        let mut values = vec![1.0, 3.0, 2.0];
+        let result = median(&mut values);
+        assert_eq!(result, 2.0, "Median of [1,2,3] should be 2");
+    }
+
+    #[test]
+    fn test_median_even_length() {
+        let mut values = vec![1.0, 2.0, 3.0, 4.0];
+        let result = median(&mut values);
+        assert_eq!(result, 2.5, "Median of [1,2,3,4] should be 2.5");
+    }
+
+    #[test]
+    fn test_median_single_value() {
+        let mut values = vec![42.0];
+        let result = median(&mut values);
+        assert_eq!(result, 42.0, "Median of single value should be that value");
+    }
+
+    #[test]
+    fn test_median_two_values() {
+        let mut values = vec![1.0, 3.0];
+        let result = median(&mut values);
+        assert_eq!(result, 2.0, "Median of two values should be their average");
+    }
+
+    #[test]
+    fn test_median_unsorted_values() {
+        let mut values = vec![5.0, 1.0, 9.0, 3.0, 7.0];
+        let result = median(&mut values);
+        assert_eq!(result, 5.0, "Median should work on unsorted data");
+    }
+
+    #[test]
+    fn test_median_with_nan() {
+        let mut values = vec![1.0, f64::NAN, 3.0];
+        let result = median(&mut values);
+        assert!(result.is_nan(), "Median with NaN should return NaN");
+    }
+
+    #[test]
+    fn test_mad_normal_distribution() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = mad(&values);
+        assert!(result > 0.0, "MAD should be positive for varying values");
+    }
+
+    #[test]
+    fn test_mad_constant_values() {
+        let values = vec![5.0, 5.0, 5.0, 5.0];
+        let result = mad(&values);
+        assert_eq!(result, 0.0, "MAD of constant values should be 0");
+    }
+
+    #[test]
+    fn test_mad_single_value() {
+        let values = vec![42.0];
+        let result = mad(&values);
+        assert_eq!(result, 0.0, "MAD of single value should be 0");
+    }
+
+    #[test]
+    fn test_mad_two_values() {
+        let values = vec![1.0, 3.0];
+        let result = mad(&values);
+        assert!(result > 0.0, "MAD of two different values should be positive");
+    }
+
+    #[test]
+    fn test_mad_median_consistency() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mut values_for_median = values.clone();
+        let med = median(&mut values_for_median);
+        let mad_result = mad(&values);
+        
+        assert_eq!(med, 3.0, "Median should be 3.0");
+        assert!(mad_result > 0.0, "MAD should be positive for varying values");
+        
+        let expected_mad = 1.4826;
+        assert!((mad_result - expected_mad).abs() < 0.001, "MAD should match expected calculation");
+    }
+    #[test]
+    fn test_display_feature_importance_terminal_basic_output() {
+        let mut data = Data::new();
+        data.features = vec!["feature1".to_string(), "feature2".to_string()];
+        
+        let mut importance_map = HashMap::new();
+        importance_map.insert(0, (0.8, 0.1));
+        importance_map.insert(1, (0.6, 0.05));
+        
+        let result = display_feature_importance_terminal(&data, &importance_map, 2, &ImportanceAggregation::median);
+        assert!(result.contains("Feature importance"), "Output should contain title");
+        assert!(result.contains("feature1"), "Output should contain feature names");
+        assert!(result.contains("•"), "Output should contain importance markers");
+    }
+
+    #[test]
+    fn test_display_feature_importance_terminal_empty_features() {
+        let data = Data::new();
+        let importance_map = HashMap::new();
+        
+        let result = display_feature_importance_terminal(&data, &importance_map, 5, &ImportanceAggregation::mean);
+        assert_eq!(result, "No features to display.", "Empty features should return appropriate message");
+    }
+
+    #[test]
+    fn test_display_feature_importance_terminal_median_aggregation() {
+        let mut data = Data::new();
+        data.features = vec!["test_feature".to_string()];
+        
+        let mut importance_map = HashMap::new();
+        importance_map.insert(0, (0.5, 0.1));
+        
+        let result = display_feature_importance_terminal(&data, &importance_map, 1, &ImportanceAggregation::median);
+        assert!(result.contains("median aggregation"), "Should indicate median aggregation method");
+        assert!(result.contains("±MAD"), "Should show MAD for median aggregation");
+    }
+
+    #[test]
+    fn test_display_feature_importance_negative_importance() {
+        let mut data = Data::new();
+        data.features = vec!["negative_feature".to_string()];
+        
+        let mut importance_map = HashMap::new();
+        importance_map.insert(0, (-0.5, 0.1));
+        
+        let result = display_feature_importance_terminal(&data, &importance_map, 1, &ImportanceAggregation::mean);
+        assert!(result.contains("negative_feature"), "Should handle negative importance");
+        assert!(result.contains("•"), "Should still display marker for negative values");
+    }
+
+    #[test]
+    fn test_display_feature_importance_very_large_names() {
+        let mut data = Data::new();
+        let long_name = "a".repeat(100);
+        data.features = vec![long_name.clone()];
+        
+        let mut importance_map = HashMap::new();
+        importance_map.insert(0, (0.5, 0.1));
+        
+        let result = display_feature_importance_terminal(&data, &importance_map, 1, &ImportanceAggregation::mean);
+        assert!(result.contains("..."), "Should truncate very long feature names");
+        assert!(!result.contains(&long_name), "Should not contain full long name");
+    }
+
+    #[test]
+    fn test_format_tick_value_zero() {
+        assert_eq!(format_tick_value(0.0), "0");
+    }
+
+    #[test]
+    fn test_format_tick_value_small_positive() {
+        assert_eq!(format_tick_value(0.005), "0.0050");
+        assert_eq!(format_tick_value(0.05), "0.050");
+        assert_eq!(format_tick_value(0.5), "0.50");
+    }
+
+    #[test]
+    fn test_format_tick_value_small_negative() {
+        assert_eq!(format_tick_value(-0.005), "-0.0050");
+        assert_eq!(format_tick_value(-0.5), "-0.50");
+    }
+
+    #[test]
+    fn test_format_tick_value_large_values() {
+        assert!(format_tick_value(15000.0).contains("e"), "Large values should use scientific notation");
+        assert!(format_tick_value(-20000.0).contains("e"), "Large negative values should use scientific notation");
+    }
+
+    #[test]
+    fn test_format_tick_value_scientific_notation() {
+        assert!(format_tick_value(0.0005).contains("e"), "Very small values should use scientific notation");
+        assert!(format_tick_value(-0.0001).contains("e"), "Very small negative values should use scientific notation");
+    }
+
+    #[test]
+    fn test_format_tick_value_integer_values() {
+        assert_eq!(format_tick_value(5.0), "5");
+        assert_eq!(format_tick_value(42.0), "42");
+    }
+
+    #[test]
+    fn test_format_tick_value_edge_cases() {
+        assert_eq!(format_tick_value(f64::MIN_POSITIVE), "2.2e-308");
+        assert_eq!(format_tick_value(-f64::MIN_POSITIVE), "-2.2e-308");
+        assert_eq!(format_tick_value(1.0000001), "1.0");
+        assert_eq!(format_tick_value(0.99999), "1.00");
+    }
+
+    #[test]
+    fn test_round_up_nicely_positive_values() {
+        assert_eq!(round_up_nicely(1.3), 2.0);
+        assert_eq!(round_up_nicely(2.5), 5.0);
+        assert_eq!(round_up_nicely(7.0), 10.0);
+    }
+
+    #[test]
+    fn test_round_up_nicely_negative_values() {
+        assert_eq!(round_up_nicely(-1.3), -1.0);
+        assert!(round_up_nicely(-2.5) > -5.0);
+    }
+
+    #[test]
+    fn test_round_up_nicely_zero() {
+        assert_eq!(round_up_nicely(0.0), 0.1);
+    }
+
+    #[test]
+    fn test_round_up_nicely_very_small_values() {
+        let result = round_up_nicely(0.0003);
+        assert!(result > 0.0003, "Should round up small positive values");
+    }
+
+    #[test]
+    fn test_round_up_nicely_powers_of_ten() {
+        assert_eq!(round_up_nicely(1.0), 1.0);
+        assert_eq!(round_up_nicely(10.0), 10.0);
+        assert_eq!(round_up_nicely(100.0), 100.0);
+    }
+
+    #[test]
+    fn test_round_up_nicely_extreme_values() {
+        assert!(round_up_nicely(f64::MIN_POSITIVE) > 0.0);
+        assert!(round_up_nicely(f64::EPSILON) > 0.0);
+        assert_eq!(round_up_nicely(f64::EPSILON), 1e-10);
+    }
+
+    #[test]
+    fn test_round_down_nicely_positive_values() {
+        assert_eq!(round_down_nicely(1.3), 1.0);
+        assert_eq!(round_down_nicely(2.5), 2.0);
+        assert_eq!(round_down_nicely(7.0), 5.0);
+    }
+
+    #[test]
+    fn test_round_down_nicely_negative_values() {
+        assert!(round_down_nicely(-1.3) < -1.3);
+        assert!(round_down_nicely(-2.5) < -2.5);
+    }
+
+    #[test]
+    fn test_round_down_nicely_very_small_values() {
+        assert_eq!(round_down_nicely(1e-12), 0.0);
+    }
+
+    #[test]
+    fn test_round_down_nicely_powers_of_ten() {
+        assert_eq!(round_down_nicely(1.0), 1.0);
+        assert_eq!(round_down_nicely(10.0), 10.0);
+        assert_eq!(round_down_nicely(100.0), 100.0);
+    }
+
+    #[test]
+    fn test_round_functions_with_extreme_values() {
+        assert!(round_up_nicely(f64::MIN_POSITIVE) > 0.0);
+        assert!(round_down_nicely(f64::MAX) > 0.0);
+        assert_eq!(round_up_nicely(f64::EPSILON), 1e-10);
+        assert_eq!(round_down_nicely(f64::EPSILON), 0.0);
+    }
+
+    #[test]
+    fn test_serialize_empty_hashmap() {
+        let map: HashMap<usize, i8> = HashMap::new();
+        let serialized = serde_json::to_string(&map).unwrap();
+        let deserialized: HashMap<usize, i8> = serde_json::from_str(&serialized).unwrap();
+        assert!(deserialized.is_empty(), "Empty map serialization should work");
+    }
+
+    #[test]
+    fn test_serialize_large_keys() {
+        let mut map = HashMap::new();
+        map.insert(usize::MAX, 42_i8);
+        map.insert(0, -42_i8);
+        
+        let serialized = serde_json::to_string(&map).unwrap();
+        let deserialized: HashMap<usize, i8> = serde_json::from_str(&serialized).unwrap();
+        
+        assert_eq!(map, deserialized, "Large keys should serialize correctly");
+    }
+
+    #[test]
+    fn test_serialize_tuple_edge_cases() {
+        use crate::utils::serde_json_hashmap_numeric::{serialize_tuple_usize, deserialize_tuple_usize};
+        use serde_json::Value;
+        
+        let mut original_map = HashMap::new();
+        original_map.insert((0, 0), 0.0_f64);
+        original_map.insert((usize::MAX, usize::MAX), f64::MAX);
+        original_map.insert((1, 2), f64::MIN_POSITIVE);
+        
+
+        let serialized_value = serialize_tuple_usize(&original_map, serde_json::value::Serializer).unwrap();
+        let serialized_string = serde_json::to_string_pretty(&serialized_value).unwrap();
+        
+        assert!(serialized_string.contains("\"0,0\""));
+        assert!(serialized_string.contains(&format!("\"{},{}\"", usize::MAX, usize::MAX)));
+        assert!(serialized_string.contains("\"1,2\""));
+        
+        let value: Value = serde_json::from_str(&serialized_string).unwrap();
+        let deserialized = deserialize_tuple_usize(value).unwrap();
+        
+        assert_eq!(original_map, deserialized, "Tuple key serialization roundtrip should work correctly");
+    }
+
+    #[test]
+    fn test_roundtrip_serialization_usize_i8() {
+        let mut original_map = HashMap::new();
+        original_map.insert(1, 1_i8);
+        original_map.insert(2, -1_i8);
+        
+        let serialized = serde_json::to_string(&original_map).unwrap();
+        let deserialized: HashMap<usize, i8> = serde_json::from_str(&serialized).unwrap();
+        
+        assert_eq!(original_map, deserialized, "Roundtrip serialization should preserve data");
+    }
+
+    #[test]
+    fn test_roundtrip_serialization_usize_u8() {
+        let mut original_map = HashMap::new();
+        original_map.insert(1, 255_u8);
+        original_map.insert(2, 0_u8);
+        
+        let serialized = serde_json::to_string(&original_map).unwrap();
+        let deserialized: HashMap<usize, u8> = serde_json::from_str(&serialized).unwrap();
+        
+        assert_eq!(original_map, deserialized, "u8 roundtrip serialization should work");
+    }
+
+    #[test]
+    fn test_roundtrip_serialization_tuple_usize_f64() {
+        use crate::utils::serde_json_hashmap_numeric::{serialize_tuple_usize, deserialize_tuple_usize};
+        
+        let mut original_map = HashMap::new();
+        original_map.insert((0, 1), 1.5_f64);
+        original_map.insert((2, 3), -2.7_f64);
+        
+        // Sérialiser manuellement vers un HashMap<String, f64>
+        let string_map: HashMap<String, f64> = original_map.iter()
+            .map(|(&(i, j), &v)| (format!("{},{}", i, j), v))
+            .collect();
+        
+        let serialized = serde_json::to_string(&string_map).unwrap();
+        let string_map_deserialized: HashMap<String, f64> = serde_json::from_str(&serialized).unwrap();
+        
+        // Reconvertir vers HashMap<(usize, usize), f64>
+        let mut deserialized = HashMap::new();
+        for (k, v) in string_map_deserialized {
+            let parts: Vec<&str> = k.split(',').collect();
+            if parts.len() == 2 {
+                if let (Ok(i), Ok(j)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                    deserialized.insert((i, j), v);
+                }
+            }
+        }
+        
+        assert_eq!(original_map, deserialized, "Tuple key serialization should work correctly");
+    }
+
+    #[test]
+    #[should_panic(expected = "confInterBinomial: Sample size (n) must be greater than zero.")]
+    fn test_conf_inter_binomial_zero_samples() {
+        conf_inter_binomial(0.5, 0, 0.05);
+    }
+
+    #[test]
+    #[should_panic(expected = "confInterBinomial: accuracy should not be lower than 0 or greater than 1")]
+    fn test_conf_inter_binomial_invalid_accuracy() {
+        conf_inter_binomial(1.5, 50, 0.05);
+    }
+
+    #[test]
+    #[should_panic(expected = "confInterBinomial: alpha should not be lower than 0 or greater than 1")]
+    fn test_conf_inter_binomial_invalid_alpha() {
+        conf_inter_binomial(0.5, 50, 1.5);
+    }
+
+    #[test]
+    fn test_auc_roc_mcc_consistency() {
+        let value = vec![0.1, 0.4, 0.6, 0.9];
+        let y = vec![0, 0, 1, 1];
+        
+        let auc1 = compute_auc_from_value(&value, &y);
+        let (auc2, _, _, _, _, _) = compute_roc_and_metrics_from_value(&value, &y, None);
+        
+        assert!((auc1 - auc2).abs() < 1e-10, "AUC should be consistent between functions");
+    }
+
+    #[test]
+    fn test_compute_roc_large_dataset() {
+        let n = 5000;
+        let value: Vec<f64> = (0..n).map(|i| (i as f64 / n as f64) + 0.001 * (i % 10) as f64).collect();
+        let y: Vec<u8> = (0..n).map(|i| if i < n/2 { 0 } else { 1 }).collect();
+        let (auc, _, _, _, _, _) = compute_roc_and_metrics_from_value(&value, &y, None);
+        assert!(auc > 0.9, "Large dataset with clear separation should yield high AUC");
+    }
+
+    #[test]
+    fn test_compute_auc_manual_example_1() {
+        // Simple case: 4 samples with clear classification
+        let value = vec![0.1, 0.3, 0.7, 0.9];
+        let y = vec![0, 0, 1, 1];
+        
+        // Manual AUC calculation:
+        // Pairs (negative, positive): (0.1,0.7), (0.1,0.9), (0.3,0.7), (0.3,0.9)
+        // All 4 pairs are correctly ordered (negative < positive)
+        // AUC = 4/4 = 1.0
+        
+        let auc = compute_auc_from_value(&value, &y);
+        assert!((auc - 1.0).abs() < 1e-10, "AUC should be 1.0 for perfect separation");
+    }
+
+    #[test]
+    fn test_compute_auc_manual_example_2() {
+        // Partially inverted classification
+        let value = vec![0.8, 0.6, 0.4, 0.2];
+        let y = vec![0, 0, 1, 1];
+        
+        // Manual AUC calculation:
+        // Pairs (negative, positive): (0.8,0.4), (0.8,0.2), (0.6,0.4), (0.6,0.2)
+        // No pair correctly ordered (all negative > positive)
+        // AUC = 0/4 = 0.0
+        
+        let auc = compute_auc_from_value(&value, &y);
+        assert!((auc - 0.0).abs() < 1e-10, "AUC should be 0.0 for completely inverse classification");
+    }
+
+    #[test]
+    fn test_compute_auc_manual_example_3() {
+        // Medium classification performance
+        let value = vec![0.2, 0.6, 0.4, 0.8];
+        let y = vec![0, 0, 1, 1];
+        
+        // Manual AUC calculation:
+        // Pairs (negative, positive): (0.2,0.4), (0.2,0.8), (0.6,0.4), (0.6,0.8)
+        // Correct pairs: (0.2,0.4), (0.2,0.8), (0.6,0.8) = 3/4
+        // AUC = 3/4 = 0.75
+        
+        let auc = compute_auc_from_value(&value, &y);
+        assert!((auc - 0.75).abs() < 1e-10, "AUC should be 0.75");
+    }
+
+    #[test]
+    fn test_compute_auc_manual_example_4() {
+        // Case with ties handling
+        let value = vec![0.5, 0.5, 0.3, 0.7];
+        let y = vec![0, 1, 0, 1];
+        
+        // Manual AUC calculation with ties:
+        // Pairs (negative, positive): (0.5,0.5), (0.5,0.7), (0.3,0.5), (0.3,0.7)
+        // (0.5,0.5) counts as 0.5, (0.5,0.7) = 1, (0.3,0.5) = 1, (0.3,0.7) = 1
+        // AUC = (0.5 + 1 + 1 + 1) / 4 = 3.5/4 = 0.875
+        
+        let auc = compute_auc_from_value(&value, &y);
+        assert!((auc - 0.875).abs() < 1e-10, "AUC should be 0.875 with ties");
+    }
+
+    #[test]
+    fn test_compute_auc_manual_example_5() {
+        // Imbalanced dataset
+        let value = vec![0.1, 0.2, 0.9];
+        let y = vec![0, 0, 1];
+        
+        // Manual AUC calculation:
+        // Pairs (negative, positive): (0.1,0.9), (0.2,0.9)
+        // All correct: 2/2 = 1.0
+        
+        let auc = compute_auc_from_value(&value, &y);
+        assert!((auc - 1.0).abs() < 1e-10, "AUC should be 1.0 for imbalanced but perfect classification");
+    }
+
+    #[test]
+    fn test_compute_mcc_manual_example_1() {
+        // Perfect balanced classification
+        let value = vec![0.1, 0.2, 0.8, 0.9];
+        let y = vec![0, 0, 1, 1];
+        
+        // With optimal threshold at 0.5: TP=2, TN=2, FP=0, FN=0
+        // MCC = (2*2 - 0*0) / sqrt((2+0)*(2+0)*(2+0)*(2+0)) = 4/4 = 1.0
+        
+        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        assert!((mcc - 1.0).abs() < 1e-10, "MCC should be 1.0 for perfect classification");
+    }
+
+    #[test]
+    fn test_compute_mcc_manual_example_2() {
+        // Imperfect but balanced classification
+        let value = vec![0.5, 0.5, 0.5, 0.5];
+        let y = vec![0, 1, 0, 1];
+        
+        // With optimal threshold at 0.5: TP=1, TN=1, FP=1, FN=1
+        // MCC = (1*1 - 1*1) / sqrt((1+1)*(1+1)*(1+1)*(1+1)) = 0/4 = 0.0
+        
+        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        assert!(mcc.abs() < 1e-10, "MCC should be ~0.0 for random-like classification but is {}", mcc);
+    }
+
+    #[test]
+    fn test_compute_mcc_manual_example_3() {
+        // Classification with class bias
+        let value = vec![0.2, 0.3, 0.7, 0.8];
+        let y = vec![0, 0, 0, 1];
+        
+        // With optimal threshold at ~0.75: TP=1, TN=3, FP=0, FN=0
+        // MCC = (1*3 - 0*0) / sqrt((1+0)*(1+0)*(3+0)*(3+0)) = 3/sqrt(9) = 3/3 = 1.0
+        
+        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        assert!((mcc - 1.0).abs() < 1e-10, "MCC should be 1.0 for perfect imbalanced classification");
+    }
+
+    #[test]
+    fn test_compute_mcc_manual_example_4() {
+        // Intermediate case with manual calculation
+        let value = vec![0.1, 0.4, 0.6, 0.9];
+        let y = vec![0, 0, 1, 1];
+        
+        // With optimal threshold at 0.5: TP=2, TN=2, FP=0, FN=0
+        // MCC = (2*2 - 0*0) / sqrt((2+0)*(2+0)*(2+0)*(2+0)) = 4/4 = 1.0
+        
+        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        assert!((mcc - 1.0).abs() < 1e-10, "MCC should be 1.0");
+    }
+
+    #[test]
+    fn test_compute_mcc_manual_example_5() {
+        // Classification with symmetric errors
+        let value = vec![0.2, 0.6, 0.4, 0.8];
+        let y = vec![0, 0, 1, 1];
+        
+        // Analysis of possible thresholds:
+        // Threshold 0.5: TP=1, TN=1, FP=1, FN=1 → MCC = 0
+        // Threshold 0.3: TP=2, TN=1, FP=1, FN=0 → MCC = (2*1-1*0)/sqrt(3*2*2*1) = 2/sqrt(12) ≈ 0.577
+        
+        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        assert!(mcc > 0.5 && mcc < 0.6, "MCC should be approximately 0.577");
+    }
+
+    #[test]
+    fn test_auc_mcc_relationship_manual_verification() {
+        // Verification on a case where we can calculate both manually
+        let value = vec![0.1, 0.3, 0.7, 0.9];
+        let y = vec![0, 0, 1, 1];
+        
+        let auc = compute_auc_from_value(&value, &y);
+        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        
+        // Expected values calculated manually
+        assert!((auc - 1.0).abs() < 1e-10, "AUC should be 1.0");
+        assert!((mcc - 1.0).abs() < 1e-10, "MCC should be 1.0");
+        
+        // For perfect classification, AUC = MCC = 1.0
+        assert!((auc - mcc).abs() < 1e-10, "For perfect classification, AUC should equal MCC");
+    }
+
+    #[test]
+    fn test_compute_auc_manual_complex_case() {
+        // More complex case with multiple score values
+        let value = vec![0.1, 0.3, 0.4, 0.6, 0.7, 0.9];
+        let y = vec![0, 0, 1, 0, 1, 1];
+        
+        // Manual calculation:
+        // Negatives: 0.1, 0.3, 0.6 (indices 0, 1, 3)
+        // Positives: 0.4, 0.7, 0.9 (indices 2, 4, 5)
+        // Pairs to evaluate: (0.1,0.4), (0.1,0.7), (0.1,0.9), (0.3,0.4), (0.3,0.7), (0.3,0.9), (0.6,0.4), (0.6,0.7), (0.6,0.9)
+        // Correct pairs: (0.1,0.4), (0.1,0.7), (0.1,0.9), (0.3,0.4), (0.3,0.7), (0.3,0.9), (0.6,0.7), (0.6,0.9) = 8/9
+        // AUC = 8/9 ≈ 0.8889
+        
+        let auc = compute_auc_from_value(&value, &y);
+        assert!((auc - 8.0/9.0).abs() < 1e-10, "AUC should be 8/9 for this configuration");
+    }
+
+    #[test]
+    fn test_compute_mcc_manual_complex_case() {
+        // Complex case with known MCC calculation
+        let value = vec![0.1, 0.3, 0.6, 0.8];
+        let y = vec![0, 1, 1, 0];
+        
+        // With threshold 0.45: predictions [0, 0, 1, 1], actual [0, 1, 1, 0]
+        // TP=1 (index 2), TN=1 (index 0), FP=1 (index 3), FN=1 (index 1)
+        // MCC = (1*1 - 1*1) / sqrt((1+1)*(1+1)*(1+1)*(1+1)) = 0/4 = 0.0
+        // But algorithm will find optimal threshold
+        
+        let (mcc, threshold, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        
+        // The optimal threshold should give better than random performance
+        assert!(mcc >= 0.0, "MCC should be non-negative for this case");
+        assert!(!threshold.is_nan(), "Threshold should not be NaN");
+    }
+
+    #[test]
+    fn test_compute_auc_edge_case_with_duplicate_scores() {
+        // Edge case: multiple samples with same score
+        let value = vec![0.2, 0.2, 0.8, 0.8];
+        let y = vec![0, 1, 0, 1];
+        
+        // Manual calculation with ties:
+        // Pairs: (0.2,0.8), (0.2,0.8) → both count as 1.0
+        // Pairs: (0.2,0.8), (0.2,0.8) → both count as 1.0
+        // But we also have ties: (0.2,0.2) and (0.8,0.8) each count as 0.5
+        // Total correct comparisons considering ties
+        // Expected AUC = 0.5 (since classification is essentially random due to ties)
+        
+        let auc = compute_auc_from_value(&value, &y);
+        assert!((auc - 0.5).abs() < 1e-10, "AUC should be 0.5 for this tie scenario");
     }
 
 }

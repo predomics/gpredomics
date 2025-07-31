@@ -211,6 +211,7 @@ struct MatrixMultParams {
     // possibly some padding
 }
 
+#[derive(Clone)]
 pub struct GpuAssay {
     // WGPU core
     pub config: GPU,

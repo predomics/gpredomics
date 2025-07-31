@@ -2,26 +2,18 @@ use std::fs::File;
 use std::io::BufReader;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use crate::experiment::VotingMethod;
+use crate::experiment::ImportanceAggregation;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Param {
-    pub general: General,
-    pub data: Data,                          // Nested struct for "data"
-    pub ga: GA,
-    pub beam: BEAM,
-    pub mcmc: MCMC,
-    pub cv: CV,
-    pub gpu: GPU,
-}
 
-#[derive(Debug,Serialize,Deserialize,Clone)]
+#[derive(Debug,Serialize,Deserialize,Clone, PartialEq)]
 #[allow(non_camel_case_types)]
 pub enum FitFunction {
     auc,
     specificity,
-    sensitivity    
+    sensitivity,  
+    mcc
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum GpuMemoryPolicy {
@@ -30,15 +22,33 @@ pub enum GpuMemoryPolicy {
     Performance,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[allow(non_camel_case_types)]
-pub enum ImportanceAggregation {
-    mean,
-    median
+// Field definitions and associated default values
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Param {
+    #[serde(default)]
+    pub general: General,
+    #[serde(default)]
+    pub voting: Voting,
+    #[serde(default)]
+    pub data: Data,
+    #[serde(default)]
+    pub ga: GA,
+    #[serde(default)]
+    pub beam: BEAM,
+    #[serde(default)]
+    pub mcmc: MCMC,
+    #[serde(default)]
+    pub cv: CV,
+    #[serde(default)]
+    pub importance: Importance,
+    #[serde(default)]
+    pub gpu: GPU,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct General {
+    #[serde(default = "seed_default")]
     pub seed: u64,
     #[serde(default = "algorithm_default")]  
     pub algo: String,
@@ -48,7 +58,7 @@ pub struct General {
     pub data_type: String,    
     #[serde(default = "data_type_epsilon_default")]  
     pub data_type_epsilon: f64,
-    #[serde(default = "thread_number_default")]  
+    #[serde(default = "one_default")]  
     pub thread_number: usize,
     #[serde(default = "log_base_default")]  
     pub log_base: String,
@@ -58,11 +68,9 @@ pub struct General {
     pub log_level: String,
     #[serde(default = "fit_default")]
     pub fit: FitFunction,
-    #[serde(default = "penalty_default")] 
-    pub k_penalty: f64,                       // A penalty of this per value of k is deleted from AUC in the fit function
-    #[serde(default = "penalty_default")] 
-    pub overfit_penalty: f64,
-    #[serde(default = "penalty_default")] 
+    #[serde(default = "zero_default")] 
+    pub k_penalty: f64,                       
+    #[serde(default = "zero_default")] 
     pub fr_penalty: f64,
     #[serde(default = "nb_best_model_to_test_default")] 
     pub nb_best_model_to_test: u32,
@@ -72,77 +80,131 @@ pub struct General {
     pub cv: bool,
     #[serde(default = "display_level_default")] 
     pub display_level: usize,
-    #[serde(default = "display_colorful_default")] 
+    #[serde(default = "true_default")] 
     pub display_colorful: bool,
     #[serde(default = "feature_keep_trace_default")]   
     pub keep_trace: bool,
     #[serde(default = "save_experiment_default")] 
     pub save_exp: String,
-    #[serde(default = "false_default")] 
-    pub compute_importance: bool,
-    
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Data {
+    #[serde(default = "empty_string")]  
     pub X: String,                     
+    #[serde(default = "empty_string")]  
     pub y: String,
     #[serde(default = "empty_string")]                      
     pub Xtest: String,
     #[serde(default = "empty_string")]                     
     pub ytest: String,
-    #[serde(default = "features_maximal_number_per_class_default")]                      
+    #[serde(default = "uzero_default")]                      
     pub features_maximal_number_per_class: usize,
     #[serde(default = "feature_selection_method_default")]                      
     pub feature_selection_method: String,
     #[serde(default = "feature_minimal_prevalence_pct_default")]                     
-    pub feature_minimal_prevalence_pct: f64, // Minimum prevalence
+    pub feature_minimal_prevalence_pct: f64, 
     #[serde(default = "feature_maximal_pvalue_default")]                     
     pub feature_maximal_pvalue: f64, 
-    #[serde(default = "feature_minimal_feature_value_default")]                      
+    #[serde(default = "zero_default")]                      
     pub feature_minimal_feature_value: f64, 
     #[serde(default = "feature_minimal_log_abs_bayes_factor_default")]                      
     pub feature_minimal_log_abs_bayes_factor: f64, 
+    #[serde(default = "false_default")] 
+    pub inverse_classes: bool,
+    #[serde(default = "uzero_default")]
+    pub n_validation_samples: usize,
     #[serde(default = "class_names_default")]                      
     pub classes: Vec<String>, 
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GA {
-    pub population_size: u32,                // Population size
-    pub max_epochs: usize,                         // Number of epochs/generations
-    #[serde(default = "min_epochs_default")]    
-    pub min_epochs: usize,                     // Do not stop before reaching this
-    #[serde(default = "max_age_best_model_default")]    
-    pub max_age_best_model: usize,                 // Stop if the best model has not change for this long
-    #[serde(default = "feature_kminkmax_default")]  
-    pub kmin: usize,                           // Minimum value of k
-    #[serde(default = "feature_kminkmax_default")]  
-    pub kmax: usize,                           // Maximum value of k
-    pub select_elite_pct: f64,               // Elite selection percentage
-    #[serde(default = "feature_select_niche_pct_default")] 
-    pub select_niche_pct: f64,              // Same as elite but split between competing date type/model
-    pub select_random_pct: f64,              // Random selection percentage
-    pub mutated_children_pct: f64,        // Mutated individuals percentage
-    pub mutated_features_pct: f64,           // Mutated features percentage
-    pub mutation_non_null_chance_pct: f64,    // Chance pct that a mutation gives an non null value
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct CV {
+    #[serde(default = "folds_default")]  
+    pub inner_folds: usize,
+    #[serde(default = "zero_default")] 
+    pub overfit_penalty: f64,
+    #[serde(default = "folds_default")]  
+    pub outer_folds: usize,
+    #[serde(default = "false_default")] 
+    pub fit_on_valid: bool,
+    #[serde(default = "best_models_ci_alpha_default")]  
+    pub cv_best_models_ci_alpha: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Voting {
+  #[serde(default = "false_default")]
+  pub vote: bool,
+  #[serde(default = "false_default")]
+  pub use_fbm: bool,
+  #[serde(default = "half_default")] 
+  pub min_perf: f64,
+  #[serde(default = "diversity_voting_default")] 
+  pub min_diversity: f64,       
+  #[serde(default = "voting_default")]                      
+  pub method: VotingMethod,   
+  #[serde(default = "half_default")]                         
+  pub method_threshold: f64,  
+  #[serde(default = "false_default")]                        
+  pub specialized: bool,                 
+  #[serde(default = "specialized_default")]            
+  pub specialized_pos_threshold: f64,
+  #[serde(default = "specialized_default")]                      
+  pub specialized_neg_threshold: f64                 
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct GA {
+    #[serde(default = "pop_size_default")]    
+    pub population_size: u32,        
+    #[serde(default = "max_epochs_default")]          
+    pub max_epochs: usize,                         
+    #[serde(default = "min_epochs_default")]    
+    pub min_epochs: usize,                     
+    #[serde(default = "max_age_best_model_default")]    
+    pub max_age_best_model: usize,                
+    #[serde(default = "one_default")]  
+    pub kmin: usize,                           
+    #[serde(default = "kmax_default")]  
+    pub kmax: usize,        
+    #[serde(default = "ga_elite_pct_default")]                    
+    pub select_elite_pct: f64,               
+    #[serde(default = "zero_default")] 
+    pub select_niche_pct: f64,        
+    #[serde(default = "ga_random_pct_default")]   
+    pub select_random_pct: f64,        
+    #[serde(default = "ga_mut_children_pct_default")]         
+    pub mutated_children_pct: f64,     
+    #[serde(default = "ga_mut_features_pct_default")]          
+    pub mutated_features_pct: f64,           
+    #[serde(default = "ga_mut_non_null_pct_default")]   
+    pub mutation_non_null_chance_pct: f64,    
+    #[serde(default = "zero_default")] 
+    pub forced_diversity_pct: f64,    
+    #[serde(default = "uzero_default")] 
+    pub random_samples: usize,         
+    #[serde(default = "uzero_default")]                 
+    pub max_age_randomized_samples: usize,       
+    #[serde(default = "uzero_default")]       
+    pub n_epochs_before_global: usize,    
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct BEAM {
     #[serde(default = "beam_method_default")]  
     pub method: String,
-    #[serde(default = "feature_kminkmax_default")]  
-    pub kmin: usize,                           // Minimum value of k
-    #[serde(default = "feature_kminkmax_default")]  
-    pub kmax: usize,                           // Maximum value of k
+    #[serde(default = "one_default")]  
+    pub kmin: usize,                           
+    #[serde(default = "kmax_default")]  
+    pub kmax: usize,                           
     #[serde(default = "best_models_ci_alpha_default")]
     pub best_models_ci_alpha: f64,                                 
     #[serde(default = "max_nb_of_models_default")]
     pub max_nb_of_models: usize,                                    
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MCMC {
     #[serde(default = "n_iter_default")]  
     pub n_iter: usize,
@@ -157,7 +219,7 @@ pub struct MCMC {
 }
 
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct GPU {
     #[serde(default = "memory_policy_default")]  
     pub memory_policy: GpuMemoryPolicy,
@@ -169,19 +231,19 @@ pub struct GPU {
     pub fallback_to_cpu: bool,              
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CV {
-    #[serde(default = "fold_number_default")]  
-    pub fold_number: usize,
-    #[serde(default = "cv_best_models_ci_alpha_default")]  
-    pub cv_best_models_ci_alpha: f64,
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Importance {
+    #[serde(default = "false_default")] 
+    pub compute_importance: bool,
     #[serde(default = "n_permutations_oob_default")]  
     pub n_permutations_oob: usize,
-    #[serde(default = "scaled_importance_default")]  
+    #[serde(default = "false_default")]  
     pub scaled_importance: bool,
     #[serde(default = "importance_aggregation_default")]  
-    pub importance_aggregation: ImportanceAggregation
+    pub importance_aggregation: ImportanceAggregation,
 }
+
+// Default section definitions
 
 impl Default for General {
     fn default() -> Self {
@@ -190,6 +252,18 @@ impl Default for General {
 }
 
 impl Default for Data {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for Importance {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for Voting {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
@@ -238,13 +312,11 @@ impl Default for Param {
     }
 }
 
-
 impl Param {
     pub fn new() -> Self {
         Self::default()
     }
 }
-
 
 pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     let param_file_reader = File::open(param_file)?;
@@ -255,40 +327,34 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     Ok(config)
 }
 
+// Default value definitions
 
-
+fn seed_default() -> u64 { 4815162342 }
 fn empty_string() -> String { "".to_string() }
 fn min_epochs_default() -> usize { 10 }
+fn max_epochs_default() -> usize { 200 }
 fn max_age_best_model_default() -> usize { 10 }
 fn algorithm_default() -> String { "ga".to_string() }
-fn features_maximal_number_per_class_default() -> usize { 0 }
 fn feature_selection_method_default() -> String { "wilcoxon".to_string() }
 fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
 fn feature_maximal_pvalue_default() -> f64 { 0.5 }
 fn feature_minimal_log_abs_bayes_factor_default() -> f64 { 2.0 }
-fn feature_minimal_feature_value_default() -> f64 { 0.0 }
 fn language_default() -> String { "binary".to_string() }
 fn data_type_default() -> String { "raw".to_string() }
 fn data_type_epsilon_default() -> f64 { 1e-5 }
-fn thread_number_default() -> usize { 1 }
-fn feature_kminkmax_default() -> usize { 0 }
 fn feature_keep_trace_default() -> bool { true }
 fn save_experiment_default() -> String { "".to_string() }
 fn log_base_default() -> String { "".to_string() }
 fn log_suffix_default() -> String { "log".to_string() }
 fn log_level_default() -> String { "info".to_string() }
-fn fold_number_default() -> usize { 5 }
-fn cv_best_models_ci_alpha_default() -> f64 { 0.05 }
+fn folds_default() -> usize { 5 }
 fn n_permutations_oob_default() -> usize { 100 }
-fn scaled_importance_default() -> bool { false }
 fn importance_aggregation_default() -> ImportanceAggregation { ImportanceAggregation::mean }
-fn penalty_default() -> f64 { 0.0 }
 fn fit_default() -> FitFunction { FitFunction::auc }
 fn nb_best_model_to_test_default() -> u32 { 10 }
-fn feature_select_niche_pct_default() -> f64 { 0.0 }
 fn false_default() -> bool { false }
+fn true_default() -> bool { true }
 fn display_level_default() -> usize { 2 }
-fn display_colorful_default() -> bool { false }
 fn beam_method_default() -> String { "combinatorial".to_string() }
 fn best_models_ci_alpha_default() -> f64 { 0.05 }
 fn max_nb_of_models_default() -> usize { 10000 }
@@ -301,3 +367,17 @@ fn n_iter_default() -> usize { 10_000 }
 fn n_burn_default() -> usize { 5_000 }
 fn lambda_default() -> f64 { 0.001 }
 fn nmin_default() -> u32 { 10 }
+fn zero_default() -> f64 { 0.0 }
+fn uzero_default() -> usize { 0 }
+fn half_default() -> f64 { 0.5 }
+fn one_default() -> usize { 1 }
+fn voting_default() -> VotingMethod { VotingMethod::Majority }
+fn specialized_default() -> f64 { 0.6 }
+fn diversity_voting_default() -> f64 { 5.0 }
+fn kmax_default() -> usize { 200 }
+fn pop_size_default() -> u32 { 5000 }
+fn ga_elite_pct_default() -> f64 { 2.0 }
+fn ga_random_pct_default() -> f64 { 2.0 }
+fn ga_mut_children_pct_default() -> f64 { 80.0 }
+fn ga_mut_features_pct_default() -> f64 { 20.0 }
+fn ga_mut_non_null_pct_default() -> f64 { 20.0 }
