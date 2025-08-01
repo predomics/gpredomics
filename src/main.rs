@@ -167,6 +167,7 @@ fn main() {
         } else {
             voting_pop = exp.final_population.clone().unwrap();
         }
+        voting_pop.compute_all_metrics(&exp.train_data, &exp.parameters.general.fit);
         if exp.parameters.voting.specialized {
             voting_pop.compute_all_metrics(&exp.train_data, &exp.parameters.general.fit);
             court = Court::new(&voting_pop, &exp.parameters.voting.min_perf, &exp.parameters.voting.min_diversity, &exp.parameters.voting.method, &exp.parameters.voting.method_threshold,
