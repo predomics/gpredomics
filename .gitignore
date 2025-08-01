@@ -6,3 +6,4 @@ out/
 *.bin
 *.msgpack
 *.mp
+*.DS_Store
