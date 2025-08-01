@@ -174,7 +174,7 @@ pub struct Experiment {
     pub test_data: Option<Data>,
 
     // Results 
-    pub collection: Option<Vec<Population>>, // onky if keep_trace==true
+    pub collection: Option<Vec<Population>>, // only if keep_trace==true
     pub final_population: Option<Population>,
     pub importance_collection: Option<ImportanceCollection>,
 
