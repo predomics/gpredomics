@@ -1,4 +1,3 @@
-use bincode::config;
 use wgpu::util::DeviceExt;
 use wgpu::{BindGroupEntry, BindingResource, CommandEncoderDescriptor, ComputePassDescriptor};
 use std::collections::HashMap;
@@ -212,6 +211,7 @@ struct MatrixMultParams {
     // possibly some padding
 }
 
+#[derive(Clone)]
 pub struct GpuAssay {
     // WGPU core
     pub config: GPU,

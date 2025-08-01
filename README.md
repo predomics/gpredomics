@@ -129,7 +129,7 @@ Finally, this section also has a parameter that is essential for GpredomicsR to 
 
 ### cv
 
-- fold_number: number of folds for cross-validation (k-folds strategy).
+- outer_folds: number of folds for cross-validation (k-folds strategy).
 - cv_best_models_ci_alpha: alpha for the family of best model confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
 - n_permutations_oob: number of permutations per feature for OOB importance.
 - scaled_importance: should importance be scaled by feature prevalence inside folds?

@@ -2,3 +2,7 @@ target/
 *.log
 *.tsv
 out/
+*.json
+*.bin
+*.msgpack
+*.mp

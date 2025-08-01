@@ -1,7 +1,11 @@
-use log::{info, error};
+use log::{info, error, warn};
 use gpredomics::{param, run_ga, run_cv, run_beam, run_mcmc};
+use gpredomics::experiment::Court;
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
+use gpredomics::experiment::{Experiment, ExperimentMetadata, WeightingMethod};
+use clap::Parser;
+use std::env;
 
 use std::thread;
 use signal_hook::{iterator::Signals, consts::signal::*};
@@ -29,12 +33,14 @@ fn custom_format(
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
 
-    let param= param::get("param.yaml".to_string()).unwrap();
+    let param = param::get("param.yaml".to_string()).unwrap();
 
-    if param.general.overfit_penalty != 0.0 {
-        error!("overfit_penalty parameter is deprecated, please set it to 0.");
-        panic!("overfit_penalty parameter is deprecated, please set it to 0.");
-    }
+    // if param.cv.overfit_penalty != 0.0 {
+    //     error!("overfit_penalty parameter is deprecated, please set it to 0.");
+    //     panic!("overfit_penalty parameter is deprecated, please set it to 0.");
+    // }
+
+    let args = Cli::parse();
 
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
@@ -62,51 +68,151 @@ fn main() {
             .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e))
     };
 
+    if let Some(experiment_path) = args.load {
+        match Experiment::load_auto(&experiment_path) {
+            Ok(mut experiment) => {
+                info!("Loading experiment from: {}", experiment_path);
+                
+                if args.evaluate {
+                    // Evaluation mode
+                    let x_path = args.x_test.expect("X test path required for evaluation");
+                    let y_path = args.y_test.expect("Y test path required for evaluation");
+                    
+                    info!("Evaluating on new dataset: {} | {}", x_path, y_path);
+                    
+                    experiment.evaluate_on_new_dataset(&x_path, &y_path);
+                } else {
+                    // Display mode
+                    experiment.display_results();
+                }
+                return;
+            }
+            Err(e) => {
+                error!("Failed to load experiment: {}", e);
+                return;
+            }
+        }
+    }
+
     info!("GPREDOMICS v{}", version);
     info!("Loading param.yaml");
     info!("\x1b[2;97m{:?}\x1b[0m", &param);
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
-    let mut signals = Signals::new(&[SIGTERM, SIGHUP]).expect("Failed to set up signal handler");
-
-    // Register signal handler in this thread
-    flag::register(SIGHUP, Arc::clone(&running_clone)).expect("Failed to register SIGHUP handler");
-    info!("Signal handler thread started. Send `kill -1 {}` to stop the application.", std::process::id());
-    info!("Signal registration state is {}",running_clone.load(Ordering::Relaxed));
-
-    let sub_thread = thread::spawn(move || {
-        let _result = if param.general.cv {
-            run_cv(&param, running)
-        } else {
-            match param.general.algo.as_str() {
-                "ga" => run_ga(&param, running),
-                "beam" => run_beam(&param, running),
-                "mcmc"  => run_mcmc(&param, running),
-                other => {
-                    error!("ERROR! No such algorithm {}", other);
-                    panic!("ERROR! No such algorithm {}", other);
-                }
-            }
-        };
-    });
+    let running_clone_for_signal = Arc::clone(&running);
+    let mut signals = Signals::new(&[SIGTERM, SIGHUP, SIGINT]).expect("Failed to set up signal handler");
 
     // Main thread now monitors the signal
+    let mut soft_kill = false;
     let _signal_thread = thread::spawn(move || {
         for sig in signals.forever() {
-            match sig {
-                SIGTERM | SIGHUP => {
-                    info!("Received signal: {}", sig);
-                    running_clone.store(false, Ordering::Relaxed);
-                    break;
+            if soft_kill == false {
+                match sig {
+                    SIGTERM | SIGHUP | SIGINT => {
+                        info!("Received signal: {}", sig);
+                        info!("Algorithm will be stopped at next iteration and results returned... You can force the kill by pressing Ctrl+C again.");
+                        soft_kill = true;
+                        running_clone_for_signal.store(false, Ordering::Relaxed);
+                    }
+                    _ => {}
                 }
-                _ => {}
+            } else {
+                std::process::exit(1);
             }
         }
     });
 
-    sub_thread.join().expect("Computation thread panicked");
+    // Register signal handler with original Arc
+    flag::register(SIGHUP, Arc::clone(&running)).expect("Failed to register SIGHUP handler");
+    info!("Signal handler thread started. Send `kill -1 {}` to stop the application.", std::process::id());
+    info!("Signal registration state is {}", running.load(Ordering::Relaxed));
+
+    let thread_param = param.clone();
+    let handle = thread::spawn(move || {
+        if thread_param.general.cv {
+            run_cv(&thread_param, running_clone)
+        } else {
+            match thread_param.general.algo.as_str() {
+                "ga" => run_ga(&thread_param, running_clone),
+                "beam" => run_beam(&thread_param, running_clone),
+                "mcmc" => run_mcmc(&thread_param, running_clone),
+                other => {
+                    panic!("ERROR! No such algorithm {}", other);
+                }
+            }
+        }
+    });
+
+    let mut exp = handle.join().expect("Thread panicked!");
+
+    if param.importance.compute_importance {
+        info!("Computing feature importance...");
+        let start_importance = std::time::Instant::now();
+        
+        exp.compute_importance();
+        
+        let importance_time = start_importance.elapsed().as_secs_f64();
+        info!("Importance calculation completed in {:.2}s", importance_time);
+    } else {
+        info!("Skipping importance calculation (disabled in parameters)");
+    }
+
+    // Voting
+    if param.voting.vote {
+        let mut court;
+        let mut voting_pop;
+        if param.voting.use_fbm {
+            voting_pop = exp.final_population.clone().unwrap().select_best_population(0.05);
+        } else {
+            voting_pop = exp.final_population.clone().unwrap();
+        }
+        if exp.parameters.voting.specialized {
+            voting_pop.compute_all_metrics(&exp.train_data, &exp.parameters.general.fit);
+            court = Court::new(&voting_pop, &exp.parameters.voting.min_perf, &exp.parameters.voting.min_diversity, &exp.parameters.voting.method, &exp.parameters.voting.method_threshold,
+                &WeightingMethod::Specialized {sensitivity_threshold: exp.parameters.voting.specialized_pos_threshold, specificity_threshold: exp.parameters.voting.specialized_neg_threshold},
+            );
+        } else {
+            court = Court::new(&voting_pop, &exp.parameters.voting.min_perf, &exp.parameters.voting.min_diversity, &exp.parameters.voting.method, &exp.parameters.voting.method_threshold, 
+                &WeightingMethod::Uniform,
+            );
+        }
+        if court.judges.individuals.len() > 1 {
+            court.evaluate(&exp.train_data);
+            court.display(&exp.train_data, exp.test_data.as_ref(), &exp.parameters.clone());
+            exp.others = Some(ExperimentMetadata::Court { court: court })
+        } else {
+            warn!("An informative vote is requiring more than one judge!")
+        }
+        
+    } else {
+        info!("Voting stage ignored (disabled in settings)");
+    }
+    
+    if param.general.save_exp != "".to_string() {
+        info!("Saving experiment...");
+        exp.save_auto(&param.general.save_exp).expect("Error while exporting experiment");
+    }
 
     logger.flush();
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+pub struct Cli {
+    /// Load experiment from file
+    #[arg(short, long)]
+    load: Option<String>,
+    
+    /// Evaluate loaded experiment on new dataset
+    #[arg(long, requires = "load")]
+    evaluate: bool,
+    
+    /// X test data path (required if --evaluate is used)
+    #[arg(long, required_if_eq("evaluate", "true"))]
+    x_test: Option<String>,
+    
+    /// y test data path (required if --evaluate is used)
+    #[arg(long, required_if_eq("evaluate", "true"))]
+    y_test: Option<String>,
+}
