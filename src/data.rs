@@ -11,13 +11,19 @@ use log::{info,warn};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use fishers_exact::fishers_exact;
+use crate::utils::serde_json_hashmap_numeric;
+use crate::ChaCha8Rng;
+use fast_float::parse;
+use rand::seq::SliceRandom; 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Data {
+    #[serde(with = "serde_json_hashmap_numeric::tuple_usize_f64")]
     pub X: HashMap<(usize,usize),f64>,         // Matrix for feature values
     pub y: Vec<u8>,              // Vector for target values
     pub features: Vec<String>,    // Feature names (from the first column of X.tsv)
     pub samples: Vec<String>,
+    #[serde(with = "serde_json_hashmap_numeric::usize_u8")]
     pub feature_class: HashMap<usize, u8>, // Sign for each feature
     pub feature_selection: Vec<usize>,
     pub feature_len: usize,
@@ -41,9 +47,6 @@ impl Data {
         }
     }
 
-    // TODO : create a check_compability(self, other_data) (same features, e.g. same names and order)
-    // TODO : optionnally look intoy y file to see class names instead of 0,1 or 2 in link with a parameter specifying what is the name of the "1" class and that of the "0" class
-
     /// Check if another dataset is compatible with the current one
     pub fn check_compatibility(&self, other: &Data) -> bool {
         self.features == other.features
@@ -51,25 +54,33 @@ impl Data {
 
     /// Load data from `X.tsv` and `y.tsv` files.
     pub fn load_data(&mut self, X_path: &str, y_path: &str) -> Result<(), Box<dyn Error>> {
+        #[inline]
+        fn trim_line(line: &str) -> &str {
+            line.trim_end_matches(['\n', '\r'])
+        }
+
         info!("Loading files {} and {}...", X_path, y_path);
         // Open and read the X.tsv file
         let file_X = File::open(X_path)?;
-        let mut reader_X = BufReader::new(file_X);
+        let mut reader_X = BufReader::with_capacity(8 * 1024 * 1024, file_X);
 
         // Read the first line to get sample names
         let mut first_line = String::new();
         reader_X.read_line(&mut first_line)?;
-        let trimmed_first_line= first_line.strip_suffix('\n')
-            .or_else(|| first_line.strip_suffix("\r\n"))
-            .unwrap_or(&first_line);
+        let trimmed_first_line = trim_line(&first_line);
         self.samples = trimmed_first_line.split('\t').skip(1).map(String::from).collect();
+        
+        let file_size = std::fs::metadata(X_path)?.len() as usize;
+        let estimated_line_size = 20 + (self.samples.len() * 9); 
+        let estimated_features = file_size / estimated_line_size.max(50); 
+
+        let capacity = ((self.samples.len() * estimated_features) as f64 * 0.25) as usize; 
+        self.X.reserve(capacity.max(self.samples.len()));
 
         // Read the remaining lines for feature names and data
         for (feature,line) in reader_X.lines().enumerate() {
             let line = line?;
-            let trimmed_line= line.strip_suffix('\n')
-                .or_else(|| line.strip_suffix("\r\n"))
-                .unwrap_or(&line);
+            let trimmed_line = trim_line(&line);
             let mut fields = trimmed_line.split('\t');
 
             // First field is the feature name
@@ -79,7 +90,7 @@ impl Data {
 
             // Remaining fields are the feature values
             for (sample,value) in fields.enumerate() {
-                if let Ok(num_val)=value.parse::<f64>() {
+                if let Ok(num_val)=parse(value) {
                     if num_val!=0.0 {
                         self.X.insert((sample,feature),num_val);
                     }
@@ -96,9 +107,7 @@ impl Data {
         let mut y_map = HashMap::new();
         for line in reader_y.lines().skip(1) {
             let line = line?;
-            let trimmed_line= line.strip_suffix('\n')
-                .or_else(|| line.strip_suffix("\r\n"))
-                .unwrap_or(&line);
+            let trimmed_line = trim_line(&line);
             let mut fields = trimmed_line.split('\t');
             
             // First field is the sample name
@@ -123,12 +132,28 @@ impl Data {
         self.feature_len = self.features.len();
         self.sample_len = self.samples.len();
 
-
         Ok(())
     }
 
     pub fn set_classes(&mut self, classes: Vec<String>) {
         self.classes = classes;
+    }
+
+    pub fn inverse_classes(&mut self) {
+        for label in &mut self.y {
+            match *label {
+                0 => *label = 1,
+                1 => *label = 0,
+                2 => *label = 2, 
+                _ => {
+                    warn!("Unknown classes : {}. Passed.", *label);
+                }
+            }
+        }
+        
+        self.classes.swap(0, 1);
+        
+        info!("Classes inverted");
     }
 
     /// for a given feature (chosen as the #j line of X ) answer 0 if the feature is more significantly associated with class 0, 1 with class 1, 2 otherwise 
@@ -401,12 +426,12 @@ impl Data {
         let mut class_0_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 0).collect();
         let mut class_1_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 1).collect();
         if param.data.features_maximal_number_per_class != 0 && class_0_features.len() < param.data.features_maximal_number_per_class {
-            warn!("Class {:?} has only {} significant features ! All features kept for this class.", self.classes[0], class_0_features.len());
+            warn!("Class {:?} has only {} significant features based on required threshold ! All features kept for this class.", self.classes[0], class_0_features.len());
         } else if  param.data.features_maximal_number_per_class != 0 && class_0_features.len() >=  param.data.features_maximal_number_per_class {
             class_0_features.truncate(param.data.features_maximal_number_per_class);
         } 
         if param.data.features_maximal_number_per_class != 0 && class_1_features.len() < param.data.features_maximal_number_per_class {
-            warn!("Class {:?} has only {} significant features ! All features kept for this class.", self.classes[1], class_1_features.len());
+            warn!("Class {:?} has only {} significant features based on required threshold ! All features kept for this class.", self.classes[1], class_1_features.len());
         } else if  param.data.features_maximal_number_per_class != 0 && class_1_features.len() >=  param.data.features_maximal_number_per_class {
             class_1_features.truncate(param.data.features_maximal_number_per_class);
         }
@@ -429,6 +454,22 @@ impl Data {
         assert!( self.feature_selection.len()>0, "No feature has been selected, please lower your selection criteria or improve the quality of your data!");
 
         info!("{} features selected", self.feature_selection.len());
+
+        if self.feature_len > 10000 {
+            warn!("Large dataset. Removing non-selected features from memory to speed up...");
+            
+            let mut new_x = HashMap::new();
+            for (&(sample, feature), &value) in &self.X {
+                if self.feature_selection.contains(&feature) {
+                    new_x.insert((sample, feature), value);
+                }
+            }
+            
+            self.X = new_x;
+            
+            info!("Non-kept features removed. Dataset compacted from {} to {} features.", 
+                self.feature_len, self.feature_selection.len());
+        }
     }
 
     /// filter Data for some samples (represented by a Vector of indices)
@@ -494,6 +535,52 @@ impl Data {
         self.subset(indices_to_keep)
     }
 
+    pub fn random_subset(&self, n_samples: usize, rng: &mut ChaCha8Rng) -> Vec<usize> {
+        let mut indices_class0 = Vec::new();
+        let mut indices_class1 = Vec::new();
+        for (i, &label) in self.y.iter().enumerate() {
+            if label == 0 {
+                indices_class0.push(i);
+            } else if label == 1 {
+                indices_class1.push(i);
+            }
+
+        }
+
+        let total_len = self.sample_len;
+        let n_class0 = indices_class0.len();
+        let n_class1 = indices_class1.len();
+
+        let mut n_samples_0 = ((n_samples as f64) * (n_class0 as f64) / (total_len as f64)).round() as usize;
+        n_samples_0 = n_samples_0.min(n_class0);
+        let mut n_samples_1 = n_samples.saturating_sub(n_samples_0).min(n_class1);
+
+        let current_total = n_samples_0 + n_samples_1;
+        let missing = n_samples.saturating_sub(current_total);
+        if missing > 0 {
+            let available_0 = n_class0 - n_samples_0;
+            let available_1 = n_class1 - n_samples_1;
+            if available_0 >= missing {
+                n_samples_0 += missing;
+            } else if available_1 >= missing {
+                n_samples_1 += missing;
+            } else {
+                n_samples_0 += available_0;
+                n_samples_1 += available_1;
+            }
+        }
+
+
+        let mut rng = rng;
+        let chosen_0 = if n_samples_0 > 0 { indices_class0.choose_multiple(&mut rng, n_samples_0).cloned().collect::<Vec<_>>() } else { Vec::new() };
+        let chosen_1 = if n_samples_1 > 0 { indices_class1.choose_multiple(&mut rng, n_samples_1).cloned().collect::<Vec<_>>() } else { Vec::new() };
+
+        let mut all_indices = [chosen_0, chosen_1].concat();
+        all_indices.shuffle(&mut rng);
+        all_indices.truncate(n_samples.min(total_len)); 
+
+        all_indices
+    }
 
 }
 
@@ -549,16 +636,19 @@ impl fmt::Debug for Data {
 
 // unit tests
 #[cfg(test)]
-    mod tests {
-        use super::*;
-        use crate::param;
-        use sha2::{Sha256, Digest};
-        use std::collections::{BTreeMap, HashMap};
+mod tests {
+    use super::*;
+    use crate::param;
+    use rand::Rng;
+    use rand::SeedableRng;
+    use sha2::{Sha256, Digest};
+    use std::collections::{BTreeMap, HashMap};
 
-        fn create_test_data() -> Data {
+    impl Data {
+        pub fn test() -> Data {
             let mut X: HashMap<(usize, usize), f64> = HashMap::new();
             let mut feature_class: HashMap<usize, u8> = HashMap::new();
-    
+
             // Simulate data
             X.insert((0, 0), 0.9); // F0 C0
             X.insert((0, 1), 0.01); // F1 C0
@@ -582,120 +672,274 @@ impl fmt::Debug for Data {
             }
         }
 
-        #[test]
-        fn test_load_data() {
-            let mut data_test = Data::new();
-            let _err = data_test.load_data("./samples/tests/X.tsv", "./samples/tests/y.tsv");
-
-            // Use the hashed test.X to make the code cleaner
-            let mut sorted_X: BTreeMap<(usize, usize), f64> = BTreeMap::new();
-            for (key, value) in data_test.X {
-                sorted_X.insert(key, value);
-            }
-            let serialized = bincode::serialize(&sorted_X).unwrap();
-            let mut hasher = Sha256::new();
-            hasher.update(serialized);
-            let hash = hasher.finalize();
+        pub fn specific_test(num_samples: usize, num_features: usize) -> Data {
+            let mut X = HashMap::new();
+            let mut rng = ChaCha8Rng::seed_from_u64(12345);
             
-            assert_eq!(format!("{:x}", hash), "adba327f62ffab0a8d43c1aa3a6c20e630783d3b103dd103f28b9e23ab51eb18", 
-            "the test X hash isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
-            assert_eq!(data_test.y, [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1],
-            "the test y are not the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/y.tsv");
-            assert_eq!(data_test.features, ["msp_0001", "msp_0002", "msp_0003", "msp_0004", "msp_0005", "msp_0006", "msp_0007", "msp_0008", "msp_0009", "msp_0010"],
-            "the test X features isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
-            assert_eq!(data_test.samples, ["LV15", "HV26", "HV17", "LV9", "HV14", "HV7", "LV7", "HV30", "HV29", "HV15", "LV16", "LV1", "LV11", "HV16", "HV6", "LV23", 
-            "LV4", "LV22", "HV3", "LV13", "LV8", "LV24", "HV12", "HV13", "LV6", "HV9", "LV12", "HV23", "HV31", "LV14"],
-            "the test X samples are not the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
-            assert_eq!(data_test.feature_len, 10,
-            "the test X feature_len isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
-            assert_eq!(data_test.sample_len, 30,
-            "the test X sample_len isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+            // Populate X with (sample, feature) -> value mapping
+            for sample in 0..num_samples {
+                for feature in 0..num_features {
+                    X.insert((sample, feature), rng.gen_range(0.0..1.0));
+                }
+            }
+            
+            let y: Vec<u8> = (0..num_samples)
+                .map(|_| if rng.gen::<f64>() > 0.5 { 1 } else { 0 })
+                .collect();
+                
+            Data {
+                X,
+                y,
+                sample_len: num_samples,
+                feature_class: HashMap::new(),
+                features: (0..num_features).map(|i| format!("feature_{}", i)).collect(),
+                samples: (0..num_samples).map(|i| format!("sample_{}", i)).collect(),
+                feature_selection: (0..num_features).collect(),
+                feature_len: num_features,
+                classes: vec!["class_0".to_string(), "class_1".to_string()],
+            }
         }
 
-        #[test]
-        fn test_compare_classes_studentt_test_class_0() {
-            let data = create_test_data();
-            let result = data.compare_classes_studentt(0, 1.0, 0.0, 0.0);
-            assert_eq!(result, (0_u8, 0.20893746598423224), "test feature 0 should be significantly associated with class 0");
+        pub fn test_with_these_features(feature_indices: &[usize]) -> Data {
+            let mut data = Data::new();
+            data.feature_len = feature_indices.len();
+            data.sample_len = 5;
+            
+            for &feature_idx in feature_indices {
+                data.feature_class.insert(feature_idx, 1u8);
+                for sample_idx in 0..data.sample_len {
+                    data.X.insert((sample_idx, feature_idx), 0.5 + feature_idx as f64 * 0.1);
+                }
+            }
+            
+            data.y = vec![0, 1, 0, 1, 0];
+            data.feature_selection = feature_indices.to_vec();
+            data
         }
 
-        #[test]
-        fn test_compare_classes_studentt_test_class_1() {
-            let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.0);
-            assert_eq!(result, (1_u8, 0.12215172301873412), "test feature 1 should be significantly associated with class 1");
+        pub fn test2() -> Data {
+            let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+            let mut feature_class: HashMap<usize, u8> = HashMap::new();
+
+            // Simulate data
+            X.insert((0, 0), 0.9); // Sample 0, Feature 0
+            X.insert((0, 1), 0.01); // Sample 0, Feature 1
+            X.insert((1, 0), 0.91); // Sample 1, Feature 0
+            X.insert((1, 1), 0.12); // Sample 1, Feature 1
+            X.insert((2, 0), 0.75); // Sample 2, Feature 0
+            X.insert((2, 1), 0.01); // Sample 2, Feature 1
+            X.insert((3, 0), 0.19); // Sample 3, Feature 0
+            X.insert((3, 1), 0.92); // Sample 3, Feature 1
+            X.insert((4, 0), 0.9);  // Sample 4, Feature 0
+            X.insert((4, 1), 0.01); // Sample 4, Feature 1
+            X.insert((5, 0), 0.91); // Sample 5, Feature 0
+            X.insert((5, 1), 0.12); // Sample 5, Feature 1
+            X.insert((6, 0), 0.75); // Sample 6, Feature 0
+            X.insert((6, 1), 0.01); // Sample 6, Feature 1
+            X.insert((7, 0), 0.19); // Sample 7, Feature 0
+            X.insert((7, 1), 0.92); // Sample 7, Feature 1
+            X.insert((8, 0), 0.9);  // Sample 8, Feature 0
+            X.insert((8, 1), 0.01); // Sample 8, Feature 1
+            X.insert((9, 0), 0.91); // Sample 9, Feature 0
+            X.insert((9, 1), 0.12); // Sample 9, Feature 1
+            feature_class.insert(0, 0);
+            feature_class.insert(1, 1);
+
+            Data {
+                X,
+                y: vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0], // Vraies étiquettes
+                features: vec!["feature1".to_string(), "feature2".to_string()],
+                samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(),
+                "sample4".to_string(), "sample5".to_string(), "sample6".to_string(), "sample7".to_string(), 
+                "sample8".to_string(), "sample9".to_string(), "sample10".to_string()],
+                feature_class,
+                feature_selection: vec![0, 1],
+                feature_len: 2,
+                sample_len: 10,
+                classes: vec!["a".to_string(),"b".to_string()]
+            }
         }
 
-        #[test]
-        fn test_compare_classes_studentt_test_class_2_low_mean() {
-            let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.95);
-            assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
+    pub fn test_disc_data() -> Data {
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        let mut feature_class: HashMap<usize, u8> = HashMap::new();
+
+        // Simulate data
+        X.insert((0, 0), 0.9); // Sample 0, Feature 0
+        X.insert((0, 1), 0.01); // Sample 0, Feature 1
+        X.insert((1, 0), 0.91); // Sample 1, Feature 0
+        X.insert((1, 1), 0.12); // Sample 1, Feature 1
+        X.insert((2, 0), 0.75); // Sample 2, Feature 0
+        X.insert((2, 1), 0.01); // Sample 2, Feature 1
+        X.insert((3, 0), 0.19); // Sample 3, Feature 0
+        X.insert((3, 1), 0.92); // Sample 3, Feature 1
+        X.insert((4, 0), 0.9);  // Sample 4, Feature 0
+        X.insert((4, 1), 0.01); // Sample 4, Feature 1
+        feature_class.insert(0, 0);
+        feature_class.insert(1, 1);
+
+        Data {
+            X,
+            y: vec![1, 0, 1, 0, 0], // Vraies étiquettes
+            features: vec!["feature1".to_string(), "feature2".to_string()],
+            samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(),
+            "sample4".to_string(), "sample5".to_string()],
+            feature_class,
+            feature_selection: vec![0, 1],
+            feature_len: 2,
+            sample_len: 5,
+            classes: vec!["a".to_string(),"b".to_string()]
         }
+    }
 
-        #[test]
-        fn test_compare_classes_studentt_test_class_2_low_prev() {
-            let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 1.0, 0.95, 0.0);
-            assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
+    pub fn test_valid_data() -> Data {
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        let mut feature_class: HashMap<usize, u8> = HashMap::new();
+
+        // Simulate data
+        X.insert((5, 0), 0.91); // Sample 5, Feature 0
+        X.insert((5, 1), 0.12); // Sample 5, Feature 1
+        X.insert((6, 0), 0.75); // Sample 6, Feature 0
+        X.insert((6, 1), 0.01); // Sample 6, Feature 1
+        X.insert((7, 0), 0.19); // Sample 7, Feature 0
+        X.insert((7, 1), 0.92); // Sample 7, Feature 1
+        X.insert((8, 0), 0.9);  // Sample 8, Feature 0
+        X.insert((8, 1), 0.01); // Sample 8, Feature 1
+        X.insert((9, 0), 0.91); // Sample 9, Feature 0
+        X.insert((9, 1), 0.12); // Sample 9, Feature 1
+        feature_class.insert(0, 0);
+        feature_class.insert(1, 1);
+
+        Data {
+            X,
+            y: vec![0, 0, 0, 1, 0], // Vraies étiquettes
+            features: vec!["feature1".to_string(), "feature2".to_string()],
+            samples: vec!["sample6".to_string(), "sample7".to_string(), 
+            "sample8".to_string(), "sample9".to_string(), "sample10".to_string()],
+            feature_class,
+            feature_selection: vec![0, 1],
+            feature_len: 2,
+            sample_len: 5,
+            classes: vec!["a".to_string(),"b".to_string()]
         }
+    }
 
-        #[test]
-        fn test_compare_classes_studentt_test_class_2_high_pval() {
-            let data = create_test_data();
-            let result = data.compare_classes_studentt(1, 0.00001, 0.0, 0.0);
-            assert_eq!(result, (2, 0.12215172301873412), "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
+    }
+
+    #[test]
+    fn test_load_data() {
+        let mut data_test = Data::new();
+        let _err = data_test.load_data("./samples/tests/X.tsv", "./samples/tests/y.tsv");
+
+        // Use the hashed test.X to make the code cleaner
+        let mut sorted_X: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+        for (key, value) in data_test.X {
+            sorted_X.insert(key, value);
         }
+        let serialized = bincode::serialize(&sorted_X).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(serialized);
+        let hash = hasher.finalize();
+        
+        assert_eq!(format!("{:x}", hash), "adba327f62ffab0a8d43c1aa3a6c20e630783d3b103dd103f28b9e23ab51eb18", 
+        "the test X hash isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+        assert_eq!(data_test.y, [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1],
+        "the test y are not the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/y.tsv");
+        assert_eq!(data_test.features, ["msp_0001", "msp_0002", "msp_0003", "msp_0004", "msp_0005", "msp_0006", "msp_0007", "msp_0008", "msp_0009", "msp_0010"],
+        "the test X features isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+        assert_eq!(data_test.samples, ["LV15", "HV26", "HV17", "LV9", "HV14", "HV7", "LV7", "HV30", "HV29", "HV15", "LV16", "LV1", "LV11", "HV16", "HV6", "LV23", 
+        "LV4", "LV22", "HV3", "LV13", "LV8", "LV24", "HV12", "HV13", "LV6", "HV9", "LV12", "HV23", "HV31", "LV14"],
+        "the test X samples are not the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+        assert_eq!(data_test.feature_len, 10,
+        "the test X feature_len isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+        assert_eq!(data_test.sample_len, 30,
+        "the test X sample_len isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
+    }
 
-        //#[test]
-        //fn test_compare_classes_studentt_test_class_2_outside_range() {
-        //    let data = create_test_data();
-        //    let result = data.compare_classes_studentt(48152342, 1.0, 0.0, 0.0);
-        //    assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
-        //}
+    #[test]
+    fn test_compare_classes_studentt_test_class_0() {
+        let data = Data::test();
+        let result = data.compare_classes_studentt(0, 1.0, 0.0, 0.0);
+        assert_eq!(result, (0_u8, 0.20893746598423224), "test feature 0 should be significantly associated with class 0");
+    }
 
-        // Same for Wilcoxon
-        #[test]
-        fn test_compare_classes_wilcoxon_class_0() {
-            let data = create_test_data();
-            let result = data.compare_classes_wilcoxon(0, 1.0, 0.0, 0.0);
-            assert_eq!(result, (0_u8, 0.8057327908484386), "test feature 0 should be significantly associated with class 0");
-        }
+    #[test]
+    fn test_compare_classes_studentt_test_class_1() {
+        let data = Data::test();
+        let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.0);
+        assert_eq!(result, (1_u8, 0.12215172301873412), "test feature 1 should be significantly associated with class 1");
+    }
 
-        #[test]
-        fn test_compare_classes_wilcoxon_class_1() {
-            let data = create_test_data();
-            let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.0);
-            assert_eq!(result, (1_u8, 0.3475580367718807), "test feature 1 should be significantly associated with class 1");
-        }
+    #[test]
+    fn test_compare_classes_studentt_test_class_2_low_mean() {
+        let data = Data::test();
+        let result = data.compare_classes_studentt(1, 1.0, 0.0, 0.95);
+        assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
+    }
 
-        #[test]
-        fn test_compare_classes_wilcoxon_class_2_low_mean() {
-            let data = create_test_data();
-            let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.95);
-            assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
-        }
+    #[test]
+    fn test_compare_classes_studentt_test_class_2_low_prev() {
+        let data = Data::test();
+        let result = data.compare_classes_studentt(1, 1.0, 0.95, 0.0);
+        assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
+    }
 
-        #[test]
-        fn test_compare_classes_wilcoxon_class_2_low_prev() {
-            let data = create_test_data();
-            let result = data.compare_classes_wilcoxon(1, 1.0, 0.95, 0.0);
-            assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
-        }
+    #[test]
+    fn test_compare_classes_studentt_test_class_2_high_pval() {
+        let data = Data::test();
+        let result = data.compare_classes_studentt(1, 0.00001, 0.0, 0.0);
+        assert_eq!(result, (2, 0.12215172301873412), "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
+    }
 
-        #[test]
-        fn test_compare_classes_wilcoxon_class_2_high_pval() {
-            let data = create_test_data();
-            let result = data.compare_classes_wilcoxon(1, 0.00001, 0.0, 0.0);
-            assert_eq!(result, (2, 0.3475580367718807), "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
-        }
+    //#[test]
+    //fn test_compare_classes_studentt_test_class_2_outside_range() {
+    //    let data = create_test_data();
+    //    let result = data.compare_classes_studentt(48152342, 1.0, 0.0, 0.0);
+    //    assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
+    //}
 
-        //#[test]
-        //fn test_compare_classes_wilcoxon_class_2_outside_range() {
-        //    let data = create_test_data();
-        //    let result = data.compare_classes_wilcoxon(48152342, 1.0, 0.0, 0.0);
-        //    assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
-        //}
+    // Same for Wilcoxon
+    #[test]
+    fn test_compare_classes_wilcoxon_class_0() {
+        let data = Data::test();
+        let result = data.compare_classes_wilcoxon(0, 1.0, 0.0, 0.0);
+        assert_eq!(result, (0_u8, 0.8057327908484386), "test feature 0 should be significantly associated with class 0");
+    }
+
+    #[test]
+    fn test_compare_classes_wilcoxon_class_1() {
+        let data = Data::test();
+        let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.0);
+        assert_eq!(result, (1_u8, 0.3475580367718807), "test feature 1 should be significantly associated with class 1");
+    }
+
+    #[test]
+    fn test_compare_classes_wilcoxon_class_2_low_mean() {
+        let data = Data::test();
+        let result = data.compare_classes_wilcoxon(1, 1.0, 0.0, 0.95);
+        assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_mean_value<0.95");
+    }
+
+    #[test]
+    fn test_compare_classes_wilcoxon_class_2_low_prev() {
+        let data = Data::test();
+        let result = data.compare_classes_wilcoxon(1, 1.0, 0.95, 0.0);
+        assert_eq!(result, (2, 2.0), "test feature 1 should not be associated (class 2 instead of 1) : min_prevalence<0.95");
+    }
+
+    #[test]
+    fn test_compare_classes_wilcoxon_class_2_high_pval() {
+        let data = Data::test();
+        let result = data.compare_classes_wilcoxon(1, 0.00001, 0.0, 0.0);
+        assert_eq!(result, (2, 0.3475580367718807), "test feature 1 should not be associated (class 2 instead of 1) : p_value>max_p_value");
+    }
+
+    //#[test]
+    //fn test_compare_classes_wilcoxon_class_2_outside_range() {
+    //    let data = create_test_data();
+    //    let result = data.compare_classes_wilcoxon(48152342, 1.0, 0.0, 0.0);
+    //    assert_eq!(result, 2, "unexistent feature should not be associated (class 2)");
+    //}
 
     // tests for select_features
     #[test]
@@ -743,7 +987,7 @@ impl fmt::Debug for Data {
     // tests for subset
     #[test]
     fn test_subset_indices() {
-        let original_data = create_test_data();
+        let original_data = Data::test();
         let subset_data = original_data.subset(vec![0, 3]);
 
         assert_eq!(subset_data.X, HashMap::from([((0, 0), 0.9), ((0, 1), 0.01), ((1, 0), 0.12), ((1, 1), 0.75)]),
@@ -756,7 +1000,7 @@ impl fmt::Debug for Data {
 
     #[test]
     fn test_subset_empty_set() {
-        let original_data = create_test_data();
+        let original_data = Data::test();
         let subset_data = original_data.subset(vec![]);
         let expected_X: HashMap<(usize, usize), f64> = HashMap::new();
         let expected_y: Vec<u8> = vec![];
@@ -772,7 +1016,7 @@ impl fmt::Debug for Data {
     // tests for clone_with_new_x
     #[test]
     fn test_clone_with_new_x_basic() {        
-        let original_data = create_test_data();
+        let original_data = Data::test();
 
         let new_x = HashMap::from([((0, 0), 0.5), ((1, 0), 0.8)]);
         let cloned_data = original_data.clone_with_new_x(new_x.clone());
@@ -789,7 +1033,7 @@ impl fmt::Debug for Data {
 
     #[test]
     fn test_clone_with_new_x_empty() {
-        let original_data = create_test_data();
+        let original_data = Data::test();
 
         let new_x: HashMap<(usize, usize), f64> = HashMap::new();
         let cloned_data = original_data.clone_with_new_x(new_x);
@@ -855,7 +1099,7 @@ impl fmt::Debug for Data {
 
     #[test]
     fn test_add_empty_data() {
-        let original_data = create_test_data();
+        let original_data = Data::test();
         let mut cumulated_data = original_data.clone();
         let empty_data = Data::new();
 
@@ -877,8 +1121,8 @@ impl fmt::Debug for Data {
     #[test]
     fn test_data_compatibility() {
 
-        let mut data_test = create_test_data();
-        let data_test2 = create_test_data();
+        let mut data_test = Data::test();
+        let data_test2 = Data::test();
         assert!(data_test.check_compatibility(&data_test2),"two identical data should be compatible");
 
         data_test.features[1]="some other name".to_string();

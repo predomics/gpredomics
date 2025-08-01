@@ -10,40 +10,41 @@ pub mod population;
 mod ga;
 mod cv;
 pub mod gpu;
+pub mod experiment;
 
+use crate::experiment::{Experiment, ExperimentMetadata};
 use data::Data;
 use individual::Individual;
 use population::Population;
 use rand_chacha::ChaCha8Rng;
-use std::collections::HashMap;
+use chrono::Local;
 use rand::prelude::*;
 use param::Param;
+use std::collections::{HashSet, HashMap};
 
 use log::{debug, info, warn, error};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::param::ImportanceAggregation;
-
 /// a very basic use
 pub fn basic_test(param: &Param) {
     info!("                          BASIC TEST\n-----------------------------------------------------");
     // define some data
-    let mut my_data = Data::new();
-    my_data.X.insert((0,0), 0.1);
-    my_data.X.insert((0,1), 0.2);
-    my_data.X.insert((0,2), 0.3);
-    my_data.X.insert((2,0), 0.9);
-    my_data.X.insert((2,1), 0.8);
-    my_data.X.insert((2,2), 0.7);    
-    my_data.feature_len = 3;
-    my_data.sample_len = 3;    my_data.samples = string_vec! ["a","b","c"];
-    my_data.features = string_vec! ["msp1","msp2","msp3"];
-    my_data.y = vec! [0,1,1];
-    my_data.feature_len = 3;
-    my_data.sample_len = 3;
-    info!("{:?}", my_data);
+    let mut data = Data::new();
+    data.X.insert((0,0), 0.1);
+    data.X.insert((0,1), 0.2);
+    data.X.insert((0,2), 0.3);
+    data.X.insert((2,0), 0.9);
+    data.X.insert((2,1), 0.8);
+    data.X.insert((2,2), 0.7);    
+    data.feature_len = 3;
+    data.sample_len = 3;    data.samples = string_vec! ["a","b","c"];
+    data.features = string_vec! ["msp1","msp2","msp3"];
+    data.y = vec! [0,1,1];
+    data.feature_len = 3;
+    data.sample_len = 3;
+    info!("{:?}", data);
 
     // create a model
     let mut my_individual = Individual::new();
@@ -52,9 +53,9 @@ pub fn basic_test(param: &Param) {
     my_individual.compute_hash();
     info!("my individual: {:?}",my_individual.features);
     info!("my individual hash: {}",my_individual.hash);
-    info!("my individual evaluation: {:?}",my_individual.evaluate(&my_data));
+    info!("my individual evaluation: {:?}",my_individual.evaluate(&data));
     // shoud display 1.0 (the AUC is 1.0)
-    info!("my individual AUC: {:?}",my_individual.compute_auc(&my_data));
+    info!("my individual AUC: {:?}",my_individual.compute_auc(&data));
     
     let mut my_individual2 = Individual::new();
     my_individual2.features.insert(0, 1);
@@ -62,9 +63,9 @@ pub fn basic_test(param: &Param) {
     my_individual2.compute_hash();
     info!("my individual2 {:?}",my_individual2.features);
     info!("my individual2 hash: {}",my_individual2.hash);
-    info!("my individual2 evaluation: {:?}",my_individual2.evaluate(&my_data));
+    info!("my individual2 evaluation: {:?}",my_individual2.evaluate(&data));
     // shoud display 1.0 (the AUC is 1.0)
-    info!("my individual2 AUC: {:?}",my_individual2.compute_auc(&my_data));
+    info!("my individual2 AUC: {:?}",my_individual2.compute_auc(&data));
 
 
     let mut data2=Data::new();
@@ -93,17 +94,17 @@ pub fn basic_test(param: &Param) {
 pub fn random_run(param: &Param) {
     info!("                          RANDOM TEST\n-----------------------------------------------------");
     // use some data
-    let mut my_data = Data::new();
-    let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    let mut data = Data::new();
+    let _ = data.load_data(param.data.X.as_str(),param.data.y.as_str());
     let mut rng = ChaCha8Rng::seed_from_u64(42);
 
     let mut auc_max = 0.0;
     let mut best_individual: Individual = Individual::new();
     for _ in 0..1000 {
-        let mut my_individual = Individual::random(&my_data, &mut rng);
+        let mut my_individual = Individual::random(&data, &mut rng);
 
 
-        let auc = my_individual.compute_auc(&my_data);
+        let auc = my_individual.compute_auc(&data);
         if auc>auc_max {auc_max=auc;best_individual=my_individual;}
     }
     warn!("AUC max: {} model: {:?}",auc_max, best_individual.features);
@@ -114,10 +115,10 @@ pub fn random_run(param: &Param) {
 pub fn gpu_random_run(param: &Param) {
     info!("                          GPU RANDOM TEST\n-----------------------------------------------------");
     // use some data
-    let mut my_data = Data::new();
-    let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    let mut data = Data::new();
+    let _ = data.load_data(param.data.X.as_str(),param.data.y.as_str());
     info!("Selecting features...");
-    my_data.select_features(param);
+    data.select_features(param);
     let mut rng = ChaCha8Rng::seed_from_u64(42);
 
     //let mut auc_max = 0.0;
@@ -125,15 +126,15 @@ pub fn gpu_random_run(param: &Param) {
     let nb_individuals: usize = 1000;
 
 
-    let assay = gpu::GpuAssay::new(&my_data.X, &my_data.feature_selection, my_data.sample_len, nb_individuals as usize, &param.gpu);
+    let assay = gpu::GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, nb_individuals as usize, &param.gpu);
 
-    let mut individuals:Vec<Individual> = (0..nb_individuals).map(|_i| {Individual::random(&my_data, &mut rng)}).collect();
+    let mut individuals:Vec<Individual> = (0..nb_individuals).map(|_i| {Individual::random(&data, &mut rng)}).collect();
     individuals = individuals.into_iter()
         .map(|i| {
             // we filter random features for selected features, not efficient but we do not care
             let mut new = Individual::new();
             new.features = i.features.into_iter()
-                    .filter(|(i,_f)| {my_data.feature_selection.contains(i)})
+                    .filter(|(i,_f)| {data.feature_selection.contains(i)})
                     .collect();
             new.data_type = *vec![individual::RAW_TYPE, individual::LOG_TYPE, individual::PREVALENCE_TYPE].choose(&mut rng).unwrap();
             new.language = *vec![individual::TERNARY_LANG, individual::RATIO_LANG].choose(&mut rng).unwrap();
@@ -152,312 +153,244 @@ pub fn gpu_random_run(param: &Param) {
 
     }
 
-    //let auc = my_individual.compute_auc(&my_data);
+    //let auc = my_individual.compute_auc(&data);
     //warn!("AUC max: {} model: {:?}",auc_max, best_individual.features);
 }
 
 /// the Genetic Algorithm test
-pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+    let start = std::time::Instant::now();
     info!("Genetic algorithm\n-----------------------------------------------------");
-    let mut my_data = Data::new();
-    
-    let _ = my_data.load_data(param.data.X.as_str(),param.data.y.as_str());
-    my_data.set_classes(param.data.classes.clone());
-    info!("\x1b[2;97m{:?}\x1b[0m", my_data);  
-    //let has_auc = true;
 
-    let (mut run_test_data, run_data): (Option<Data>,Option<Data>) = if param.general.overfit_penalty>0.0 {
+    let mut data = Data::new();
+    let _ = data.load_data(param.data.X.as_str(),param.data.y.as_str());
+    data.set_classes(param.data.classes.clone());
+    if param.data.inverse_classes { data.inverse_classes(); }
+    info!("\x1b[2;97m{:?}\x1b[0m", data);  
+
+    let (mut run_test_data, run_data): (Option<Data>,Option<Data>) = if param.cv.overfit_penalty>0.0 {
         let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-        let mut cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
+        let mut cv=cv::CV::new(&data, param.cv.outer_folds, &mut rng);
         (Some(cv.validation_folds.remove(0)),Some(cv.training_sets.remove(0)))
     } else { (None,None) };
 
-    let mut populations = if let Some(mut this_data)=run_data {
+    let populations = if let Some(mut this_data)= run_data {
         ga::ga(&mut this_data, &mut run_test_data, &param, running)
     } else {
-        ga::ga(&mut my_data, &mut run_test_data, &param, running)
+        ga::ga(&mut data, &mut run_test_data, &param, running)
     };
-    
-    //if param.general.overfit_penalty == 0.0 
-    //    {   match param.general.fit.to_lowercase().as_str() {
-    //            "auc" => {
-    //                info!("Fitting by AUC with k penalty {}",param.general.k_penalty);
-    //                ga::ga(&mut my_data,&param,running, 
-    //                    |p: &mut Population,d: &Data| { 
-    //                    p.auc_fit(d, param.general.k_penalty, param.general.thread_number); 
-    //                } )
-    //            },
-    //            "specificity"|"sensitivity" => {
-    //                info!("Fitting by objective {} with k penalty {}",param.general.fit,param.general.k_penalty);
-    //                let fpr_penalty = if param.general.fit.to_lowercase().as_str()=="specificity" {1.0} else {param.general.fr_penalty}; 
-    //                let fnr_penalty = if param.general.fit.to_lowercase().as_str()=="sensitivity" {1.0} else {param.general.fr_penalty}; 
-    //                info!("FPR penalty {}  |  FNR penalty {}",fpr_penalty,fnr_penalty);
-    //                has_auc = false;
-    //                ga::ga(&mut my_data,&param,running, 
-    //                    |p: &mut Population,d: &Data| { 
-    //                        p.objective_fit(d, fpr_penalty,fnr_penalty,param.general.k_penalty,
-    //                            param.general.thread_number); 
-    //                    } )
-    //            },
-    //            other => { error!("Unrecognised fit {}",other); panic!("Unrecognised fit {}",other)}
-    //        }
-    //    } else {
-    //        let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-    //        let cv=cv::CV::new(&my_data, param.cv.fold_number, &mut rng);
-//
-    //        match param.general.fit.to_lowercase().as_str() {
-    //            "auc" => {
-    //                info!("Fitting by AUC with k penalty {} and overfit penalty {}",param.general.k_penalty, param.general.overfit_penalty);
-    //                ga::ga(&mut cv.datasets[0].clone(),&param,running, 
-    //                |p: &mut Population,d: &Data| { 
-    //                    p.auc_nooverfit_fit(d,
-    //                        param.general.k_penalty, &cv.folds[0].clone(), param.general.overfit_penalty,
-    //                        param.general.thread_number); } )
-    //            },
-    //            "specificity"|"sensitivity" => {
-    //                info!("Fitting by objective {} with k penalty {} and overfit penalty {}",param.general.fit,param.general.k_penalty, param.general.overfit_penalty);
-    //                let fpr_penalty = if param.general.fit.to_lowercase().as_str()=="specificity" {1.0} else {param.general.fr_penalty}; 
-    //                let fnr_penalty = if param.general.fit.to_lowercase().as_str()=="sensitivity" {1.0} else {param.general.fr_penalty}; 
-    //                info!("FPR penalty {}  |  FNR penalty {}",fpr_penalty,fnr_penalty);
-    //                has_auc = false;
-    //                ga::ga(&mut cv.datasets[0].clone(),&param,running, 
-    //                    |p: &mut Population,d: &Data| { 
-    //                        p.objective_nooverfit_fit(d, fpr_penalty,fnr_penalty,param.general.k_penalty,
-    //                            &cv.folds[0].clone(), param.general.overfit_penalty, param.general.thread_number); 
-    //                    } )
-    //            },
-    //            other => { error!("Unrecognised fit {}",other); panic!("Unrecognised fit {}",other)}
-    //        }
-    //    };
     let generations = populations.len();
-    let population= &mut populations[generations-1];
+    let mut population = populations[generations-1].clone();
 
-        debug!("Length of population {}",population.individuals.len());
-        let nb_model_to_test = if param.general.nb_best_model_to_test>0 {param.general.nb_best_model_to_test as usize} else {population.individuals.len()};
-        debug!("Testing {} models",nb_model_to_test);
+    debug!("Length of population {}",population.individuals.len());
+    let nb_model_to_test = if param.general.nb_best_model_to_test>0 {param.general.nb_best_model_to_test as usize} else {population.individuals.len()};
+    debug!("Testing {} models",nb_model_to_test);
 
     let mut test_data=Data::new();
     if param.data.Xtest.len()>0 && param.data.ytest.len()>0  {
         let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
         test_data.set_classes(param.data.classes.clone());
-        
-        info!("{}", population.display(&my_data, Some(&test_data), param));
-
-        // // Prepare the evaluation pool
-        // let pool = ThreadPoolBuilder::new()
-        //     .num_threads(param.general.thread_number)
-        //     .build()
-        //     .expect("Failed to build thread pool");
-
-        // // Compute the final metrics
-        // pool.install(|| {
-        //     let results: Vec<String> = population.individuals[..nb_model_to_test]
-        //         .par_iter_mut()
-        //         .enumerate()
-        //         .map(|(i, individual)| {
-        //             (individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity) = individual.compute_threshold_and_metrics(&my_data);
-        //             individual.display(&my_data, Some(&test_data), &param.general.algo, 2, true)
-        //         })
-        //         .collect();
-
-        //     // Output results in order
-        //     for result in results {
-        //         info!("{}", result);
-        //     }
-        // });
+        if param.data.inverse_classes { test_data.inverse_classes(); }
+        info!("{}", population.display(&data, Some(&test_data), param));
     }
     else {
-        info!("{}", population.display(&my_data, None, param));
+        info!("{}", population.display(&data, None, param));
     }
 
-    (populations,my_data,test_data) 
+    let exec_time = start.elapsed().as_secs_f64();
+    let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    Experiment {
+        id: format!("{}_ga_{}", param.general.save_exp.split('.').next().unwrap(), timestamp).to_string(),
+        gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
+
+        train_data: data,
+        test_data: Some(test_data),
+
+        final_population: Some(population),
+        collection: Some(populations),
+        
+        importance_collection: None,
+        execution_time: exec_time,
+        parameters: param.clone(),
+
+        cv_folds_ids: None,
+        others: None
+    }
 
 }
 
-pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+    let start = std::time::Instant::now();
     let mut data = Data::new();
     let _ = data.load_data(&param.data.X.to_string(), &param.data.y.to_string());
     data.set_classes(param.data.classes.clone());
+    if param.data.inverse_classes { data.inverse_classes(); }
     
     info!("\x1b[2;97m{:?}\x1b[0m", data);  
 
     let mut collection = beam::beam(&mut data, &mut None, param, running);
     
-    let mut final_pop = Population::new();
-    final_pop.individuals = collection.last_mut().unwrap().individuals.clone();
-    let mut top_ten_pop = beam::keep_n_best_model_within_collection(&collection, param.general.nb_best_model_to_test as usize);
+    let mut last_pop = collection.last_mut().unwrap().clone();
+    let mut final_pop = beam::keep_n_best_model_within_collection(&collection, param.beam.max_nb_of_models as usize);
     
     let mut data_test = Data::new();
     if param.data.Xtest.len()>0 && param.data.ytest.len()>0 {
         let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
         data_test.set_classes(param.data.classes.clone());
+        if param.data.inverse_classes { data_test.inverse_classes(); }
         info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
-        info!("{}", final_pop.display(&data, Some(&data_test), param));
+        info!("{}", last_pop.display(&data, Some(&data_test), param));
         info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
-        info!("{}", top_ten_pop.display(&data, Some(&data_test), param));
+        info!("{}", final_pop.display(&data, Some(&data_test), param));
     } else {
         info!("\x1b[1;93mTop model rankings for k={:?}\x1b[0m", final_pop.individuals[0].features.len());
-        info!("{}", final_pop.display(&data, None, param));
+        info!("{}", last_pop.display(&data, None, param));
         info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_pop.individuals[0].features.len());
-        info!("{}", top_ten_pop.display(&data, None, param));
+        info!("{}", final_pop.display(&data, None, param));
     }
 
+    let exec_time = start.elapsed().as_secs_f64();
+    let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    Experiment {
+        id: format!("{}_beam_{}", param.general.save_exp.split('.').next().unwrap(), timestamp).to_string(),
+        gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
 
-    (collection, data, data_test)
+        train_data: data,
+        test_data: Some(data_test),
+
+        final_population: Some(final_pop),
+        collection: None,
+        
+        importance_collection: None,
+        execution_time: exec_time,
+        parameters: param.clone(),
+
+        cv_folds_ids:None,
+        others:None
+    }
 }
 
-pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
-
+pub fn run_cv(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+    let start = std::time::Instant::now();
+    
     info!("\x1b[1;93mCross-Validation\x1b[0m\n-----------------------------------------------------");
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+    
+    // Loading data
     let mut data = Data::new();
     let _ = data.load_data(param.data.X.as_str(),param.data.y.as_str());
     data.set_classes(param.data.classes.clone());
+    if param.data.inverse_classes { data.inverse_classes(); }
     info!("\x1b[2;97m{:?}\x1b[0m", data); 
 
-    // CV
-    let mut crossval = cv::CV::new(&data, param.cv.fold_number, &mut rng);
+    // Split into k outer folds 
+    let mut cv_data = cv::CV::new(&data, param.cv.outer_folds, &mut rng);
     let mut cv_param = param.clone();
-    cv_param.general.thread_number = param.general.thread_number/param.cv.fold_number; 
+    cv_param.general.thread_number = param.general.thread_number/param.cv.outer_folds; 
     cv_param.general.gpu = false;
 
-    if cv_param.general.thread_number>= param.cv.fold_number {
+    if cv_param.general.thread_number >= param.cv.outer_folds {
         info!("\x1b[1;93mCross-validation parallelization using {} threads per fold\x1b[0m", cv_param.general.thread_number);
     }
 
-    let results = crossval.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
+    // Launch algorithm k times 
+    cv_data.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
         match param.general.algo.as_str() {
             "ga" => ga::ga(d, &mut None, p, r),
             "beam" => beam::beam(d, &mut None, p, r),
             _ => panic!("Such algorithm is not available with cross-validation."),
         }
     }, &cv_param, cv_param.general.thread_number, running);
-    
-    
-    let mut cv_fbm_pop = Population::new();
 
-    // Computing OOB with validation folds based on FBM
-    let mut importance_values: HashMap<usize, Vec<f64>> = HashMap::new();
-    let mut std_dev_values: HashMap<usize, Vec<f64>> = HashMap::new();
-    let mut features_significant_observations: HashMap<usize, usize> = Default::default();
-    let mut features_classes: HashMap<usize, i8> = Default::default();
-    for (i,(mut fold_last_population, train, mut test)) in results.into_iter().enumerate() {
-        
-        // Fit last population on validation folds instead of training folds in order to select the models most likely to generalize.
-        ga::fit_fn(&mut fold_last_population, &mut test, &mut None, &None, &None, &cv_param);
+    let cv_folds_train_test_ids: Vec<(Vec<String>, Vec<String>)> = cv_data.get_ids();
 
-        let mut fold_last_fbm = fold_last_population.select_best_population(param.cv.cv_best_models_ci_alpha);
-        fold_last_fbm = fold_last_fbm.sort();
+    // Extract each Family of Best Models and merge them
+    let all_fold_fbms: Vec<(Population, Data)> = (0..cv_data.validation_folds.len())
+        .map(|i| cv_data.extract_fold_fbm(i, param))
+        .collect();
+
+    let mut merged_fbm = Population::new();
+    for (fold_fbm, _) in &all_fold_fbms {
+        merged_fbm.individuals.extend(fold_fbm.individuals.clone());
+    }
+
+    // Display Family of Best Models performance on validation fold VS 
+    for (i, (fold_fbm, valid_data)) in all_fold_fbms.iter().enumerate() {
+        info!("\x1b[1;93mFold #{}\x1b[0m", i+1);
+        // Validation fold = valid_data, train complet = &self.train_data
+        info!("{}", fold_fbm.clone().display(valid_data, Some(&data), &param));
+    }
+
+    // Load data to test 
+    let test_data = if !param.data.Xtest.is_empty() {
+        let mut td = Data::new();
+        let _ = td.load_data(&param.data.Xtest, &param.data.ytest);
+        td.set_classes(param.data.classes.clone());
+        if param.data.inverse_classes { td.inverse_classes(); }
+        td
+    } else {
+        Data::new()
+    };
+
+    // Fit the population on all train data
+    ga::fit_fn(&mut merged_fbm, &data, &mut Some(test_data.clone()), &None, &None, param);
+    info!("\x1b[1;93mFamily of best models across folds\x1b[0m");
+    info!("{}", merged_fbm.display(&data, Some(&test_data), &param));
+
+    if data.feature_len > 10000 {
+        warn!("Large dataset. Removing non-selected features from memory to reduce experiment...");
         
-        let fold_importances = fold_last_fbm.compute_pop_oob_feature_importance(&crossval.validation_folds[i], param.cv.n_permutations_oob, &mut rng, &param.cv.importance_aggregation, param.cv.scaled_importance);
-        for (key, (importance, std_dev)) in fold_importances.iter() {
-            importance_values.entry(*key).or_insert_with(Vec::new).push(*importance);
-            std_dev_values.entry(*key).or_insert_with(Vec::new).push(*std_dev);
-            if train.feature_class.contains_key(key) {
-                *features_significant_observations.entry(*key).or_insert(0) += 1;
-                let associated_class = train.feature_class[key];
-                if associated_class == 0 {
-                    *features_classes.entry(*key).or_insert(0) += -1;
-                } else if associated_class == 1 {
-                    *features_classes.entry(*key).or_insert(0) += 1;
-                }
+        // Collecter toutes les features présentes dans les training_sets
+        let mut union_features = HashSet::new();
+        for training_set in &cv_data.training_sets {
+            for &feature in &training_set.feature_selection {
+                union_features.insert(feature);
             }
         }
-
-        cv_fbm_pop.individuals.extend(fold_last_fbm.individuals);
-    }
-
-    // Sort best models according to their fit on validation folds
-    // Display them and their metrics on data and potential data_test
-    cv_fbm_pop = cv_fbm_pop.sort();
-
-    let mut data_test = Data::new();
-    if param.data.Xtest.len()>0 && param.data.ytest.len()>0 {
-         let _ = data_test.load_data(&param.data.Xtest.to_string(), &param.data.ytest.to_string());
-         data_test.set_classes(param.data.classes.clone());
-    }
-
-    let mut final_importances: HashMap<usize, (f64, f64)> = HashMap::new();
-
-    static EMPTY_VEC: Vec<f64> = Vec::new();
-    for key in importance_values.keys() {
-        let values = &importance_values[key];
-    
-        let stds = std_dev_values.get(key).unwrap_or(&EMPTY_VEC);
         
-        let agg_importance = match param.cv.importance_aggregation {
-           ImportanceAggregation::Median => {
-                let mut v = values.clone();
-                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                if v.len() % 2 == 1 {
-                    v[v.len() / 2]
-                } else {
-                    (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
-                }
-            },
-            _ => {
-                let sum: f64 = values.iter().sum();
-                sum / values.len() as f64
+        let mut new_x = HashMap::new();
+        for (&(sample, feature), &value) in &data.X {
+            if union_features.contains(&feature) {
+                new_x.insert((sample, feature), value);
             }
-        };
-        
-        let agg_std_dev = if !stds.is_empty() {
-            match param.cv.importance_aggregation {
-                ImportanceAggregation::Median => {
-                    // Simple médiane des mesures de dispersion (déjà des MAD si median était utilisé)
-                    let mut v = stds.clone();
-                    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    if v.len() % 2 == 1 {
-                        v[v.len() / 2]
-                    } else {
-                        (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
-                    }
-                },
-                _ => {
-                    // Simple moyenne des mesures de dispersion (déjà des écarts-types si mean était utilisé)
-                    let sum: f64 = stds.iter().sum();
-                    sum / stds.len() as f64
-                }
-            }
-        } else {
-            0.0
-        };
-    
-    final_importances.insert(*key, (agg_importance, agg_std_dev));
-
-    }
-    
-    let mut importance_vec: Vec<(&usize, &(f64, f64))> = final_importances.iter().collect();
-    importance_vec.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
-    let n = 150;
-    
-    info!("\x1b[1;93mRank\t\tFeature\t\t{}\x1b[0m", match param.cv.importance_aggregation {ImportanceAggregation::Median => "Importance (Median)\t\tMAD", _ => "Importance (Mean)\t\tStd. dev."});
-
-    // Colouring if the feature is associated with the same class in all FBM models (or unassociated)
-    for (rank, (feature_idx, (importance, std))) in importance_vec.iter().take(n).enumerate() {
-        if features_classes[*feature_idx] == -(features_significant_observations[*feature_idx] as i8)  {
-             info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[95m{}\x1b[0m\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
-        } else if features_classes[*feature_idx] == features_significant_observations[*feature_idx] as i8 {
-            info!("\x1b[1;93m#{}\x1b[0m\t\t\x1b[96m{}\x1b[0m\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
-        } else {
-            info!("\x1b[1;93m#{}\x1b[0m\t\t{}\t\t{:.5}\t\t{:.5}", rank + 1, data.features[**feature_idx], importance, std);
         }
+        
+        data.X = new_x;
+        
+        info!("Non-kept features removed. Dataset compacted from {} to {} features.", 
+            data.feature_len, union_features.len());
     }
 
-    let feature_importance_chart = utils::display_feature_importance_terminal(
-        &data,
-        &final_importances,
-        30, 
-        &param.cv.importance_aggregation
-    );
+    let exec_time = start.elapsed().as_secs_f64();
+    let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    Experiment {
+        id: format!("{}_cv_{}_{}", param.general.save_exp.split('.').next().unwrap(), param.general.algo, timestamp).to_string(),
+        gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
 
-    info!("\n{}", feature_importance_chart);
+        train_data: data,
+        test_data: Some(test_data),
 
-    (vec![cv_fbm_pop],data,data_test) 
+        final_population: Some(merged_fbm),
+        collection: cv_data.fold_populations,
+        
+        importance_collection: None,
+        execution_time: exec_time,
+
+        cv_folds_ids: Some(cv_folds_train_test_ids),
+        parameters: param.clone(),
+        others: None
+    }
 
 }
 
-pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Data,Data) {
+pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+    let start = std::time::Instant::now();
     warn!("MCMC algorithm is still in beta!");
     warn!(" - results cannot be guaranteed,");
     warn!(" - isn't GPU-compatible,");
@@ -474,6 +407,7 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
     let mut data = Data::new();
     let _ = data.load_data(param.data.X.as_str(), param.data.y.as_str());
     data.set_classes(param.data.classes.clone());
+    if param.data.inverse_classes { data.inverse_classes(); }
 
     // Each Gpredomics function currently handles class 2 as unknown
     // As MCMC does not, remove unknown sample before analysis
@@ -487,7 +421,7 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
                 data.feature_selection.len(), param.mcmc.nmin as usize)
     }
         
-    let mcmc_result;
+    let mut mcmc_result;
     if param.mcmc.nmin != 0 && data.feature_selection.len() > param.mcmc.nmin as usize {
         // Executing SBS
         info!("Launching MCMC with SBS (λ={}, {}<->{} features...)", 
@@ -519,16 +453,38 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>,Dat
 
     // Building complete posterior distribution
     let mut pop: Population = mcmc_result.population;
+    mcmc_result.population = Population::new();
 
     // Using MCMC models to compute prediction on test data
     let mut test_data = Data::new();
     if !param.data.Xtest.is_empty() {
         let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
         test_data.set_classes(param.data.classes.clone());
+        if param.data.inverse_classes { test_data.inverse_classes(); }
         test_data = test_data.remove_class(2);
     }
 
     info!("{}", pop.display(&data, Some(&test_data), &param));
     
-    (vec![pop], data, test_data)
+    let exec_time = start.elapsed().as_secs_f64();
+    let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    Experiment {
+        id: format!("{}_mcmc_{}_{}", param.general.save_exp.split('.').next().unwrap(), param.general.algo, timestamp).to_string(),
+        gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: timestamp,
+        algorithm: param.general.algo.clone(),
+
+        train_data: data,
+        test_data: Some(test_data),
+
+        final_population: Some(pop),
+        collection: None,
+        
+        importance_collection: None,
+        execution_time: exec_time,
+
+        cv_folds_ids: None,
+        parameters: param.clone(),
+        others: Some(ExperimentMetadata::MCMC { trace: mcmc_result })
+    }
 }

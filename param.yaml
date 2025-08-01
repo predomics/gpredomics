@@ -11,19 +11,13 @@ general:
   fit: auc                                    # possible values are auc,specificity,sensitivity (classification), see README.md for details
   k_penalty: 0.0001                           # this penalty is deduced from fit function multiplied by k, the number of variables used in the model
   fr_penalty: 0.0                             # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
-  nb_best_model_to_test: 100                  # nb of models to test in the last generation (default to 10, 0 means all models)
+  nb_best_model_to_test: 30                   # nb of models to test in the last generation (default to 10, 0 means all models)
   #log_base: ""                               # uncomment to print log and results in log_file_name
   log_level: debug                            # possible values are trace, debug, info, warning or error 
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
   keep_trace: false                           # keep this setting to false when using gpredomics as a binary
-
-cv:
-  fold_number: 5                              # number of folds for cross-validation (k-folds strategy).
-  cv_best_models_ci_alpha: 0.05               # alpha for the family of best model confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
-  n_permutations_oob: 500                     # number of permutations per feature for OOB importance.
-  scaled_importance: true                     # scale importance by feature prevalence inside folds.
-  importance_aggregation: Mean                # aggregation method for importances: "Mean" or "Median".     
+  #save_exp: exp.mp                           # uncomment to save experiment in save_exp, which can be reloaded with --load save_exp. Extention should be .json, .mp/.msgpack or .bin
 
 data:
   X: "samples/Qin2014/Xtrain.tsv"             # the features of the train data set 
@@ -36,10 +30,32 @@ data:
   feature_selection_method: wilcoxon          # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
   feature_maximal_pvalue: 0.05                # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_log_abs_bayes_factor: 2     # features with a fewer log absolute bayes factor will be removed (bayesian method only)
+  inverse_classes: false                       # if true, negative class becomes the objective
   classes:
     - "healthy"
     - "cirrhosis"
     - "unknown"
+
+cv:
+  inner_folds: 10                             # number of folds used to penalize overfit (fit = fit on folds - sd(fit on folds) * overfit_penalty) if overfit_penalty > 0
+  overfit_penalty: 0                          # this penalty is deduced from fit function
+  outer_folds: 5                              # number of folds used for cross-validation (launch algorithm on each k-1 folds then merge Families of Best Models).
+  fbm_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
+  cv_best_models_ci_alpha: 0.05               # alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
+
+importance:
+  compute_importance: false                   # should importance be computed ?  
+  n_permutations_oob: 500                     # number of permutations per feature for OOB importance.
+  scaled_importance: true                     # scale importance by feature prevalence inside folds.
+  importance_aggregation: mean                # aggregation method for importances: "mean" or "median".   
+
+voting:
+  vote: false                                 # should voting be activated ?
+  use_fbm: false                              # should only "Family of Best Models" be kept (alpha = 0.05) ?
+  min_perf: 0.5                               # required sensitivity AND specificity to be judge ; >=0.5 avoid "single-choice oriented" judges 
+  min_diversity: 10                           # required diversity between judges
+  method: Majority                            # Majority: class 1 if > threshold, else class 0 (if = no classification) VS Consensus: non-classification (rejection) if the threshold is not reached
+  method_threshold: 0.5                       # typically 0.5 for majority (for equal distribution | if set to 0, optimisation via Youden's maximum) and typically 1 for consensus, classifing samples on which all judges agree
 
 ga:
   population_size: 5000                       # the target number of models per generation (NB the real number may be below because of clone removal) 
@@ -54,6 +70,10 @@ ga:
   mutated_children_pct: 80                    # the % of children submitted to mutation
   mutated_features_pct: 20                    # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
   mutation_non_null_chance_pct: 20            # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
+  forced_diversity_pct: 5                     # if >0, population is filtered every mean_population_k according to this value
+  random_samples: 0                           # if >0, each generation is only fitted on n random samples reducing overfitting
+  max_age_randomized_samples: 30000           # if random_samples>0, the number of epoch during a same randomized dataset is kept 
+  n_epochs_before_global: 20                  # if random_samples>0, the population is fit on all data every n epochs
 
 beam:
   method: combinatorial                       # combinatorial: generate all combinations (k out of features_to_keep). incremental: increment each extendable_models of each 1 feature from features_to_keep.
@@ -67,7 +87,6 @@ mcmc:
   n_burn: 5000                                # number of MCMC iterations ignored (typically first half of all iterations)
   lambda: 0.001                               # bayesian prior parameter for coefficients a, b, c 
   nmin: 10                                    # minimum number of features in a model after feature elimination | 0 : keep all features (deactivate SBS search)
-  #save_trace_outdir: "./"                    # outdir to save trace of the MCMC model used for the final prediction
 
 gpu:
   fallback_to_cpu: true                       # executes the code on the CPU (integrated graphics) if there is no GPU available (recommanded)

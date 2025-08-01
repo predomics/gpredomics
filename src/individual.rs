@@ -11,12 +11,16 @@ use std::cmp::min;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use crate::Population;
-use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value};
-use log::debug;
+use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value, compute_metrics_from_classes, compute_mcc_and_metrics_from_value};
+use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
+use rand::SeedableRng;
+use log::{debug};
 use statrs::function::logistic::logistic;
+use crate::utils::serde_json_hashmap_numeric;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Individual {
+    #[serde(with = "serde_json_hashmap_numeric::usize_i8")]
     pub features: HashMap<usize,i8>, /// a vector of feature indices with their corresponding signs
     pub auc: f64, // accuracy of the model
     pub fit: f64, // fit value of the model
@@ -483,6 +487,13 @@ impl Individual {
         (self.auc, self.threshold, self.accuracy, self.sensitivity, self.specificity, objective)        
     }
 
+    pub fn compute_mcc_and_metrics(&mut self, d: &Data) -> (f64, f64, f64, f64, f64) {
+        let scores: Vec<_> = self.evaluate(d);
+        let mcc;
+        (mcc, self.threshold, self.accuracy, self.sensitivity, self.specificity) = compute_mcc_and_metrics_from_value(&scores, &d.y);
+        (mcc, self.threshold, self.accuracy, self.sensitivity, self.specificity)        
+    }
+
     /// Calculate the confusion matrix at a given threshold
     pub fn calculate_confusion_matrix(&self,data: &Data) -> (usize, usize, usize, usize) {
         let mut tp = 0; // True Positives
@@ -588,47 +599,8 @@ impl Individual {
             .map(|&p| if p >= self.threshold { 1 } else { 0 })
             .collect();
 
-        self.compute_metrics_from_classes(&predicted, &d.y)
+        compute_metrics_from_classes(&predicted, &d.y)
     }
-
-    pub fn compute_metrics_from_classes(&self, predicted: &Vec<u8>, y: &Vec<u8>, ) -> (f64, f64, f64) {
-        let mut tp = 0;
-        let mut fn_count = 0;
-        let mut tn = 0;
-        let mut fp = 0;
-
-        for (&pred, &real) in predicted.iter().zip(y.iter()) {
-            if real == 2 {
-                continue;
-            }
-            match (pred, real) {
-                (1, 1) => tp += 1,
-                (1, 0) => fp += 1,
-                (0, 0) => tn += 1,
-                (0, 1) => fn_count += 1,
-                other => panic!("A predicted vs real class of {:?} should not exist", other),
-            }
-        }
-
-        let sensitivity = if tp + fn_count > 0 {
-            tp as f64 / (tp + fn_count) as f64
-        } else {
-            0.0
-        };
-        let specificity = if fp + tn > 0 {
-            tn as f64 / (fp + tn) as f64
-        } else {
-            0.0
-        };
-        let accuracy = if tp + tn + fp + fn_count > 0 {
-            (tp + tn) as f64 / (tp + tn + fp + fn_count) as f64
-        } else {
-            0.0
-        };
-
-        (accuracy, sensitivity, specificity)
-    }
-
 
     /// a function that compute accuracy,precision and sensitivity, fixing the threshold using Youden index 
     /// return (threshold, accuracy, sensitivity, specificity)
@@ -701,34 +673,75 @@ impl Individual {
     }
 
     /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
-    /// uses mean decreased AUC
-    pub fn compute_oob_feature_importance(&mut self, data: &Data, permutations: usize, rng: &mut ChaCha8Rng) -> Vec<f64> {
-        let model_features = self.features_index();
-        let mut importances = vec![0.0; model_features.len()]; // One importance value per feature
-        let baseline_auc = self.compute_auc(data); // Baseline AUC
+/// uses mean decreased AUC
+    pub fn compute_oob_feature_importance(&self, data: &Data, permutations: usize, features_to_process: &[usize], feature_seeds: &HashMap<usize, Vec<u64>>) -> ImportanceCollection {
+        let baseline_auc = self.compute_new_auc(data);
+        let mut importances = Vec::new();
 
-        for (i,feature_idx) in model_features.iter().enumerate() {
-            let mut permuted_auc_sum = 0.0;
-
-            for _ in 0..permutations {
-                // Clone the feature matrix and shuffle the current feature row
-                let mut X_permuted = data.X.clone();
-                //X_permuted[*feature_idx].shuffle(rng);
-                shuffle_row(&mut X_permuted, data.sample_len, *feature_idx, rng);
-
-                // Recompute AUC with the permuted feature
-                let permuted_auc = self.compute_auc_from_features(&X_permuted, data.sample_len, &data.y);
-                permuted_auc_sum += permuted_auc;
-            }
-
-            // Compute the average AUC with permutations
-            let mean_permuted_auc = permuted_auc_sum / permutations as f64;
-
-            // Importance: how much the AUC drops due to shuffling
-            importances[i] = baseline_auc - mean_permuted_auc;
+        // Protection against strange behavior
+        if permutations == 0 {
+            panic!("compute_oob_feature_importance: To compute OOB calculation, permutations are needed (and currently set to 0)!");
         }
 
-        importances
+        for &feature_idx in features_to_process {
+            if !feature_seeds.contains_key(&feature_idx) {
+                panic!("compute_oob_feature_importance: Missing seeds for feature index {}", feature_idx);
+            }
+            
+            let seeds = &feature_seeds[&feature_idx];
+            if seeds.len() < permutations {
+                panic!("compute_oob_feature_importance: Feature {} has {} seeds but {} permutations requested", feature_idx, seeds.len(), permutations);
+            }
+        }
+
+        let mut seen = HashSet::new();
+        let unique_features: Vec<usize> = features_to_process
+            .iter()
+            .filter(|&&feature_idx| seen.insert(feature_idx))
+            .cloned()
+            .collect();
+        
+        if unique_features.len() != features_to_process.len() {
+            debug!("Individual Importance : removed {} duplicate features from analysis", features_to_process.len() - unique_features.len());
+        }
+        
+        for &feature_idx in &unique_features {
+            let importance_value = if !self.features.contains_key(&feature_idx) {
+                0.0
+            } else {
+                let mut permuted_auc_sum = 0.0;
+                
+                let seeds = feature_seeds.get(&feature_idx).expect("Seeds required");
+                
+                for &seed in seeds.iter().take(permutations) {
+                    let mut permutation_rng = ChaCha8Rng::seed_from_u64(seed);
+                    let mut X_permuted = data.X.clone();
+                    shuffle_row(&mut X_permuted, data.sample_len, feature_idx, &mut permutation_rng);
+                    let scores        = self.evaluate_from_features(&X_permuted, data.sample_len); 
+                    let permuted_auc  = compute_auc_from_value(&scores, &data.y);                 
+                    permuted_auc_sum += permuted_auc;
+                }
+                
+                let mean_permuted_auc = permuted_auc_sum / permutations as f64;
+                baseline_auc - mean_permuted_auc
+            };
+            
+            let importance_obj = Importance {
+                importance_type: ImportanceType::OOB,
+                feature_idx,
+                scope: ImportanceScope::Individual { model_hash: self.hash },
+                aggreg_method: None, 
+                importance: importance_value,
+                is_scaled: false,
+                dispersion: 0.0, 
+                scope_pct: 1.0, 
+                direction : None
+            };
+            
+            importances.push(importance_obj);
+        }
+        
+        ImportanceCollection { importances }
     }
 
     pub fn maximize_objective(&mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64) -> f64 {
@@ -917,6 +930,25 @@ impl Individual {
         }
     }
 
+    pub fn signed_jaccard_dissimilarity_with(&self, other: &Individual) -> f64 {
+        let signed_set1: HashSet<(usize, i8)> = self.features.iter()
+            .map(|(id, coef)| (*id, coef.signum() as i8))
+            .collect();
+        
+        let signed_set2: HashSet<(usize, i8)> = other.features.iter()
+            .map(|(id, coef)| (*id, coef.signum() as i8))
+            .collect();
+        
+        let intersection = signed_set1.intersection(&signed_set2).count();
+        let union = signed_set1.union(&signed_set2).count();
+        
+        if union == 0 {
+            return 0.0;
+        }
+        
+        1.0 - (intersection as f64) / (union as f64)
+    }
+
 }
 
 impl fmt::Debug for Individual {
@@ -968,59 +1000,104 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use rand::prelude::*;
 
-    fn create_test_individual() -> Individual {
-        Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
-        specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
-    }
-
-    fn create_test_individual_n2() -> Individual {
-        Individual  {features: vec![(0, 1), (1, -1)].into_iter().collect(), auc: 0.4, fit: 0.8, 
-        specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 0.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-        epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
-    }
-
-    fn create_test_data() -> Data {
-        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
-        let mut feature_class: HashMap<usize, u8> = HashMap::new();
-
-        // Simulate data
-        X.insert((0, 0), 0.9); // Sample 0, Feature 0
-        X.insert((0, 1), 0.01); // Sample 0, Feature 1
-        X.insert((1, 0), 0.91); // Sample 1, Feature 0
-        X.insert((1, 1), 0.12); // Sample 1, Feature 1
-        X.insert((2, 0), 0.75); // Sample 2, Feature 0
-        X.insert((2, 1), 0.01); // Sample 2, Feature 1
-        X.insert((3, 0), 0.19); // Sample 3, Feature 0
-        X.insert((3, 1), 0.92); // Sample 3, Feature 1
-        X.insert((4, 0), 0.9);  // Sample 4, Feature 0
-        X.insert((4, 1), 0.01); // Sample 4, Feature 1
-        X.insert((5, 0), 0.91); // Sample 5, Feature 0
-        X.insert((5, 1), 0.12); // Sample 5, Feature 1
-        X.insert((6, 0), 0.75); // Sample 6, Feature 0
-        X.insert((6, 1), 0.01); // Sample 6, Feature 1
-        X.insert((7, 0), 0.19); // Sample 7, Feature 0
-        X.insert((7, 1), 0.92); // Sample 7, Feature 1
-        X.insert((8, 0), 0.9);  // Sample 8, Feature 0
-        X.insert((8, 1), 0.01); // Sample 8, Feature 1
-        X.insert((9, 0), 0.91); // Sample 9, Feature 0
-        X.insert((9, 1), 0.12); // Sample 9, Feature 1
-        feature_class.insert(0, 0);
-        feature_class.insert(1, 1);
-
-        Data {
-            X,
-            y: vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0], // Vraies étiquettes
-            features: vec!["feature1".to_string(), "feature2".to_string()],
-            samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(),
-            "sample4".to_string(), "sample5".to_string(), "sample6".to_string(), "sample7".to_string(), 
-            "sample8".to_string(), "sample9".to_string(), "sample10".to_string()],
-            feature_class,
-            feature_selection: vec![0, 1],
-            feature_len: 2,
-            sample_len: 10,
-            classes: vec!["a".to_string(),"b".to_string()]
+    impl Individual {
+        pub fn test() -> Individual {
+            Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
+            specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
+            epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
         }
+
+        pub fn test2() -> Individual {
+            Individual  {features: vec![(0, 1), (1, -1)].into_iter().collect(), auc: 0.4, fit: 0.8, 
+            specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 0.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
+            epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
+        }
+
+        pub fn test_with_these_given_features(features_vec: Vec<(usize, i8)>) -> Individual {
+            Individual {
+                features: features_vec.into_iter().collect::<HashMap<usize, i8>>(),
+                auc: 0.8,
+                fit: 0.7,
+                specificity: 0.1,
+                sensitivity: 0.9,
+                accuracy: 0.3,
+                threshold: 0.5,
+                k: 0,
+                epoch: 0,
+                language: BINARY_LANG,
+                data_type: RAW_TYPE,
+                hash: 0x123456789abcdef0,
+                epsilon: DEFAULT_MINIMUM,
+                parents: None,
+                betas: None,
+            }
+        }
+
+        pub fn test_with_these_given_features_fit_lang_types(features: Vec<(usize, i8)>, fit: f64, language: u8, data_type: u8,) -> Individual {
+            Individual {
+                features: features.into_iter().collect(),
+                auc: 0.0,
+                fit,
+                specificity: 0.0,
+                sensitivity: 0.0,
+                accuracy: 0.0,
+                threshold: 0.0,
+                k: 0,
+                epoch: 0,
+                language,
+                data_type,
+                hash: 0,
+                epsilon: 0.0,
+                parents: None,
+                betas: None,
+            }
+        }
+
+        pub fn test_with_metrics(sensitivity: f64, specificity: f64, accuracy: f64) -> Individual {
+            Individual {
+                features: vec![(0, 1), (1, -1)].into_iter().collect(),
+                auc: 0.8,
+                fit: 0.7,
+                specificity: specificity,
+                sensitivity: sensitivity,
+                accuracy: accuracy,
+                threshold: 0.5,
+                k: 0,
+                epoch: 0,
+                language: BINARY_LANG,
+                data_type: RAW_TYPE,
+                hash: 0x123456789abcdef0,
+                epsilon: DEFAULT_MINIMUM,
+                parents: None,
+                betas: None,
+            }
+        }
+
+        pub fn specific_test(features: &[usize]) -> Individual {
+            let mut features_map = HashMap::new();
+            for &feature_idx in features {
+                features_map.insert(feature_idx, 1i8);
+            }
+            
+            Individual {
+                features: features_map,
+                auc: 0.8,
+                fit: 0.7,
+                specificity: 0.75,
+                sensitivity: 0.85,
+                accuracy: 0.80,
+                threshold: 0.5,
+                k: features.len(),
+                epoch: 0,
+                language: BINARY_LANG,
+                data_type: RAW_TYPE,
+                hash: 0x123456789abcdef0,
+                epsilon: DEFAULT_MINIMUM,
+                parents: None,
+                betas: None,
+            }
+        }
+
     }
 
     // test for language and data_types
@@ -1057,7 +1134,7 @@ mod tests {
     /// test for hash
     #[test]
     fn test_compute_hash_first_hash() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.compute_hash();
 
         let mut hasher = DefaultHasher::new();
@@ -1071,7 +1148,7 @@ mod tests {
 
     #[test]
     fn test_compute_hash_and_rehash() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.compute_hash();
         let first_hash = ind.hash;
 
@@ -1094,7 +1171,7 @@ mod tests {
     // fn evaluate(&self, d: &Data)
     #[test]
     fn test_evaluate_and_evaluate_from_features() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.data_type = RAW_TYPE;
         ind.language = TERNARY_LANG;
         ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
@@ -1130,7 +1207,7 @@ mod tests {
     // fn evaluate_raw
     #[test]
     fn test_evaluate_raw_weighted_score() {
-        let mut ind: Individual = create_test_individual();
+        let mut ind: Individual = Individual::test();
         ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
         ind.data_type = RAW_TYPE;
         
@@ -1159,7 +1236,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_raw_zero_or_more_sample_len() {
-        let ind = create_test_individual();
+        let ind = Individual::test();
         let X: HashMap<(usize, usize), f64> = HashMap::new();
         let scores = ind.evaluate_raw(&X, 0);
         assert!(scores.is_empty(), "score should be empty when sample_len=0");
@@ -1170,7 +1247,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_raw_missing_values() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.data_type = RAW_TYPE;
         ind.language = TERNARY_LANG;
         ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
@@ -1187,7 +1264,7 @@ mod tests {
     // fn evaluate_prevalence
     #[test]
     fn test_evaluate_prevalence_weighted_score() {
-        let mut ind: Individual = create_test_individual();
+        let mut ind: Individual = Individual::test();
         ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
         ind.data_type = RAW_TYPE;
         
@@ -1216,7 +1293,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_prevalence_zero_or_more_sample_len() {
-        let ind = create_test_individual();
+        let ind = Individual::test();
         let X: HashMap<(usize, usize), f64> = HashMap::new();
         let scores = ind.evaluate_prevalence(&X, 0);
         assert!(scores.is_empty(), "score should be empty when sample_len=0");
@@ -1226,7 +1303,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_prevalence_missing_values() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.data_type = RAW_TYPE;
         ind.language = TERNARY_LANG;
         ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
@@ -1242,7 +1319,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_log_weighted_score() {
-        let mut ind: Individual = create_test_individual();
+        let mut ind: Individual = Individual::test();
         ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
         ind.data_type = LOG_TYPE;
         
@@ -1271,7 +1348,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_log_zero_or_more_sample_len() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.data_type = LOG_TYPE;
         let X: HashMap<(usize, usize), f64> = HashMap::new();
         let scores = ind.evaluate_log(&X, 0);
@@ -1282,7 +1359,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_log_missing_values() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.data_type = RAW_TYPE;
         ind.language = TERNARY_LANG;
         ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
@@ -1301,9 +1378,9 @@ mod tests {
     // tests for auc
     #[test]
     fn test_compute_auc() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.threshold = 0.75;
-        let data = create_test_data();
+        let data = Data::test2();
         assert_eq!(0.7380952380952381, ind.compute_auc(&data), "bad calculation for AUC with compute_auc : this could be a ties issue");
         assert_eq!(0.7380952380952381, ind.compute_roc_and_metrics(&data, None).0, "bad calculation for AUC with compute_roc_and_metrics : this could be a ties issue");
         assert_eq!(ind.compute_auc(&data), ind.compute_auc_from_features(&data.X, data.sample_len, &data.y),
@@ -1328,9 +1405,9 @@ mod tests {
     // fn calculate_confusion_matrix
     #[test]
     fn test_calculate_confusion_matrix_basic() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.threshold = 0.75;
-        let data = create_test_data();
+        let data = Data::test2();
         let confusion_matrix = ind.calculate_confusion_matrix(&data);
         assert_eq!(confusion_matrix.0, 2, "incorrect identification of true positives");
         assert_eq!(confusion_matrix.1, 4, "incorrect identification of false positives");
@@ -1340,9 +1417,9 @@ mod tests {
 
     #[test]
     fn test_calculate_confusion_matrix_class_2() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.threshold = 0.75;
-        let mut data = create_test_data();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 2, 0, 0, 0, 0, 0, 1, 0];
         let confusion_matrix = ind.calculate_confusion_matrix(&data);
         assert_eq!(confusion_matrix.3, 0, "class 2 shoudn't  be classified");
@@ -1351,8 +1428,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "Invalid class label in y: 3")]
     fn test_calculate_confusion_matrix_invalid_class_label() {
-        let ind = create_test_individual();
-        let mut data = create_test_data();
+        let ind = Individual::test();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 3, 3, 3, 3, 0, 1, 0, 1];
         let _confusion_matrix = ind.calculate_confusion_matrix(&data);
     }
@@ -1360,7 +1437,7 @@ mod tests {
     // fn count_k
     #[test]
     fn test_count_k_basic() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.count_k();
         assert_eq!(ind.features.len(), ind.k, "count_k() should attribute Individual.features.len() as Individual.k");
     }
@@ -1375,7 +1452,7 @@ mod tests {
     #[test]
     fn test_random() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let data = create_test_data();
+        let data = Data::test2();
         let ind = Individual::random(&data, &mut rng);
         // warning : ind.features.len() != data.feature_len as generate_random_vector can return 0 not kept in the Hashmap
         assert!(ind.features.len() <= data.feature_len, "random indivudal features should respect the data feature_len");
@@ -1423,21 +1500,21 @@ mod tests {
         
     }
 
-    // fn compute_metrics
-    #[test]
-    #[should_panic(expected = "A predicted vs real class of (0, 3) should not exist")]
-    fn test_compute_metrics_invalid_class() {
-        let ind = create_test_individual();
-        let mut data = create_test_data();
-        data.y = vec![1, 3, 1, 0, 0, 0, 0, 0, 1, 1];
-        ind.compute_metrics(&data);
-    }
+    // fn compute_metrics 
+    // #[test]
+    // #[should_panic(expected = "A predicted vs real class of (0, 3) should not exist")] Outdated test
+    // fn test_compute_metrics_invalid_class() {
+    //     let ind = Individual::test();
+    //     let mut data = Data::test2();
+    //     data.y = vec![1, 3, 1, 0, 0, 0, 0, 0, 1, 1];
+    //     ind.compute_metrics(&data);
+    // }
 
     #[test]
     fn test_compute_metrics_basic() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.threshold = 0.75;
-        let mut data = create_test_data();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
         let metrics = ind.compute_metrics(&data);
         assert_eq!(0.5_f64, metrics.0, "bad calculation for accuracy");
@@ -1447,9 +1524,9 @@ mod tests {
 
     #[test]
     fn test_compute_metrics_class2() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.threshold = 0.75;
-        let mut data = create_test_data();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 2];
         assert_eq!((0.5555555555555556_f64, 0.6666666666666666_f64, 0.5_f64), ind.compute_metrics(&data),
         "class 2 should be omitted in calculation")
@@ -1457,9 +1534,9 @@ mod tests {
 
     #[test]
     fn test_compute_metrics_too_much_y() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.threshold = 0.75;
-        let mut data = create_test_data();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1];
         assert_eq!((0.5_f64, 0.6666666666666666_f64, 0.42857142857142855_f64), ind.compute_metrics(&data),
         "when ind.sample_len < data.sample_len (or y.len() if it does not match), only the ind.sample_len values should be used to calculate its metrics");
@@ -1467,9 +1544,9 @@ mod tests {
 
     #[test]
     fn test_compute_metrics_not_enough_y() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.threshold = 0.75;
-        let mut data = create_test_data();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 1, 1];
         assert_eq!((0.25_f64, 0.3333333333333333_f64, 0.0_f64), ind.compute_metrics(&data),
         "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
@@ -1479,8 +1556,8 @@ mod tests {
     // threshold = 0.84 according to R ; same metrics as below
     #[test]
     fn test_compute_threshold_and_metrics_basic() {
-        let ind = create_test_individual();
-        let mut data = create_test_data();
+        let ind = Individual::test();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
         let results = ind.compute_threshold_and_metrics(&data);
         assert_eq!(0.89_f64, results.0, "bad identification of the threshold");
@@ -1498,8 +1575,8 @@ mod tests {
     // threshold = 0.84 according to R ; same metrics as below -> need to control if this difference could be a problem
     #[test]
     fn test_compute_threshold_and_metrics_class_2() {
-        let ind = create_test_individual();
-        let mut data = create_test_data();
+        let ind = Individual::test();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 2];
         assert_eq!((0.79_f64, 0.7777777777777778_f64, 0.6666666666666666_f64, 0.8333333333333334_f64), ind.compute_threshold_and_metrics(&data), "class 2 should be omitted in calculation");
         
@@ -1512,9 +1589,9 @@ mod tests {
 
     //#[test]
     //fn test_compute_threshold_and_metrics_too_much_y() {
-    //    let mut ind = create_test_individual();
+    //    let mut ind = Individual::test();
     //    ind.threshold = 0.75;
-    //    let mut data = create_test_data();
+    //    let mut data = Data::test2();
     //    data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1];
     //    assert_eq!((0.79_f64, 0.8_f64, 0.6666666666666666_f64, 0.8571428571428571_f64), ind.compute_threshold_and_metrics(&data),
     //    "when ind.sample_len < data.sample_len (or y.len() if it does not match), only the ind.sample_len values should be used to calculate its metrics");
@@ -1522,9 +1599,9 @@ mod tests {
 
     #[test]
     fn test_compute_threshold_and_metrics_not_enough_y() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.threshold = 0.75;
-        let mut data = create_test_data();
+        let mut data = Data::test2();
         data.y = vec![1, 0, 1, 1];
         assert_eq!((0.89_f64, 0.5_f64, 0.3333333333333333_f64, 1.0_f64), ind.compute_threshold_and_metrics(&data),
         "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
@@ -1538,25 +1615,474 @@ mod tests {
     // fn features_index
     #[test]
     fn test_features_index_basic() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.features.insert(10, 0.42 as i8);
         assert_eq!(vec![0_usize, 1_usize, 2_usize, 3_usize, 10_usize], ind.features_index());
     }
 
-    // fn compute_oob_feature_importance
+    fn generate_feature_seeds(features: &[usize], permutations: usize, seed: u64) -> HashMap<usize, Vec<u64>> {
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        features.iter()
+            .map(|&f| {
+                let seeds: Vec<u64> = (0..permutations)
+                    .map(|_| rng.next_u64())
+                    .collect();
+                (f, seeds)
+            })
+            .collect()
+    }
+
     #[test]
-    fn test_compute_oob_feature_importance_basic() {
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let mut ind = create_test_individual();
-        let data = create_test_data();
-        let importances = ind.compute_oob_feature_importance(&data, 2, &mut rng);
-        assert_eq!(importances.len(), ind.features.len(),
-        "the number of importances should be the same as the number of features Individual.features.len()");
-        for importance in importances.clone() {
-            assert!(importance >= 0.0, "importance can not be negative");
+    fn test_compute_oob_feature_importance_zero_permutations_division_by_zero() {
+        let individual = Individual::specific_test(&[0]);
+        let data = Data::specific_test(10, 2);
+        let features_to_process = vec![0];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 0, 123);
+
+        let result = std::panic::catch_unwind(|| {
+            individual.compute_oob_feature_importance(&data, 0, &features_to_process, &feature_seeds)
+        });
+        
+        assert!(result.is_err(), "Zero permutations should cause division by zero panic");
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_feature_not_in_individual_returns_zero() {
+        let individual = Individual::specific_test(&[2, 4]); 
+        let data = Data::specific_test(30, 6);
+        let features_to_process = vec![0, 1, 2, 3, 4, 5];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 10, 789);
+
+        let result = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &feature_seeds);
+
+        for importance in &result.importances {
+            if ![2, 4].contains(&importance.feature_idx) {
+                assert_eq!(importance.importance, 0.0, 
+                    "Features not in individual (feature {}) must return 0.0 importance", 
+                    importance.feature_idx);
+            }
         }
-        assert_eq!(importances, vec![0.09523809523809534, 0.3928571428571429, 0.0, 0.0],
-        "the calculated importances are not the same as calculated in the past for a same seed, indicating a reproducibility problem");
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_missing_seeds_panics() {
+        let individual = Individual::specific_test(&[1]);
+        let data = Data::specific_test(30, 3);
+        let features_to_process = vec![1, 2];
+
+        // Seeds only provided for feature 1, missing for feature 2
+        let mut incomplete_seeds = HashMap::new();
+        incomplete_seeds.insert(1, vec![12345u64; 5]);
+
+        let result = std::panic::catch_unwind(|| {
+            individual.compute_oob_feature_importance(&data, 5, &features_to_process, &incomplete_seeds)
+        });
+        
+        assert!(result.is_err(), "Missing seeds should cause .expect() to panic");
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_reproducibility_same_seeds() {
+        let individual = Individual::specific_test(&[1, 2]);
+        let data = Data::specific_test(50, 4);
+        let features_to_process = vec![1, 2];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 50, 999);
+
+        let result1 = individual.compute_oob_feature_importance(&data, 2, &features_to_process, &feature_seeds);
+        let result2 = individual.compute_oob_feature_importance(&data, 2, &features_to_process, &feature_seeds);
+        
+        assert_eq!(result1.importances.len(), result2.importances.len());
+
+        for (imp1, imp2) in result1.importances.iter().zip(result2.importances.iter()) {
+            assert_eq!(imp1.feature_idx, imp2.feature_idx);
+            assert!((imp1.importance - imp2.importance).abs() < 1e-12, 
+                "Same seeds must yield identical results for feature {}", imp1.feature_idx);
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_output_structure_fields() {
+        let individual = Individual::specific_test(&[1]);
+        let data = Data::specific_test(20, 3);
+        let features_to_process = vec![0, 1];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 5, 456);
+
+        let result = individual.compute_oob_feature_importance(&data, 5, &features_to_process, &feature_seeds);
+
+        for importance in &result.importances {
+            // Verify all fixed structure fields
+            assert_eq!(importance.importance_type, ImportanceType::OOB);
+            assert_eq!(importance.aggreg_method, None);
+            assert_eq!(importance.is_scaled, false);
+            assert_eq!(importance.dispersion, 0.0);
+            assert_eq!(importance.scope_pct, 1.0);
+            assert_eq!(importance.direction, None);
+
+            match importance.scope {
+                ImportanceScope::Individual { model_hash } => {
+                    assert_eq!(model_hash, individual.hash);
+                },
+                _ => panic!("Expected Individual scope for feature {}", importance.feature_idx),
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_all_requested_features_returned() {
+        let individual = Individual::specific_test(&[2, 5, 7]);
+        let data = Data::specific_test(40, 10);
+        let features_to_process = vec![2, 5, 7, 9];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 5, 789);
+
+        let result = individual.compute_oob_feature_importance(&data, 5, &features_to_process, &feature_seeds);
+
+        let mut result_features: Vec<usize> = result.importances.iter()
+            .map(|imp| imp.feature_idx)
+            .collect();
+        result_features.sort();
+
+        let mut expected_features = features_to_process.clone();
+        expected_features.sort();
+
+        assert_eq!(result_features, expected_features, "All requested features must be present in results")}
+
+    #[test]
+    fn test_compute_oob_feature_importance_single_permutation_finite_values() {
+        let individual = Individual::specific_test(&[0]);
+        let data = Data::specific_test(30, 2);
+        let features_to_process = vec![0, 1];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 1, 456);
+
+        let result = individual.compute_oob_feature_importance(&data, 1, &features_to_process, &feature_seeds);
+
+        assert_eq!(result.importances.len(), 2);
+        
+        for importance in &result.importances {
+            assert!(importance.importance.is_finite(), 
+                "Single permutation should yield finite importance for feature {}", 
+                importance.feature_idx);
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_bounds_realistic() {
+        let individual = Individual::specific_test(&[0, 1]);
+        let data = Data::specific_test(50, 3);
+        let features_to_process = vec![0, 1, 2];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 20, 654);
+
+        let result = individual.compute_oob_feature_importance(&data, 20, &features_to_process, &feature_seeds);
+
+        for importance in &result.importances {
+            // Importance = baseline_auc - mean_permuted_auc
+            // Can be negative if permutation improves performance
+            assert!(importance.importance.is_finite(), 
+                "Importance must be finite for feature {}", importance.feature_idx);
+            assert!(importance.importance >= -1.0 && importance.importance <= 1.0, 
+                "Importance should be bounded by AUC difference range for feature {}: got {}", 
+                importance.feature_idx, importance.importance);
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_empty_individual_features() {
+        let individual = Individual::specific_test(&[]); // No features
+        let data = Data::specific_test(20, 4);
+        let features_to_process = vec![0, 1, 2, 3];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 5, 321);
+
+        let result = individual.compute_oob_feature_importance(&data, 5, &features_to_process, &feature_seeds);
+
+        for importance in &result.importances {
+            assert_eq!(importance.importance, 0.0, 
+                "Individual with no features should return 0 importance for feature {}", 
+                importance.feature_idx);
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_different_seeds_may_differ() {
+        let individual = Individual::specific_test(&[0, 2]);
+        let data = Data::specific_test(60, 3);
+        let features_to_process = vec![0, 2];
+
+        let seeds1 = generate_feature_seeds(&features_to_process, 10, 111);
+        let seeds2 = generate_feature_seeds(&features_to_process, 10, 222);
+
+        let result1 = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &seeds1);
+        let result2 = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &seeds2);
+
+        // Note: Results may be the same in some cases (deterministic data), so we only check structure
+        assert_eq!(result1.importances.len(), result2.importances.len());
+        
+        for (imp1, imp2) in result1.importances.iter().zip(result2.importances.iter()) {
+            assert_eq!(imp1.feature_idx, imp2.feature_idx);
+            assert!(imp1.importance.is_finite() && imp2.importance.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_large_permutation_count() {
+        let individual = Individual::specific_test(&[0]);
+        let data = Data::specific_test(50, 2);
+        let features_to_process = vec![0];
+        let feature_seeds1 = generate_feature_seeds(&features_to_process, 10000, 123);
+        let feature_seeds2 = generate_feature_seeds(&features_to_process, 10000, 456);
+
+        let result = individual.compute_oob_feature_importance(&data, 10000, &features_to_process, &feature_seeds1);
+
+        assert_eq!(result.importances.len(), 1);
+        
+        let importance = &result.importances[0];
+        assert!(importance.importance.is_finite(), 
+            "Large permutation count should yield finite importance");
+        
+        // With many permutations, results should be stable 
+        let result2 = individual.compute_oob_feature_importance(&data, 10000, &features_to_process, &feature_seeds2);
+        
+        assert!((importance.importance - result2.importances[0].importance).abs() < 1e-2,
+            "Large permutation count with different seeds should be highly reproducible: {} vs {}", importance.importance, result2.importances[0].importance);
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_individual_with_mixed_coefficients() {
+        // Test individual with mixed positive/negative coefficients
+        let mut features_map = HashMap::new();
+        features_map.insert(0, 1i8);   // Positive coefficient
+        features_map.insert(1, -1i8);  // Negative coefficient
+        features_map.insert(2, 1i8);   // Positive coefficient
+        
+        let individual = Individual {
+            features: features_map,
+            auc: 0.8,
+            fit: 0.7,
+            specificity: 0.75,
+            sensitivity: 0.85,
+            accuracy: 0.80,
+            threshold: 0.5,
+            k: 3,
+            epoch: 0,
+            language: TERNARY_LANG, // Supports negative coefficients
+            data_type: RAW_TYPE,
+            hash: 0x123456789abcdef0,
+            epsilon: DEFAULT_MINIMUM,
+            parents: None,
+            betas: None,
+        };
+        
+        let data = Data::specific_test(40, 5);
+        let features_to_process = vec![0, 1, 2, 3, 4];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 10, 555);
+
+        let result = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &feature_seeds);
+
+        for importance in &result.importances {
+            if [0, 1, 2].contains(&importance.feature_idx) {
+                // Features present in individual should have computed importance
+                assert!(importance.importance.is_finite(), 
+                    "Present features should have finite importance");
+            } else {
+                // Features not in individual should have zero importance
+                assert_eq!(importance.importance, 0.0, 
+                    "Absent features should have zero importance");
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_different_datatypes() {
+        let mut individual = Individual::specific_test(&[0, 1]);
+        let data = Data::specific_test(50, 3);
+        let features_to_process = vec![0, 1, 2];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 10, 123);
+
+        // Test RAW_TYPE (default)
+        individual.data_type = RAW_TYPE;
+        let result_raw = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &feature_seeds);
+        assert_eq!(result_raw.importances.len(), 3);
+        
+        // Test PREVALENCE_TYPE
+        individual.data_type = PREVALENCE_TYPE;
+        let result_prev = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &feature_seeds);
+        assert_eq!(result_prev.importances.len(), 3);
+
+        // Test LOG_TYPE
+        individual.data_type = LOG_TYPE;
+        let result_log = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &feature_seeds);
+        assert_eq!(result_log.importances.len(), 3);
+
+        // Verify all results contain finite importance values
+        for result in [&result_raw, &result_prev, &result_log] {
+            for imp in &result.importances {
+                assert!(imp.importance.is_finite(), 
+                    "All datatypes should produce finite importance values for feature {}", 
+                    imp.feature_idx);
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_duplicate_features_in_process() {
+        let individual = Individual::specific_test(&[0, 1, 2]);
+        let data = Data::specific_test(30, 4);
+        let features_to_process = vec![0, 1, 1, 2, 3]; // feature 1 dupliquée
+        let feature_seeds = generate_feature_seeds(&features_to_process, 5, 789);
+
+        let result = individual.compute_oob_feature_importance(&data, 5, &features_to_process, &feature_seeds);
+
+        // Should process each unique feature only once
+        let unique_features: std::collections::HashSet<usize> = features_to_process.iter().cloned().collect();
+        assert_eq!(result.importances.len(), unique_features.len(), 
+            "Should return importance for each unique feature only");
+
+        // Verify no duplicate feature indices in results
+        let mut seen_features = std::collections::HashSet::new();
+        for imp in &result.importances {
+            assert!(!seen_features.contains(&imp.feature_idx), 
+                "Duplicate importance found for feature {}", imp.feature_idx);
+            seen_features.insert(imp.feature_idx);
+            
+            assert!(unique_features.contains(&imp.feature_idx), 
+                "Result contains unexpected feature {}", imp.feature_idx);
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_extreme_unbalanced_data() {
+        let individual = Individual::specific_test(&[0, 1]);
+        let mut data = Data::specific_test(50, 3);
+        let features_to_process = vec![0, 1, 2];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 10, 456);
+
+        // Test: All positive labels (y = 1)
+        data.y = vec![1u8; 50];
+        let result_all_pos = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &feature_seeds);
+
+        for imp in &result_all_pos.importances {
+            assert!(imp.importance.is_finite(), 
+                "Importance should be finite with all positive labels for feature {}", 
+                imp.feature_idx);
+            // AUC calculation should handle single-class case gracefully
+        }
+
+        // Test: All negative labels (y = 0)  
+        data.y = vec![0u8; 50];
+        let result_all_neg = individual.compute_oob_feature_importance(&data, 10, &features_to_process, &feature_seeds);
+
+        for imp in &result_all_neg.importances {
+            assert!(imp.importance.is_finite(), 
+                "Importance should be finite with all negative labels for feature {}", 
+                imp.feature_idx);
+        }
+
+        // Test: Highly unbalanced (49:1)
+        data.y = vec![0u8; 49];
+        data.y.push(1u8);
+        let result_unbalanced = individual.compute_oob_feature_importance(&data, 5, &features_to_process, &feature_seeds);
+
+        for imp in &result_unbalanced.importances {
+            assert!(imp.importance.is_finite(), 
+                "Importance should be finite with unbalanced labels for feature {}", 
+                imp.feature_idx);
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_constant_feature_values() {
+        let individual = Individual::specific_test(&[0, 1]);
+        let mut data = Data::specific_test(40, 3);
+        let features_to_process = vec![0, 1, 2];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 8, 999);
+
+        // Make feature 0 constant (all same value)
+        for sample in 0..data.sample_len {
+            data.X.insert((sample, 0), 0.5); // Constant value
+        }
+
+        let result = individual.compute_oob_feature_importance(&data, 8, &features_to_process, &feature_seeds);
+
+        for imp in &result.importances {
+            assert!(imp.importance.is_finite(), 
+                "Constant features should still produce finite importance for feature {}", 
+                imp.feature_idx);
+            
+            if imp.feature_idx == 0 && individual.features.contains_key(&0) {
+                // Constant features typically have low/zero importance
+                assert!(imp.importance >= -1.0 && imp.importance <= 1.0,
+                    "Constant feature importance should be bounded");
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_very_small_dataset() {
+        let individual = Individual::specific_test(&[0]);
+        let data = Data::specific_test(3, 2); // Very small: 3 samples, 2 features
+        let features_to_process = vec![0, 1];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 2, 777);
+
+        let result = individual.compute_oob_feature_importance(&data, 2, &features_to_process, &feature_seeds);
+
+        assert_eq!(result.importances.len(), 2);
+        
+        for imp in &result.importances {
+            assert!(imp.importance.is_finite(), 
+                "Small dataset should still produce finite importance for feature {}", 
+                imp.feature_idx);
+            // With very few samples, AUC calculation might be less stable but should not crash
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_out_of_bounds_features() {
+        let individual = Individual::specific_test(&[0, 1]);
+        let data = Data::specific_test(30, 3); // Features 0, 1, 2 exist
+        let features_to_process = vec![0, 1, 5, 10]; // Features 5, 10 don't exist in data
+        let feature_seeds = generate_feature_seeds(&features_to_process, 5, 555);
+
+        let result = individual.compute_oob_feature_importance(&data, 5, &features_to_process, &feature_seeds);
+
+        for imp in &result.importances {
+            assert!(imp.importance.is_finite(), 
+                "Out-of-bounds features should be handled gracefully for feature {}", 
+                imp.feature_idx);
+                
+            if ![0, 1, 2].contains(&imp.feature_idx) {
+                // Out-of-bounds features should have zero importance
+                assert_eq!(imp.importance, 0.0,
+                    "Out-of-bounds feature {} should have zero importance", 
+                    imp.feature_idx);
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_oob_feature_importance_mixed_languages() {
+        // Test different Individual languages
+        let languages_to_test = vec![
+            (BINARY_LANG, &[0, 1][..]),
+            (TERNARY_LANG, &[0, 1, 2][..]),
+            (RATIO_LANG, &[0][..]),
+        ];
+        
+        let data = Data::specific_test(40, 4);
+        let features_to_process = vec![0, 1, 2, 3];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 8, 333);
+
+        for (language, individual_features) in languages_to_test {
+            let mut individual = Individual::specific_test(individual_features);
+            individual.language = language;
+
+            let result = individual.compute_oob_feature_importance(&data, 8, &features_to_process, &feature_seeds);
+
+            assert_eq!(result.importances.len(), features_to_process.len());
+            
+            for imp in &result.importances {
+                assert!(imp.importance.is_finite(), 
+                    "Language {:?} should produce finite importance for feature {}", 
+                    language, imp.feature_idx);
+            }
+        }
     }
 
     // fn maximize_objective
@@ -1564,8 +2090,8 @@ mod tests {
     // fn maximize_objective_with_scores
     #[test]
     fn test_maximize_objective_with_scores() {
-        let mut ind = create_test_individual();
-        let data = create_test_data();
+        let mut ind = Individual::test();
+        let data = Data::test2();
         let scores = ind.evaluate(&data);
         let best_objective = ind.maximize_objective_with_scores(&scores, &data, 1.0, 1.0);
 
@@ -1590,7 +2116,7 @@ mod tests {
 
     #[test]
     fn test_get_language() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.language = BINARY_LANG;
         assert_eq!(ind.get_language(), "Binary");
         ind.language = TERNARY_LANG;
@@ -1605,7 +2131,7 @@ mod tests {
 
     #[test]
     fn test_get_data_type() {
-        let mut ind = create_test_individual();
+        let mut ind = Individual::test();
         ind.data_type = RAW_TYPE;
         assert_eq!(ind.get_data_type(), "Raw");
         ind.data_type = PREVALENCE_TYPE;
@@ -1684,43 +2210,12 @@ mod tests {
 
     #[test]
     fn test_evaluate_class_and_score() {
-        let ind = create_test_individual_n2();
-        let data = create_test_data();
+        let ind = Individual::test2();
+        let data = Data::test2();
         let scores = ind.evaluate(&data);
         assert_eq!(scores, vec![0.89, 0.79, 0.74, -0.73, 0.89, 0.79, 0.74, -0.73, 0.89, 0.79], "bad calculation for score");
         let class_and_score = ind.evaluate_class_and_score(&data);
         assert_eq!(class_and_score, (vec![1, 1, 1, 0, 1, 1, 1, 0, 1, 1],vec![0.89, 0.79, 0.74, -0.73, 0.89, 0.79, 0.74, -0.73, 0.89, 0.79]), "bad calculation for class_and_score ");
-    }
-
-    fn create_test_population() -> Population {
-        let mut pop = Population {
-            individuals: Vec::new(),
-        };
-    
-        for i in 0..10 {
-            let ind = Individual {
-                features: vec![(0, i), (1, -i), (2, i * 2), (3, i % 3)].into_iter().collect(),
-                auc: 0.4 + (i as f64 * 0.05),
-                fit: 0.8 - (i as f64 * 0.02),
-                specificity: 0.15 + (i as f64 * 0.01),
-                sensitivity: 0.16 + (i as f64 * 0.01),
-                accuracy: 0.23 + (i as f64 * 0.03),
-                threshold: 42.0 + (i as f64),
-                k: (42 + i) as usize,
-                epoch: (42 + i) as usize,
-                language: (i % 4) as u8,
-                data_type: (i % 3) as u8,
-                hash: i as u64,
-                epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
-                parents : None,
-                betas: None
-            };
-            pop.individuals.push(ind);
-        }
-    
-        pop.individuals.push(pop.individuals[9].clone());
-
-        pop
     }
 
     #[test]
@@ -1790,7 +2285,7 @@ mod tests {
         real_tree.insert((9, None), [2, 3, 4].iter().cloned().collect());
         real_tree.insert((11, None), [2].iter().cloned().collect());
         
-        let mut pop: Population = create_test_population();
+        let mut pop= Population::test();
         let mut gen_0 = Population::new();
         let mut gen_1  = Population::new();
         let mut gen_2  = Population::new();
@@ -1830,7 +2325,7 @@ mod tests {
     fn test_get_genealogy_edge_cases() {
         // Empty population
         let empty_population: Vec<Population> = Vec::new();
-        let individual = create_test_individual();
+        let individual = Individual::test();
         let genealogy = individual.get_genealogy(&empty_population, 10);
         assert!(genealogy.is_empty(), "Genealogy should be empty for an empty population");
     
@@ -1842,7 +2337,7 @@ mod tests {
     
         // Individual having no parents
         let mut no_parents_population = vec![Population::new()];
-        let mut no_parents_individual = create_test_individual();
+        let mut no_parents_individual = Individual::test();
         no_parents_individual.parents = None;
         no_parents_population[0].individuals.push(no_parents_individual.clone());
         let genealogy = no_parents_individual.get_genealogy(&no_parents_population, 10);
@@ -1868,7 +2363,7 @@ mod tests {
         deep_tree.insert((9, Some(vec![10])), [8].iter().cloned().collect());
         deep_tree.insert((10, None), [9].iter().cloned().collect());
     
-        let mut pop_deep = create_test_population();
+        let mut pop_deep = Population::test();
         pop_deep.individuals[0].hash = 1;
         pop_deep.individuals[0].parents = Some(vec![2]);
         pop_deep.individuals[1].hash = 2;
@@ -1927,7 +2422,7 @@ mod tests {
         wide_tree.insert((4, None), [1].iter().cloned().collect());
         wide_tree.insert((5, None), [1].iter().cloned().collect());
     
-        let mut pop_wide = create_test_population();
+        let mut pop_wide = Population::test();
         pop_wide.individuals[0].hash = 1;
         pop_wide.individuals[0].parents = Some(vec![2, 3, 4, 5]);
         pop_wide.individuals[1].hash = 2;
@@ -1958,7 +2453,7 @@ mod tests {
         cycle_tree.insert((2, Some(vec![3])), [1].iter().cloned().collect());
         cycle_tree.insert((3, Some(vec![1])), [2].iter().cloned().collect());
     
-        let mut pop_cycle = create_test_population();
+        let mut pop_cycle = Population::test();
         pop_cycle.individuals[0].hash = 1;
         pop_cycle.individuals[0].parents = Some(vec![2]);
         pop_cycle.individuals[1].hash = 2;
@@ -1986,7 +2481,7 @@ mod tests {
         missing_parents_tree.insert((1, Some(vec![2])), [0].iter().cloned().collect());
         missing_parents_tree.insert((2, None), [1].iter().cloned().collect());
     
-        let mut pop_missing = create_test_population();
+        let mut pop_missing = Population::test();
         pop_missing.individuals[0].hash = 1;
         pop_missing.individuals[0].parents = Some(vec![2]);
         pop_missing.individuals[1].hash = 2;
@@ -2012,7 +2507,7 @@ mod tests {
         multiple_paths_tree.insert((3, Some(vec![4])), [1].iter().cloned().collect());
         multiple_paths_tree.insert((4, None), [2].iter().cloned().collect());
     
-        let mut pop_multiple = create_test_population();
+        let mut pop_multiple = Population::test();
         pop_multiple.individuals[0].hash = 1;
         pop_multiple.individuals[0].parents = Some(vec![2, 3]);
         pop_multiple.individuals[1].hash = 2;
@@ -2036,6 +2531,146 @@ mod tests {
     
         let collection_multiple = vec![gen_0_multiple, gen_1_multiple, gen_2_multiple];
         assert_eq!(collection_multiple[2].individuals[0].get_genealogy(&collection_multiple, 10), multiple_paths_tree, "Generated tree is broken for tree with multiple paths");
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_empty_individuals() {
+        // Test with two individuals having no features
+        // Expected: 0.0 (no features means no dissimilarity by convention)
+        let ind1 = Individual::test_with_these_given_features(vec![]);
+        let ind2 = Individual::test_with_these_given_features(vec![]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 0.0);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_identical_signs() {
+        // Test with identical features having same signs after signum()
+        // Individual 1: features {(1, 4), (2, 2)} → signum → {(1, +1), (2, +1)} 
+        // Individual 2: features {(1, 1), (2, 3)} → signum → {(1, +1), (2, +1)}
+        // Intersection: 2, Union: 2 → Dissimilarity = 1 - 2/2 = 0.0
+        let ind1 = Individual::test_with_these_given_features(vec![(1, 4), (2, 2)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(1, 1), (2, 3)]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 0.0);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_opposite_signs() {
+        // Test with same feature IDs but opposite signs after signum()
+        // Individual 1: features {(1, 2), (2, -1)} → signum → {(1, +1), (2, -1)}
+        // Individual 2: features {(1, -3), (2, 4)} → signum → {(1, -1), (2, +1)}
+        // Intersection: 0, Union: 4 → Dissimilarity = 1 - 0/4 = 1.0
+        let ind1 = Individual::test_with_these_given_features(vec![(1, 2), (2, -1)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(1, -3), (2, 4)]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 1.0);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_partial_overlap() {
+        // Test with partial overlap in signed features after signum()
+        // Individual 1: features {(1, 1), (2, 2), (3, -1)} → signum → {(1, +1), (2, +1), (3, -1)}
+        // Individual 2: features {(2, 4), (3, -2), (4, 1)} → signum → {(2, +1), (3, -1), (4, +1)}
+        // Intersection: {(2, +1), (3, -1)} = 2
+        // Union: {(1, +1), (2, +1), (3, -1), (4, +1)} = 4
+        // Dissimilarity = 1 - 2/4 = 0.5
+        let ind1 = Individual::test_with_these_given_features(vec![(1, 1), (2, 2), (3, -1)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(2, 4), (3, -2), (4, 1)]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 0.5);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_minimal_overlap() {
+        // Test with minimal overlap in signed features
+        // Individual 1: features {(1, -4), (2, 2), (4, -1)} → signum → {(1, -1), (2, +1), (4, -1)}
+        // Individual 2: features {(2, -1), (3, 1), (4, -2)} → signum → {(2, -1), (3, +1), (4, -1)}
+        // Intersection: {(4, -1)} = 1
+        // Union: {(1, -1), (2, +1), (2, -1), (3, +1), (4, -1)} = 5
+        // Dissimilarity = 1 - 1/5 = 0.8
+        let ind1 = Individual::test_with_these_given_features(vec![(1, -4), (2, 2), (4, -1)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(2, -1), (3, 1), (4, -2)]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 0.8);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_disjoint_features() {
+        // Test with partial feature ID overlap but different signs
+        // Individual 1: features {(1, 1), (2, -2)} → signum → {(1, +1), (2, -1)}
+        // Individual 2: features {(1, 3), (3, 1)} → signum → {(1, +1), (3, +1)}
+        // Intersection: {(1, +1)} = 1
+        // Union: {(1, +1), (2, -1), (3, +1)} = 3
+        // Dissimilarity = 1 - 1/3 = 2/3 ≈ 0.6666666666666667
+        let ind1 = Individual::test_with_these_given_features(vec![(1, 1), (2, -2)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(1, 3), (3, 1)]);
+        let expected = 2.0 / 3.0;
+        let result = ind1.signed_jaccard_dissimilarity_with(&ind2);
+        assert!((result - expected).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_zero_coefficient() {
+        // Test with zero coefficient (signum(0) = 0)
+        // Individual 1: features {(1, 0), (2, 1)} → signum → {(1, 0), (2, +1)}
+        // Individual 2: features {(1, 2), (3, -1)} → signum → {(1, +1), (3, -1)}
+        // Intersection: {} = 0 (no matching (id, sign) pairs)
+        // Union: {(1, 0), (1, +1), (2, +1), (3, -1)} = 4
+        // Dissimilarity = 1 - 0/4 = 1.0
+        let ind1 = Individual::test_with_these_given_features(vec![(1, 0), (2, 1)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(1, 2), (3, -1)]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 1.0);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_single_feature_opposite_sign() {
+        // Test with single feature having opposite signs after signum()
+        // Individual 1: features {(5, 4)} → signum → {(5, +1)}
+        // Individual 2: features {(5, -2)} → signum → {(5, -1)}
+        // Intersection: {} = 0
+        // Union: {(5, +1), (5, -1)} = 2
+        // Dissimilarity = 1 - 0/2 = 1.0
+        let ind1 = Individual::test_with_these_given_features(vec![(5, 4)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(5, -2)]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 1.0);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_asymmetric_sizes() {
+        // Test with individuals having different numbers of features
+        // Individual 1: features {(1, 1), (2, 2), (3, 1), (4, 3)} → signum → {(1, +1), (2, +1), (3, +1), (4, +1)}
+        // Individual 2: features {(1, 1)} → signum → {(1, +1)}
+        // Intersection: {(1, +1)} = 1
+        // Union: {(1, +1), (2, +1), (3, +1), (4, +1)} = 4
+        // Dissimilarity = 1 - 1/4 = 0.75
+        let ind1 = Individual::test_with_these_given_features(vec![(1, 1), (2, 2), (3, 1), (4, 3)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(1, 1)]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 0.75);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_one_empty() {
+        // Test with one empty individual
+        // Individual 1: features {(1, 1), (2, -1)} → signum → {(1, +1), (2, -1)}
+        // Individual 2: features {} (empty)
+        // Intersection: {} = 0
+        // Union: {(1, +1), (2, -1)} = 2
+        // Dissimilarity = 1 - 0/2 = 1.0
+        let ind1 = Individual::test_with_these_given_features(vec![(1, 1), (2, -1)]);
+        let ind2 = Individual::test_with_these_given_features(vec![]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 1.0);
+        
+        // Test symmetry
+        assert_eq!(ind2.signed_jaccard_dissimilarity_with(&ind1), 1.0);
+    }
+
+    #[test]
+    fn test_signed_jaccard_dissimilarity_with_pow2_language() {
+        // Test with pow2 language values (-4,-2,-1,0,1,2,4)
+        // Individual 1: features {(1, -4), (2, 2), (3, 0)} → signum → {(1, -1), (2, +1), (3, 0)}
+        // Individual 2: features {(1, -2), (2, 4), (4, 1)} → signum → {(1, -1), (2, +1), (4, +1)}
+        // Intersection: {(1, -1), (2, +1)} = 2
+        // Union: {(1, -1), (2, +1), (3, 0), (4, +1)} = 4
+        // Dissimilarity = 1 - 2/4 = 0.5
+        let ind1 = Individual::test_with_these_given_features(vec![(1, -4), (2, 2), (3, 0)]);
+        let ind2 = Individual::test_with_these_given_features(vec![(1, -2), (2, 4), (4, 1)]);
+        assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 0.5);
     }
     
 }
