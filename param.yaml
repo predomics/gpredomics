@@ -17,13 +17,13 @@ general:
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
   keep_trace: false                           # keep this setting to false when using gpredomics as a binary
-  save_exp: exp.mp                           # uncomment to save experiment in save_exp, which can be reloaded with --load save_exp. Extention should be .json, .mp/.msgpack or .bin
+  #save_exp: exp.mp                           # uncomment to save experiment in save_exp, which can be reloaded with --load save_exp. Extention should be .json, .mp/.msgpack or .bin
 
 data:
-  X: "/home/lesage/work/analyses/ICI/data/gpredomics/X/sctDisc.tsv"             # the features of the train data set 
-  y: "/home/lesage/work/analyses/ICI/data/gpredomics/y/yDisc_OS12p.tsv"             # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
-  Xtest: "/home/lesage/work/analyses/ICI/data/gpredomics/X/sctValid33.tsv"          # the features of the test data set
-  ytest: "/home/lesage/work/analyses/ICI/data/gpredomics/y/yValid33_OS12p.tsv"          # the class description of the test data set 
+  X: "samples/Qin2014/Xtrain.tsv"             # the features of the train data set 
+  y: "samples/Qin2014/Ytrain.tsv"             # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
+  Xtest: "samples/Qin2014/Xtest.tsv"          # the features of the test data set
+  ytest: "samples/Qin2014/Ytest.tsv"          # the class description of the test data set 
   features_maximal_number_per_class: 0        # 0: all significant features ; else first X significant features (per class!) sorted according to their pvalue/log_abs_bayes_factor
   feature_minimal_prevalence_pct: 10          # per class, e.g. features are retained if any of the class reaches this level
   feature_minimal_feature_value: 1e-4         # features which mean is below that value are discarded
@@ -40,7 +40,7 @@ cv:
   inner_folds: 10                             # number of folds used to penalize overfit (fit = fit on folds - sd(fit on folds) * overfit_penalty) if overfit_penalty > 0
   overfit_penalty: 0                          # this penalty is deduced from fit function
   outer_folds: 5                              # number of folds used for cross-validation (launch algorithm on each k-1 folds then merge Families of Best Models).
-  fit_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
+  fbm_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
   cv_best_models_ci_alpha: 0.05               # alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
 
 importance:
@@ -50,10 +50,10 @@ importance:
   importance_aggregation: mean                # aggregation method for importances: "mean" or "median".   
 
 voting:
-  vote: true                                 # should voting be activated ?
-  use_fbm: true                              # should only "Family of Best Models" be kept (alpha = 0.05) ?
-  min_perf: 0.6                               # required sensitivity AND specificity to be judge ; >=0.5 avoid "single-choice oriented" judges 
-  min_diversity: 30                           # required diversity between judges
+  vote: false                                 # should voting be activated ?
+  use_fbm: false                              # should only "Family of Best Models" be kept (alpha = 0.05) ?
+  min_perf: 0.5                               # required sensitivity AND specificity to be judge ; >=0.5 avoid "single-choice oriented" judges 
+  min_diversity: 10                           # required diversity between judges
   method: Majority                            # Majority: class 1 if > threshold, else class 0 (if = no classification) VS Consensus: non-classification (rejection) if the threshold is not reached
   method_threshold: 0.5                       # typically 0.5 for majority (for equal distribution | if set to 0, optimisation via Youden's maximum) and typically 1 for consensus, classifing samples on which all judges agree
 
@@ -70,7 +70,7 @@ ga:
   mutated_children_pct: 80                    # the % of children submitted to mutation
   mutated_features_pct: 20                    # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
   mutation_non_null_chance_pct: 20            # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
-  forced_diversity_pct: 0                     # if >0, population is filtered every mean_population_k according to this value
+  forced_diversity_pct: 5                     # if >0, population is filtered every mean_population_k according to this value
   random_samples: 0                           # if >0, each generation is only fitted on n random samples reducing overfitting
   max_age_randomized_samples: 30000           # if random_samples>0, the number of epoch during a same randomized dataset is kept 
   n_epochs_before_global: 20                  # if random_samples>0, the population is fit on all data every n epochs
