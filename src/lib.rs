@@ -263,7 +263,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         test_data: Some(data_test),
 
         final_population: Some(final_pop),
-        collection: None,
+        collection: Some(collection),
         
         importance_collection: None,
         execution_time: exec_time,
