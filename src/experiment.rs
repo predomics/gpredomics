@@ -10,6 +10,12 @@ use rand_chacha::ChaCha8Rng;
 use rand::SeedableRng;
 use rayon::ThreadPoolBuilder;
 use crate::Individual;
+use crate::ga;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::thread;
+use chrono::Local;
+//use crate::lib::{param, run_ga, run_cv, run_beam, run_mcmc};
 
 ////////////////////////
 ////// IMPORTANCE //////
@@ -169,19 +175,23 @@ pub struct Experiment {
     pub algorithm: String,
     pub parameters: Param,
 
+    // Data
     pub train_data: Data,
-    pub cv_folds_ids: Option<Vec<(Vec<String>, Vec<String>)>>,
     pub test_data: Option<Data>,
 
     // Results 
-    pub collection: Option<Vec<Population>>, // only if keep_trace==true
+    // In CV-mode, Vec<Vec<Population>>.len() = outer_folds, in non-CV mode Vec<Vec<Population>>.len() = 1
+    pub collections: Vec<Vec<Population>>, 
     pub final_population: Option<Population>,
     pub importance_collection: Option<ImportanceCollection>,
 
+     pub cv_folds_ids: Option<Vec<(Vec<String>, Vec<String>)>>,
+    
     // Metadata
     pub execution_time: f64,
     pub others: Option<ExperimentMetadata>
 }
+
 
 impl Experiment {
     pub fn compute_importance(&mut self) {
@@ -201,18 +211,14 @@ impl Experiment {
                 info!("Computing CV importance with {} folds", self.cv_folds_ids.as_ref().unwrap().len());
                 if let Some(fold_ids) = &self.cv_folds_ids {
                     debug!("Reconstructing CV object from Experiment...");
-                    let cv_result = if let Some(collection) = self.collection.clone() {
-                        CV::reconstruct(&self.train_data, fold_ids.clone(), collection)
-                    } else {
-                        error!("No population available for CV importance calculation");
-                        return;
-                    };
+                    let cv_result = CV::reconstruct(&self.train_data, fold_ids.clone(), self.collections.clone());
                     
                     match cv_result {
                         Ok(cv) => {
                             debug!("Computing Intra-fold and Inter-fold importances...");
                             self.importance_collection = Some(cv.compute_cv_oob_feature_importance(&self.parameters, self.parameters.importance.n_permutations_oob,
-                                &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true, true).expect("CV importance calculation failed."));
+                                &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true).expect("CV importance calculation failed."));
+                            
                             info!("{}", self.importance_collection.as_ref().unwrap().display_feature_importance_terminal(&self.train_data, 30));
                         }
                         Err(e) => {
@@ -227,42 +233,38 @@ impl Experiment {
     }
 
     pub fn display_results(&mut self) {
-        info!("=== EXPERIMENT RESULTS ===");
+        info!("=== EXPERIMENT {} RESULTS ===", self.id);
         info!("GPREDOMICS version: v{}", self.gpredomics_version);
-        info!("Experiment ID: {}", self.id);
         info!("Timestamp: {}", self.timestamp);
         info!("Algorithm: {}", self.algorithm);
         info!("Execution time: {:.2}s", self.execution_time);
 
-        if let Some(fold_ids) = &self.cv_folds_ids {
-            debug!("Reconstructing CV object from Experiment...");
-            let cv_result = if let Some(collection) = self.collection.clone() {
-                CV::reconstruct(&self.train_data, fold_ids.clone(), collection)
-            } else {
-                panic!("No population available for displaying FBMs");
-            };
+        // Reconstruct CV to print each fold FBM as original display
+        if let Some(cv_folds_ids) = self.cv_folds_ids.clone() {
+            let cv = CV::reconstruct(&self.train_data, cv_folds_ids, self.collections.clone())
+                .expect("CV reconstruction failed.");
+            let mut fbm = cv.get_fbm(&self.parameters);
 
-            if let Ok(cv_data) = cv_result {
-                let all_fold_fbms: Vec<(Population, Data)> = (0..cv_data.validation_folds.len())
-                .map(|i| cv_data.extract_fold_fbm(i, &self.parameters)).collect();
+            ga::fit_fn(&mut fbm, &self.train_data, &mut None, &None, &None, &self.parameters);
+            fbm = fbm.sort();
 
-                let mut merged_fbm = Population::new();
-                for (fold_fbm, _) in &all_fold_fbms {
-                    merged_fbm.individuals.extend(fold_fbm.individuals.clone());
-                }
+            fbm.compute_hash();
+            let mut final_pop = self.final_population.clone().unwrap();
+            final_pop.compute_hash();
 
-            for (i, (fold_fbm, valid_data)) in all_fold_fbms.iter().enumerate() {
-                info!("\x1b[1;93mFold #{}\x1b[0m", i+1);
-                info!("{}", fold_fbm.clone().display(valid_data, Some(&self.train_data), &self.parameters));
-            }
-            }
+            let fbm_hashes: std::collections::HashSet<_> = fbm.individuals.iter().map(|i| i.hash).collect();
+            let final_hashes: std::collections::HashSet<_> = final_pop.individuals.iter().map(|i| i.hash).collect();
 
-        } else {
-            if let Some(mut final_pop) = self.final_population.clone() {
+            assert_eq!(fbm_hashes, final_hashes, "Something is wrong with the Experiment: reconstructed CV based FBM should be the same as final population");
+            info!("\x1b[1;93mDisplaying Family of best models across folds\x1b[0m");
+        }    
+
+        // Print final population
+        if let Some(mut final_pop) = self.final_population.clone() {
                 info!("{}", final_pop.display(&self.train_data, self.test_data.as_ref(), &self.parameters));
-            } else {
-                panic!("No final population available");
-            }}
+        } else {
+            panic!("No final population available");
+        }
         
         if let Some(ref importance_collection) = self.importance_collection {
             let top_features = if self.cv_folds_ids.is_some() {
@@ -1341,8 +1343,8 @@ mod tests {
         
         let result = collection.display_feature_importance_terminal(&data, 10);
         
-        // Devrait prioriser Collection > Population > Individual
-        // En présence de Collection, devrait utiliser les importances Collection (0.4) 
+        // Should prioritise Collection > Population > Individual
+        // If Collection is present, should use Collection importance (0.4)
         assert!(!result.is_empty());
     }
 
@@ -1352,7 +1354,7 @@ mod tests {
         let data = Data::test_with_these_features(&[1, 2]);
         
         let result = collection.display_feature_importance_terminal(&data, 10);
-        assert!(!result.is_empty()); // Devrait retourner un message ou format valide même si vide
+        assert!(!result.is_empty()); 
     }
 
     #[test]
@@ -1399,7 +1401,7 @@ mod tests {
                 train_data: Data::test(),      
                 cv_folds_ids: None,
                 test_data: Some(Data::test2()),
-                collection: Some(vec!(Population::test_with_n_overlapping_features(2, 20), Population::test_with_n_overlapping_features(15, 12))),
+                collections: vec![vec!(Population::test_with_n_overlapping_features(2, 20), Population::test_with_n_overlapping_features(15, 12))],
                 final_population: Some(Population::test()),
                 importance_collection: None,
                 execution_time: 42.5,
@@ -1408,22 +1410,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_serialization_json_roundtrip() {
-        let original_exp = Experiment::test();
-        let file_path = "test_serialization_json_roundtrip";
+    // #[test]
+    // fn test_serialization_json_roundtrip() {
+    //     let original_exp = Experiment::test();
+    //     let file_path = "test_serialization_json_roundtrip";
 
-        // Test sauvegarde JSON
-        original_exp.save_json(&file_path).unwrap();
+    //     original_exp.save_json(&file_path).unwrap();
         
-        // Test chargement JSON
-        let _ = Experiment::load_json(&file_path).unwrap();
+    //     let _ = Experiment::load_json(&file_path).unwrap();
         
-        // Vérifications
-        //assert_eq!(original_exp, loaded_exp);
+    //     // Vérifications
+    //     //assert_eq!(original_exp, loaded_exp);
         
-        std::fs::remove_file("test_serialization_json_roundtrip").unwrap();
-    }
+    //     std::fs::remove_file("test_serialization_json_roundtrip").unwrap();
+    // }
 
     #[test]
     fn test_serialization_messagepack_roundtrip() {
@@ -1493,7 +1493,7 @@ mod tests {
     fn test_experiment_with_court_metadata() {
         let mut experiment = Experiment::test();
         
-        // Créer des données de test minimalistes pour Court
+        // Create minimal test data for Court
         let court = Court::new(
             &Population::new(),
             &0.0,
@@ -1505,14 +1505,13 @@ mod tests {
         
         experiment.others = Some(ExperimentMetadata::Court { court });
         
-        // Test de sérialisation avec métadonnées Court
+        // Serialisation test with metadata Short
         let temp_file = "test_experiment_with_court_metadata.json";
         experiment.save_auto(temp_file).unwrap();
         let loaded = Experiment::load_auto(temp_file).unwrap();
         
         match loaded.others {
             Some(ExperimentMetadata::Court { .. }) => {
-                // Test réussi
             },
             _ => panic!("Court metadata not preserved during serialization"),
         }
@@ -1523,7 +1522,7 @@ mod tests {
     fn test_file_extension_normalization() {
         let experiment = Experiment::test();
         
-        // Test avec extension en majuscules
+        // Test with extension in uppercase
         let temp_file = "test_file_extension_normalization.BIN";
         experiment.save_auto(temp_file).unwrap();
         let loaded = Experiment::load_auto(temp_file).unwrap();
@@ -1546,27 +1545,22 @@ mod tests {
         experiment.evaluate_on_new_dataset("dummy_X.csv", "dummy_y.csv");
     }
 
-    // Test d'intégration pour le flux complet
+    // Integration test for the complete flow
     #[test]
     fn test_complete_experiment_lifecycle() {
         let mut original = Experiment::test();
         original.execution_time = 123.45;
         
-        // Simulation d'une expérience complète avec population
         original.final_population = Some(Population::new());
-        
-        // Sauvegarde
+
         let temp_file = "test_complete_experiment_lifecycle.json";
         original.save_auto(temp_file).unwrap();
         
-        // Rechargement
         let mut reloaded = Experiment::load_auto(temp_file).unwrap();
         
-        // Vérifications complètes
         assert_eq!(original, reloaded);
         assert!(reloaded.final_population.is_some());
         
-        // Test d'affichage (ne doit pas paniquer)
         reloaded.display_results();
         std::fs::remove_file("test_complete_experiment_lifecycle.json").unwrap();
     }
@@ -1601,10 +1595,10 @@ mod tests {
             (vec!["sample1".to_string(), "sample2".to_string()], vec!["sample3".to_string()]),
             (vec!["sample3".to_string()], vec!["sample1".to_string(), "sample2".to_string()]),
         ]);
-        experiment.collection = Some(vec![
-            Population::test(), 
-            Population::test()
-        ]);
+        experiment.collections = vec![
+            vec![Population::test()], 
+            vec![Population::test()]
+        ];
         
         experiment.compute_importance();
         
@@ -1612,12 +1606,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_importance_cv_mode_handles_no_collection_gracefully() {
+    #[should_panic(expected = "Mismatch")]
+    fn test_compute_importance_cv_mode_handles_no_collection() {
         let mut experiment = Experiment::test();
         experiment.cv_folds_ids = Some(vec![
             (vec!["sample1".to_string()], vec!["sample2".to_string()]),
         ]);
-        experiment.collection = None;
+        experiment.collections = vec![];
         experiment.compute_importance();
         
         assert!(experiment.importance_collection.is_none());
@@ -1630,7 +1625,7 @@ mod tests {
         experiment.cv_folds_ids = Some(vec![
             (vec!["invalid_sample".to_string()], vec!["another_invalid".to_string()]),
         ]);
-        experiment.collection = Some(vec![Population::test()]);
+        experiment.collections = vec![vec![Population::test()]];
         
         experiment.compute_importance();
     }
@@ -1708,7 +1703,7 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        // Seul le premier juge devrait être conservé (0.9 >= 0.7 && 0.8 >= 0.7)
+        // Only the first judge should be retained (0.9 >= 0.7 && 0.8 >= 0.7)
         assert_eq!(court.judges.individuals.len(), 1);
         assert!(court.judges.individuals[0].sensitivity >= 0.7);
         assert!(court.judges.individuals[0].specificity >= 0.7);
@@ -1741,7 +1736,7 @@ mod tests {
             &0.0,
             &0.0,
             &VotingMethod::Majority,
-            &1.5,  // Invalide : > 1.0
+            &1.5,  // Invalid : > 1.0
             &WeightingMethod::Uniform,
         );
     }
@@ -1758,7 +1753,7 @@ mod tests {
             &VotingMethod::Majority,
             &0.5,
             &WeightingMethod::Specialized {
-                sensitivity_threshold: 1.5,  // Invalide : > 1.0
+                sensitivity_threshold: 1.5,  // Invalid : > 1.0
                 specificity_threshold: 0.8,
             },
         );
@@ -1777,7 +1772,7 @@ mod tests {
             &0.5,
             &WeightingMethod::Specialized {
                 sensitivity_threshold: 0.8,
-                specificity_threshold: -0.1,  // Invalide : < 0.0
+                specificity_threshold: -0.1,  // Invalid : < 0.0
             },
         );
     }
@@ -1789,8 +1784,8 @@ mod tests {
         
         let court = Court::new(
             &population,
-            &0.0,  // Pas de filtrage par performance
-            &0.0,  // Pas de filtrage par diversité
+            &0.0,  // No filtering by performance
+            &0.0,  // No filtering by diversity
             &VotingMethod::Majority,
             &0.5,
             &WeightingMethod::Uniform,
@@ -1812,15 +1807,17 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        // Les juges devraient être triés (vérification que sort() a été appelé)
+        // Judges should be sorted (check that sort() has been called)
         assert!(!court.judges.individuals.is_empty());
-        // Test que l'objet est valide après tri
+        assert!(court.judges.individuals[0].fit > court.judges.individuals[1].fit);
+        assert!(court.judges.individuals[1].fit > court.judges.individuals[2].fit);
+        // Test that the object is valid after sorting
         assert!(court.voting_threshold >= 0.0 && court.voting_threshold <= 1.0);
     }
 
     #[test]
     fn test_new_handles_empty_population_gracefully() {
-        let population = Population::new();  // Population vide
+        let population = Population::new(); 
         
         let court = Court::new(
             &population,
@@ -1855,7 +1852,7 @@ mod tests {
         let data = Data::test();
         court.evaluate(&data);
         
-        // Les métriques du court devraient être calculées
+        // Court metrics should be calculated
         assert!(court.accuracy > 0.0);
         assert!(court.weights.is_some());
         assert_eq!(court.weights.as_ref().unwrap().len(), court.judges.individuals.len());
@@ -1870,14 +1867,14 @@ mod tests {
             &0.0,
             &0.0,
             &VotingMethod::Majority,
-            &0.0,  // Threshold à zéro pour déclencher l'optimisation Youden
+            &0.0,  // Threshold set to zero to trigger Youden optimisation
             &WeightingMethod::Uniform,
         );
         
         let data = Data::test();
         court.evaluate(&data);
         
-        // Le threshold devrait avoir été optimisé (différent de 0.0)
+        // The threshold should have been optimised (different from 0.0).
         assert!(court.voting_threshold > 0.0);
         assert!(court.voting_threshold <= 1.0);
     }
@@ -1896,7 +1893,7 @@ mod tests {
         );
         
         let data = Data::test();
-        court.predict(&data);  // Devrait paniquer car evaluate() n'a pas été appelée
+        court.predict(&data);  // Should panic because evaluate() has not been called
     }
 
     #[test]
@@ -1913,7 +1910,7 @@ mod tests {
         );
         
         let data = Data::test();
-        let wrong_weights = vec![1.0]; // Moins de poids que de juges
+        let wrong_weights = vec![1.0]; // Less weight than judges
         
         court.compute_majority_threshold_vote(&data, &wrong_weights, 0.5);
     }
@@ -1921,7 +1918,7 @@ mod tests {
     #[test]
     fn test_compute_majority_threshold_vote_handles_perfect_ties_correctly() {
         let mut population = Population::test();
-        // Configurer exactement 2 juges pour créer des égalités parfaites
+        // Set up exactly 2 judges to create perfect ties
         population.individuals.truncate(2);
         
         let mut court = Court::new(
@@ -1937,9 +1934,9 @@ mod tests {
         court.evaluate(&data);
         let predictions = court.predict(&data);
         
-        // Avec un seuil de 0.5 et 2 juges, les égalités parfaites donnent classe 2 (abstention)
+        // With a threshold of 0.5 and two judges, perfect ties result in class 2 (abstention).
         assert_eq!(predictions.len(), data.sample_len);
-        // Au moins quelques prédictions devraient être valides
+        // At least some predictions should be valid.
         assert!(predictions.iter().all(|&x| x == 0 || x == 1 || x == 2));
     }
 
@@ -1959,7 +1956,7 @@ mod tests {
         court.evaluate(&data);
         let predictions = court.predict(&data);
         
-        // Avec un seuil de consensus élevé, il devrait y avoir des abstentions (classe 2)
+        // With a high consensus threshold, there should be abstentions (class 2)
         assert!(predictions.contains(&2));
         assert_eq!(predictions.len(), data.sample_len);
     }
@@ -1972,7 +1969,7 @@ mod tests {
             &0.0,
             &0.0,
             &VotingMethod::Consensus,
-            &0.95,  // Seuil très élevé
+            &0.95,  
             &WeightingMethod::Uniform,
         );
         
@@ -1980,7 +1977,7 @@ mod tests {
         court.evaluate(&data);
         let predictions = court.predict(&data);
         
-        // Avec un seuil très élevé, la majorité des prédictions devraient être des abstentions
+        // With a very high threshold, the majority of predictions are likely to be abstentions
         let abstentions = predictions.iter().filter(|&&x| x == 2).count();
         assert!(abstentions > 0);
         assert_eq!(predictions.len(), data.sample_len);
@@ -1999,13 +1996,13 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);  // Nécessaire pour calculer les poids
+        court.evaluate(&data);  
         court.compute_classes(&data);
         
         assert!(court.predicted_classes.is_some());
         assert_eq!(court.predicted_classes.as_ref().unwrap().len(), data.sample_len);
         
-        // Vérifier que toutes les prédictions sont des classes valides
+        // Check that all predictions are valid classes
         let predictions = court.predicted_classes.as_ref().unwrap();
         assert!(predictions.iter().all(|&x| x == 0 || x == 1 || x == 2));
     }
@@ -2018,7 +2015,7 @@ mod tests {
             &0.0,
             &0.0,
             &VotingMethod::Consensus,
-            &0.9,  // Seuil élevé pour générer des abstentions
+            &0.9, 
             &WeightingMethod::Uniform,
         );
         
@@ -2029,7 +2026,7 @@ mod tests {
         let rejection_rate = court.compute_rejection_rate(&predictions);
         assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0);
         
-        // Test avec cas extrêmes
+        // Extreme cases
         let all_abstentions = vec![2u8; 10];
         let all_abstention_rate = court.compute_rejection_rate(&all_abstentions);
         assert_eq!(all_abstention_rate, 1.0);
@@ -2047,24 +2044,24 @@ mod tests {
             &0.0,
             &0.0,
             &VotingMethod::Majority,
-            &0.0,  // Déclenche l'optimisation
+            &0.0,  // Optimisation
             &WeightingMethod::Uniform,
         );
         
-        // Test avec différentes tailles d'échantillon
+        // Test with different sample sizes
         let small_data = Data::specific_test(30, 10);  // <= 50
         court.evaluate(&small_data);
         let threshold_small = court.voting_threshold;
         assert!(threshold_small > 0.0 && threshold_small <= 1.0);
         
-        // Réinitialiser pour test suivant
+        // Reset for next test
         court.voting_threshold = 0.0;
         let medium_data = Data::specific_test(100, 10); // 51-200
         court.evaluate(&medium_data);
         let threshold_medium = court.voting_threshold;
         assert!(threshold_medium > 0.0 && threshold_medium <= 1.0);
         
-        // Réinitialiser pour test suivant
+        // Reset for next test
         court.voting_threshold = 0.0;
         let large_data = Data::specific_test(500, 10); // > 200
         court.evaluate(&large_data);
@@ -2084,14 +2081,14 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        // Créer des juges avec différentes métriques
+        // Create judges with different metrics
         let balanced = Individual::test_with_metrics(0.8, 0.8, 0.8);
         let pos_specialist = Individual::test_with_metrics(0.9, 0.5, 0.7);
         let neg_specialist = Individual::test_with_metrics(0.5, 0.9, 0.7);
         let ineffective = Individual::test_with_metrics(0.3, 0.3, 0.3);
         let edge_case = Individual::test_with_metrics(0.7, 0.7, 0.7); 
  
-        // Test cas normaux
+        // Normal cases
         assert_eq!(
             court.get_judge_specialization(&balanced, 0.7, 0.7),
             JudgeSpecialization::Balanced
@@ -2109,7 +2106,7 @@ mod tests {
             JudgeSpecialization::Ineffective
         );
         
-        // Test cas limites (seuils exacts)
+        // Boundary condition test (exact thresholds)
         assert_eq!(
             court.get_judge_specialization(&edge_case, 0.7, 0.7),
             JudgeSpecialization::Balanced
@@ -2130,7 +2127,7 @@ mod tests {
         
         let (total, effective) = court.count_effective_judges();
         
-        // En mode uniforme, tous les juges sont effectifs
+        // In uniform mode, all judges are active.
         assert_eq!(total, effective);
         assert_eq!(effective, court.judges.individuals.len());
     }
@@ -2139,13 +2136,13 @@ mod tests {
     fn test_count_effective_judges_specialized_excludes_ineffective() {
         let mut population = Population::test();
         if population.individuals.len() >= 3 {
-            // Configurer des juges avec différentes efficacités
+            // Set up judges with different levels of efficiency
             population.individuals[0].sensitivity = 0.9;
-            population.individuals[0].specificity = 0.8; // Effectif
+            population.individuals[0].specificity = 0.8; 
             population.individuals[1].sensitivity = 0.5;
-            population.individuals[1].specificity = 0.9; // Effectif (spécialiste négatif)
+            population.individuals[1].specificity = 0.9; 
             population.individuals[2].sensitivity = 0.3;
-            population.individuals[2].specificity = 0.2; // Ineffectif
+            population.individuals[2].specificity = 0.2; 
         }
         
         let court = Court::new(
@@ -2162,7 +2159,7 @@ mod tests {
         
         let (total, effective) = court.count_effective_judges();
         
-        // Devrait exclure les juges ineffectifs
+        // Should exclude ineffective judges
         assert!(effective <= total);
         if population.individuals.len() >= 3 {
             assert!(effective < total);
@@ -2173,7 +2170,7 @@ mod tests {
     fn test_compute_group_strict_weights_comprehensive() {
         let mut population = Population::test();
         
-        // Configurer des juges avec différentes spécialisations
+        // Set up judges with different specialisations
         if population.individuals.len() >= 4 {
             population.individuals[0].sensitivity = 0.9;
             population.individuals[0].specificity = 0.5;  // Positive specialist
@@ -2199,14 +2196,14 @@ mod tests {
         
         let weights = court.compute_group_strict_weights(0.7, 0.7);
         
-        // Les poids devraient être distribués équitablement entre les groupes actifs
+        // Weights should be distributed fairly among active groups
         assert_eq!(weights.len(), court.judges.individuals.len());
         
-        // La somme des poids des juges effectifs doit être 1.0
+        // The sum of the weights of the effective judges must be 1.0.
         let sum_effective_weights: f64 = weights.iter().filter(|&&w| w > 0.0).sum();
         assert!((sum_effective_weights - 1.0).abs() < 1e-10);
         
-        // Les juges ineffectifs devraient avoir un poids de 0.0
+        // Ineffective judges should have a weight of 0.0.
         if population.individuals.len() >= 4 {
             assert_eq!(weights[3], 0.0); // Judge ineffectif
         }
@@ -2217,7 +2214,7 @@ mod tests {
     fn test_compute_group_strict_weights_panics_when_no_active_groups() {
         let mut population = Population::test();
         
-        // S'assurer que tous les juges ont des performances faibles
+        // Ensure that all judges perform poorly
         for individual in &mut population.individuals {
             individual.sensitivity = 0.1;
             individual.specificity = 0.1;
@@ -2230,7 +2227,7 @@ mod tests {
             &VotingMethod::Majority,
             &0.5,
             &WeightingMethod::Specialized {
-                sensitivity_threshold: 0.9,  // Seuils très élevés
+                sensitivity_threshold: 0.9,  
                 specificity_threshold: 0.9,
             },
         );
@@ -2241,7 +2238,7 @@ mod tests {
     #[test]
     fn test_voting_mechanisms_handle_zero_effective_weight() {
         let mut population = Population::test();
-        population.individuals.truncate(1); // Un seul juge
+        population.individuals.truncate(1); 
         
         let mut court = Court::new(
             &population,
@@ -2254,12 +2251,11 @@ mod tests {
         
         let data = Data::test();
         
-        // Forcer des poids à zéro
         court.weights = Some(vec![0.0]);
         
         let predictions = court.apply_voting_mechanism(&data, &[0.0]);
         
-        // Avec un poids total de zéro, toutes les prédictions devraient être des abstentions (classe 2)
+        // With a total weight of zero, all predictions should be abstentions (class 2).
         assert!(predictions.iter().all(|&x| x == 2));
         assert_eq!(predictions.len(), data.sample_len);
     }
@@ -2279,7 +2275,7 @@ mod tests {
         let data = Data::test();
         court.evaluate(&data);
         
-        // Les mécanismes de vote devraient gérer correctement les indices d'échantillon
+        // Voting mechanisms should correctly handle sample indices.
         let predictions = court.predict(&data);
         assert_eq!(predictions.len(), data.sample_len);
         assert!(predictions.iter().all(|&x| x == 0 || x == 1 || x == 2));
@@ -2290,7 +2286,6 @@ mod tests {
         let mut experiment = Experiment::test();
         experiment.final_population = Some(Population::test());
         
-        // Ajouter un Court
         let court = Court::new(
             experiment.final_population.as_ref().unwrap(),
             &0.0,
@@ -2301,15 +2296,12 @@ mod tests {
         );
         experiment.others = Some(ExperimentMetadata::Court { court });
         
-        // Sauvegarder
         let temp_file = "test_complete_workflow.msgpack";
         experiment.save_auto(temp_file).unwrap();
         
-        // Recharger
         let loaded_experiment = Experiment::load_auto(temp_file).unwrap();
         assert_eq!(experiment, loaded_experiment);
         
-        // Vérifier que le Court est préservé
         match loaded_experiment.others {
             Some(ExperimentMetadata::Court { court: loaded_court }) => {
                 assert_eq!(loaded_court.voting_method, VotingMethod::Majority);
@@ -2326,9 +2318,9 @@ mod tests {
         let mut experiment = Experiment::test();
         experiment.cv_folds_ids = None;
         experiment.final_population = Some(Population::test());
-        experiment.parameters.general.thread_number = 4;  // Utilisation de plusieurs threads
+        experiment.parameters.general.thread_number = 4; 
         
-        // Le calcul d'importance devrait être thread-safe
+        // Importance calculation should be thread safe
         experiment.compute_importance();
         
         assert!(experiment.importance_collection.is_some());
@@ -2342,21 +2334,21 @@ mod tests {
         experiment.cv_folds_ids = Some(vec![
             (vec!["nonexistent_sample".to_string()], vec!["another_nonexistent".to_string()]),
         ]);
-        experiment.collection = Some(vec![Population::test()]);
+        experiment.collections = vec![vec![Population::test()]];
         
-        // Même en cas d'échec de reconstruction CV, le programme ne devrait pas fuiter de mémoire
+        // Even if CV reconstruction fails, the programme should not leak memory.
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             experiment.compute_importance();
         }));
         
-        // Le test réussit si aucun leak mémoire détecté (vérification implicite)
-        assert!(panic_result.is_err()); // On s'attend à un panic
+        // The test is successful if no memory leaks are detected (implicit verification).
+        assert!(panic_result.is_err()); 
     }
 
     #[test]
     fn test_court_edge_case_single_judge_voting() {
         let mut population = Population::test();
-        population.individuals.truncate(1);  // Un seul juge
+        population.individuals.truncate(1);  
         
         let mut court = Court::new(
             &population,
@@ -2371,25 +2363,25 @@ mod tests {
         court.evaluate(&data);
         let predictions = court.predict(&data);
         
-        // Avec un seul juge, les prédictions devraient être cohérentes
+        // With only one judge, predictions should be consistent.
         assert_eq!(predictions.len(), data.sample_len);
-        // Avec un seul juge et vote majoritaire, pas d'abstentions possibles (sauf poids zéro)
+        // With a single judge and majority vote, no abstentions are possible (except for zero weight).
         assert!(predictions.iter().all(|&x| x == 0 || x == 1 || x == 2));
         
-        // Test avec consensus et un seul juge
+        // Test with consensus and a single judge
         let mut consensus_court = Court::new(
             &population,
             &0.0,
             &0.0,
             &VotingMethod::Consensus,
-            &1.0,  // 100% de consensus requis
+            &1.0,  
             &WeightingMethod::Uniform,
         );
         
         consensus_court.evaluate(&data);
         let consensus_predictions = consensus_court.predict(&data);
         
-        // >i 100% de consensus requis et un seul juge, toutes les prédictions devraient être définitives
+       // >i 100% consensus required and a single judge, all predictions should be the computed
         assert_eq!(consensus_predictions.len(), data.sample_len);
         assert!(consensus_predictions.iter().all(|&x| x == 0 || x == 1));
     }
