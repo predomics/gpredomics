@@ -1,5 +1,5 @@
 use log::{info, error, warn};
-use gpredomics::{param, run_ga, run_cv, run_beam, run_mcmc};
+use gpredomics::{param, run_ga, run_beam, run_mcmc};
 use gpredomics::experiment::Court;
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
@@ -28,7 +28,6 @@ fn custom_format(
         record.args()
     )
 }
-
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
@@ -130,16 +129,12 @@ fn main() {
 
     let thread_param = param.clone();
     let handle = thread::spawn(move || {
-        if thread_param.general.cv {
-            run_cv(&thread_param, running_clone)
-        } else {
-            match thread_param.general.algo.as_str() {
-                "ga" => run_ga(&thread_param, running_clone),
-                "beam" => run_beam(&thread_param, running_clone),
-                "mcmc" => run_mcmc(&thread_param, running_clone),
-                other => {
-                    panic!("ERROR! No such algorithm {}", other);
-                }
+        match thread_param.general.algo.as_str() {
+            "ga" => run_ga(&thread_param, running_clone),
+            "beam" => run_beam(&thread_param, running_clone),
+            "mcmc" => run_mcmc(&thread_param, running_clone),
+            other => {
+                panic!("ERROR! No such algorithm {}", other);
             }
         }
     });
@@ -187,7 +182,7 @@ fn main() {
         }
         
     } else {
-        info!("Voting stage ignored (disabled in settings)");
+        info!("Voting stage ignored (disabled in parameters)");
     }
     
     if param.general.save_exp != "".to_string() {

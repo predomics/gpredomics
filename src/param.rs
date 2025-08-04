@@ -136,7 +136,7 @@ pub struct CV {
 pub struct Voting {
   #[serde(default = "false_default")]
   pub vote: bool,
-  #[serde(default = "false_default")]
+  #[serde(default = "true_default")]
   pub use_fbm: bool,
   #[serde(default = "half_default")] 
   pub min_perf: f64,

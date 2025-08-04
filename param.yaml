@@ -30,7 +30,7 @@ data:
   feature_selection_method: wilcoxon          # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
   feature_maximal_pvalue: 0.05                # features with differences less significant (p value above that threshold) than this will be removed
   feature_minimal_log_abs_bayes_factor: 2     # features with a fewer log absolute bayes factor will be removed (bayesian method only)
-  inverse_classes: false                       # if true, negative class becomes the objective
+  inverse_classes: false                      # if true, negative class becomes the objective
   classes:
     - "healthy"
     - "cirrhosis"
@@ -40,7 +40,7 @@ cv:
   inner_folds: 10                             # number of folds used to penalize overfit (fit = fit on folds - sd(fit on folds) * overfit_penalty) if overfit_penalty > 0
   overfit_penalty: 0                          # this penalty is deduced from fit function
   outer_folds: 5                              # number of folds used for cross-validation (launch algorithm on each k-1 folds then merge Families of Best Models).
-  fbm_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
+  fit_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
   cv_best_models_ci_alpha: 0.05               # alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
 
 importance:
@@ -51,7 +51,7 @@ importance:
 
 voting:
   vote: false                                 # should voting be activated ?
-  use_fbm: false                              # should only "Family of Best Models" be kept (alpha = 0.05) ?
+  use_fbm: true                               # should only "Family of Best Models" be kept (alpha = 0.05) ?
   min_perf: 0.5                               # required sensitivity AND specificity to be judge ; >=0.5 avoid "single-choice oriented" judges 
   min_diversity: 10                           # required diversity between judges
   method: Majority                            # Majority: class 1 if > threshold, else class 0 (if = no classification) VS Consensus: non-classification (rejection) if the threshold is not reached
@@ -80,7 +80,7 @@ beam:
   kmin: 1                                     # the number of variables used in the initial population
   kmax: 100                                   # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
   best_models_ci_alpha: 1e-5                  # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
-  max_nb_of_models: 200000                    # (combinatorial mode) limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance)
+  max_nb_of_models: 20000                     # (combinatorial mode) limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance)
 
 mcmc:
   n_iter: 10000                               # number of MCMC (Markov Chain Monte Carlo) iterations
