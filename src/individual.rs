@@ -673,7 +673,7 @@ impl Individual {
     }
 
     /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
-/// uses mean decreased AUC
+    /// uses mean decreased AUC
     pub fn compute_oob_feature_importance(&self, data: &Data, permutations: usize, features_to_process: &[usize], feature_seeds: &HashMap<usize, Vec<u64>>) -> ImportanceCollection {
         let baseline_auc = self.compute_new_auc(data);
         let mut importances = Vec::new();
@@ -727,7 +727,7 @@ impl Individual {
             };
             
             let importance_obj = Importance {
-                importance_type: ImportanceType::OOB,
+                importance_type: ImportanceType::MDA,
                 feature_idx,
                 scope: ImportanceScope::Individual { model_hash: self.hash },
                 aggreg_method: None, 
@@ -1711,7 +1711,7 @@ mod tests {
 
         for importance in &result.importances {
             // Verify all fixed structure fields
-            assert_eq!(importance.importance_type, ImportanceType::OOB);
+            assert_eq!(importance.importance_type, ImportanceType::MDA);
             assert_eq!(importance.aggreg_method, None);
             assert_eq!(importance.is_scaled, false);
             assert_eq!(importance.dispersion, 0.0);

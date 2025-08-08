@@ -9,6 +9,7 @@ use crate::population::Population;
 use crate::individual::language;
 use crate::individual::data_type;
 use crate::individual::Individual;
+use crate::param::FitFunction;
 use crate::data::Data;
 use crate::param::Param;
 use crate::ga::remove_stillborn;
@@ -269,7 +270,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
         warn!("Generating a population of non-binary Individuals with only one feature only results in stillborns. To prevent a panic, all Individuals will be retained for this iteration.")
     } else {
         let n_unvalid = remove_stillborn(&mut pop) as usize;
-        if n_unvalid>0 { warn!("{} stillborns removed", n_unvalid) }
+        if n_unvalid>0 { debug!("{} stillborns removed", n_unvalid) }
     }
 
     // Fitting first Population composed of all k_start combinations
@@ -294,7 +295,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
         for ind_k in param.beam.kmin+1..param.beam.kmax {
             if param.general.keep_trace {pop.compute_hash()};
 
-            info!("Generating models with {:?} features...", ind_k);
+            debug!("Generating models with {:?} features...", ind_k);
             debug!("[k={:?}] initial population length = {:?}", ind_k, pop.individuals.len());
 
             // Dynamically select the best_models where features_to_keep are picked
@@ -446,26 +447,59 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
 
             debug!("Sorting population...");
             pop = pop.sort();
-            
+
+            let best_model = &pop.individuals[0];
+            let mean_k = pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64;
+            debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
+                best_model.auc,
+                best_model.get_language(),
+                best_model.get_data_type(),
+                best_model.fit, 
+                best_model.k, 
+                best_model.epoch,
+                best_model.specificity,
+                best_model.sensitivity,
+                &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
+                &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/param.ga.population_size as f64,
+                mean_k
+            );
+
+            let scale = 50;
+            let best_model_pos = match param.general.fit {
+                FitFunction::sensitivity => {
+                    (best_model.sensitivity * scale as f64) as usize
+                },
+                FitFunction::specificity => {
+                    (best_model.specificity * scale as f64) as usize
+                },
+                _ => {
+                    (best_model.auc * scale as f64) as usize
+                }
+            };
+
+            let best_fit_pos = (best_model.fit * scale as f64) as usize;
+
+            let max_pos = best_model_pos.max(best_fit_pos);
+            let mut bar = vec!["█"; scale];
+            for i in (max_pos + 1)..scale {
+                bar[i] = "\x1b[0m▒\x1b[0m";
+            }
+            if best_model_pos < scale {
+                bar[best_model_pos] = "\x1b[1m\x1b[31m█\x1b[0m"; 
+            }
+
+            if best_fit_pos < scale {
+                bar[best_fit_pos] = "\x1b[1m\x1b[33m█\x1b[0m"; 
+            }
+            let output: String = bar.concat();
+            let special_epoch = "".to_string();
+            info!("k={: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1\x1b[0m", ind_k, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output);
+
             let mut sorted_pop = Population::new();
             sorted_pop.individuals = pop.individuals.clone();
 
             if sorted_pop.individuals.len() > 0 {
                 collection.push(sorted_pop);
-            }
-
-            if pop.individuals.len() > 0 {
-                let best_model = &pop.individuals[0];
-                debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}", 
-                    best_model.auc,
-                    best_model.get_language(),
-                    best_model.get_data_type(),
-                    best_model.fit, 
-                    best_model.specificity,
-                    best_model.sensitivity,
-                    &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/pop.individuals.len() as f64,
-                    &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/pop.individuals.len() as f64
-                );
             }
 
             // Stop the loop if someone kill the program

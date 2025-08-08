@@ -1539,7 +1539,7 @@ mod tests {
         original_map.insert((0, 1), 1.5_f64);
         original_map.insert((2, 3), -2.7_f64);
         
-        // Sérialiser manuellement vers un HashMap<String, f64>
+        // Serialize HashMap<String, f64>
         let string_map: HashMap<String, f64> = original_map.iter()
             .map(|(&(i, j), &v)| (format!("{},{}", i, j), v))
             .collect();
@@ -1547,7 +1547,7 @@ mod tests {
         let serialized = serde_json::to_string(&string_map).unwrap();
         let string_map_deserialized: HashMap<String, f64> = serde_json::from_str(&serialized).unwrap();
         
-        // Reconvertir vers HashMap<(usize, usize), f64>
+        // Deserialize HashMap<(usize, usize), f64>
         let mut deserialized = HashMap::new();
         for (k, v) in string_map_deserialized {
             let parts: Vec<&str> = k.split(',').collect();
