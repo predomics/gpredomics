@@ -284,11 +284,11 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
 
         let scale = 50;
         let best_model_pos = match param.general.fit {
-            FitFunction::sensitivity => { ((best_model.sensitivity - 0.5) / 0.5 * scale as f64) as usize},
-            FitFunction::specificity => { ((best_model.specificity - 0.5) / 0.5 * scale as f64) as usize},
-            _ => {((best_model.auc - 0.5) / 0.5 * scale as f64) as usize}};
+            FitFunction::sensitivity => { (best_model.sensitivity * scale as f64) as usize},
+            FitFunction::specificity => { (best_model.specificity * scale as f64) as usize},
+            _ => {(best_model.auc * scale as f64) as usize}};
 
-        let best_fit_pos = ((best_model.fit - 0.5) / 0.5 * scale as f64) as usize;
+        let best_fit_pos = (best_model.fit * scale as f64) as usize;
         let max_pos = best_model_pos.max(best_fit_pos);
         let mut bar = vec!["█"; scale]; // White
         for i in (max_pos + 1)..scale { bar[i] = "\x1b[0m▒\x1b[0m"}; // Gray
@@ -303,7 +303,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
             special_epoch = format!("{}↺", special_epoch);
         };
 
-        info!("#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0.5\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, epoch-best_model.epoch);
+        info!("#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, epoch-best_model.epoch);
 
         let mut need_to_break= false;
         if epoch>=param.ga.min_epochs {
