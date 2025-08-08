@@ -184,7 +184,7 @@ impl ImportanceCollection {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ExperimentMetadata {
     MCMC { trace: MCMCAnalysisTrace },
-    Court { court: Court }
+    Jury { jury: Jury }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -313,8 +313,8 @@ impl Experiment {
         
         if let Some(ref mut metadata) = self.others {
             match metadata {
-                ExperimentMetadata::Court { court } => {
-                    court.display(&self.train_data, self.test_data.as_ref(), &self.parameters)
+                ExperimentMetadata::Jury { jury } => {
+                    jury.display(&self.train_data, self.test_data.as_ref(), &self.parameters)
                 },
                 _ => {}
             }
@@ -349,8 +349,8 @@ impl Experiment {
 
         if let Some(ref mut metadata) = self.others {
             match metadata {
-                ExperimentMetadata::Court { court } => {
-                    court.display(&self.train_data, Some(&new_data), &self.parameters)
+                ExperimentMetadata::Jury { jury } => {
+                    jury.display(&self.train_data, Some(&new_data), &self.parameters)
                 },
                 _ => {}
             }
@@ -472,23 +472,23 @@ impl Experiment {
     }
 
     pub fn compute_voting(&mut self) {
-        let mut court;
+        let mut jury;
         
         let mut voting_pop = self.final_population.clone().unwrap();
         voting_pop.compute_all_metrics(&self.train_data, &self.parameters.general.fit);
 
-        court = Court::new_from_param(&voting_pop, &self.parameters);
+        jury = Jury::new_from_param(&voting_pop, &self.parameters);
         
-        if court.experts.individuals.len() > 1 {
-            court.evaluate(&self.train_data);
-            court.display(&self.train_data, self.test_data.as_ref(), &self.parameters.clone());
-            self.others = Some(ExperimentMetadata::Court { court: court })
+        if jury.experts.individuals.len() > 1 {
+            jury.evaluate(&self.train_data);
+            jury.display(&self.train_data, self.test_data.as_ref(), &self.parameters.clone());
+            self.others = Some(ExperimentMetadata::Jury { jury: jury })
         } else {
             warn!("An informative vote is requiring more than one expert!")
         }
     
     }
-// Majority court [9 experts] | AUC 0.802/0.518 | accuracy 0.703/0.553 | sensitivity 0.729/0.654 | specificity 0.676/0.420 | rejection rate 0.000/0.000
+// Majority jury [9 experts] | AUC 0.802/0.518 | accuracy 0.703/0.553 | sensitivity 0.729/0.654 | specificity 0.676/0.420 | rejection rate 0.000/0.000
 
 }
 
@@ -497,7 +497,7 @@ impl Experiment {
 ////////////////////////
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Court {
+pub struct Jury {
     pub experts: Population,
     pub voting_method: VotingMethod,
     pub voting_threshold: f64,
@@ -540,7 +540,7 @@ pub enum JudgeSpecialization {
     Ineffective,        
 }
 
-impl Court {
+impl Jury {
     pub fn new(pop: &Population, min_perf: &f64, min_diversity: &f64, voting_method: &VotingMethod, voting_threshold: &f64, threshold_window: &f64, weighting_method: &WeightingMethod) -> Self {
         let mut experts: Population = pop.clone();
 
@@ -584,7 +584,7 @@ impl Court {
 
         experts = experts.sort();
 
-        Court {
+        Jury {
             experts,
             voting_method: voting_method.clone(),
             voting_threshold: *voting_threshold,
@@ -621,7 +621,7 @@ impl Court {
                 WeightingMethod::Uniform
             };
 
-        Court::new(&voting_pop, &param.voting.min_perf, &param.voting.min_diversity, &param.voting.method, &param.voting.method_threshold, &param.voting.threshold_windows_pct, &weighting_method)
+        Jury::new(&voting_pop, &param.voting.min_perf, &param.voting.min_diversity, &param.voting.method, &param.voting.method_threshold, &param.voting.threshold_windows_pct, &weighting_method)
     }
 
     // Evaluates learning data and adjusts internal weight and performance variables accordingly
@@ -659,7 +659,7 @@ impl Court {
 
     pub fn compute_new_metrics(&self, data: &Data) -> (f64, f64, f64, f64, f64) {
         if self.weights.is_none() {
-            panic!("Court must be evaluated on training data first. Call evaluate() before compute_new_metrics().");
+            panic!("Jury must be evaluated on training data first. Call evaluate() before compute_new_metrics().");
         }
 
         let (pred_classes, scores) = self.predict(data);
@@ -1050,7 +1050,7 @@ impl Court {
             VotingMethod::Consensus => "Consensus",
         };
 
-        let method_display = format!("\x1b[1m{} court [{} {}experts]", 
+        let method_display = format!("\x1b[1m{} jury [{} {}experts]", 
                                    voting_info, total_experts, weighting_info);
         
         if test_data.is_some() {
@@ -1700,11 +1700,11 @@ mod tests {
     }
 
     #[test]
-    fn test_experiment_with_court_metadata() {
+    fn test_experiment_with_jury_metadata() {
         let mut experiment = Experiment::test();
         
-        // Create minimal test data for Court
-        let court = Court::new(
+        // Create minimal test data for Jury
+        let jury = Jury::new(
             &Population::new(),
             &0.0,
             &0.0,
@@ -1714,19 +1714,19 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        experiment.others = Some(ExperimentMetadata::Court { court });
+        experiment.others = Some(ExperimentMetadata::Jury { jury });
         
         // Serialisation test with metadata Short
-        let temp_file = "test_experiment_with_court_metadata.json";
+        let temp_file = "test_experiment_with_jury_metadata.json";
         experiment.save_auto(temp_file).unwrap();
         let loaded = Experiment::load_auto(temp_file).unwrap();
         
         match loaded.others {
-            Some(ExperimentMetadata::Court { .. }) => {
+            Some(ExperimentMetadata::Jury { .. }) => {
             },
-            _ => panic!("Court metadata not preserved during serialization"),
+            _ => panic!("Jury metadata not preserved during serialization"),
         }
-        std::fs::remove_file("test_experiment_with_court_metadata.json").unwrap();
+        std::fs::remove_file("test_experiment_with_jury_metadata.json").unwrap();
     }
 
     #[test]
@@ -1893,7 +1893,7 @@ mod tests {
         assert!(result.is_err(), "The test did not panic as expected");
     }
 
-    /// COURT TESTS 
+    /// JURY TESTS 
     #[test]
     fn test_new_filters_experts_by_minimum_performance_threshold() {
         let mut population = Population::test();
@@ -1905,7 +1905,7 @@ mod tests {
             population.individuals[1].specificity = 0.2;
         }
         
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.7,  // min_perf
             &0.0,
@@ -1916,9 +1916,9 @@ mod tests {
         );
         
         // Only the first expert should be retained (0.9 >= 0.7 && 0.8 >= 0.7)
-        assert_eq!(court.experts.individuals.len(), 1);
-        assert!(court.experts.individuals[0].sensitivity >= 0.7);
-        assert!(court.experts.individuals[0].specificity >= 0.7);
+        assert_eq!(jury.experts.individuals.len(), 1);
+        assert!(jury.experts.individuals[0].sensitivity >= 0.7);
+        assert!(jury.experts.individuals[0].specificity >= 0.7);
     }
 
     #[test]
@@ -1926,7 +1926,7 @@ mod tests {
         let population = Population::test();
         let original_count = population.individuals.len();
         
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.8,  
@@ -1936,7 +1936,7 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        assert!(court.experts.individuals.len() <= original_count);
+        assert!(jury.experts.individuals.len() <= original_count);
     }
 
     #[test]
@@ -1944,7 +1944,7 @@ mod tests {
     fn test_new_validates_voting_threshold_bounds_and_panics() {
         let population = Population::test();
         
-        Court::new(
+        Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -1960,7 +1960,7 @@ mod tests {
     fn test_new_validates_specialized_sensitivity_threshold_bounds() {
         let population = Population::test();
         
-        Court::new(
+        Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -1979,7 +1979,7 @@ mod tests {
     fn test_new_validates_specialized_specificity_threshold_bounds() {
         let population = Population::test();
         
-        Court::new(
+        Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -1998,7 +1998,7 @@ mod tests {
         let population = Population::test();
         let original_count = population.individuals.len();
         
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,  // No filtering by performance
             &0.0,  // No filtering by diversity
@@ -2008,14 +2008,14 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        assert_eq!(court.experts.individuals.len(), original_count);
+        assert_eq!(jury.experts.individuals.len(), original_count);
     }
 
     #[test]
     fn test_new_sorts_experts_after_filtering() {
         let population = Population::test();
         
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2026,18 +2026,18 @@ mod tests {
         );
         
         // Judges should be sorted (check that sort() has been called)
-        assert!(!court.experts.individuals.is_empty());
-        assert!(court.experts.individuals[0].fit > court.experts.individuals[1].fit);
-        assert!(court.experts.individuals[1].fit > court.experts.individuals[2].fit);
+        assert!(!jury.experts.individuals.is_empty());
+        assert!(jury.experts.individuals[0].fit > jury.experts.individuals[1].fit);
+        assert!(jury.experts.individuals[1].fit > jury.experts.individuals[2].fit);
         // Test that the object is valid after sorting
-        assert!(court.voting_threshold >= 0.0 && court.voting_threshold <= 1.0);
+        assert!(jury.voting_threshold >= 0.0 && jury.voting_threshold <= 1.0);
     }
 
     #[test]
     fn test_new_handles_empty_population_gracefully() {
         let population = Population::new(); 
         
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2047,9 +2047,9 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        assert!(court.experts.individuals.is_empty());
-        assert_eq!(court.voting_method, VotingMethod::Majority);
-        assert_eq!(court.voting_threshold, 0.5);
+        assert!(jury.experts.individuals.is_empty());
+        assert_eq!(jury.voting_method, VotingMethod::Majority);
+        assert_eq!(jury.voting_threshold, 0.5);
     }
 
     #[test]
@@ -2059,7 +2059,7 @@ mod tests {
             individual.accuracy = 0.0;
         }
         
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2070,19 +2070,19 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);
+        jury.evaluate(&data);
         
-        // Court metrics should be calculated
-        assert!(court.accuracy > 0.0);
-        assert!(court.weights.is_some());
-        assert_eq!(court.weights.as_ref().unwrap().len(), court.experts.individuals.len());
-        assert!(court.predicted_classes.is_some());
+        // Jury metrics should be calculated
+        assert!(jury.accuracy > 0.0);
+        assert!(jury.weights.is_some());
+        assert_eq!(jury.weights.as_ref().unwrap().len(), jury.experts.individuals.len());
+        assert!(jury.predicted_classes.is_some());
     }
 
     #[test]
     fn test_evaluate_optimizes_threshold_when_set_to_zero() {
         let population = Population::test();
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2093,18 +2093,18 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);
+        jury.evaluate(&data);
         
         // The threshold should have been optimised (different from 0.0).
-        assert!(court.voting_threshold > 0.0);
-        assert!(court.voting_threshold <= 1.0);
+        assert!(jury.voting_threshold > 0.0);
+        assert!(jury.voting_threshold <= 1.0);
     }
 
     #[test]
     #[should_panic(expected = "Weights must be computed before prediction")]
     fn test_predict_fails_when_weights_not_computed() {
         let population = Population::test();
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2115,14 +2115,14 @@ mod tests {
         );
         
         let data = Data::test();
-        court.predict(&data);  // Should panic because evaluate() has not been called
+        jury.predict(&data);  // Should panic because evaluate() has not been called
     }
 
     #[test]
     #[should_panic(expected = "Weights length")]
     fn test_compute_majority_threshold_vote_panics_on_weight_mismatch() {
         let population = Population::test();
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2135,7 +2135,7 @@ mod tests {
         let data = Data::test();
         let wrong_weights = vec![1.0]; // Less weight than experts
         
-        court.compute_majority_threshold_vote(&data, &wrong_weights, 0.5, 0.0);
+        jury.compute_majority_threshold_vote(&data, &wrong_weights, 0.5, 0.0);
     }
 
     #[test]
@@ -2144,7 +2144,7 @@ mod tests {
         // Set up exactly 2 experts to create perfect ties
         population.individuals.truncate(2);
         
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2155,8 +2155,8 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);
-        let predictions = court.predict(&data);
+        jury.evaluate(&data);
+        let predictions = jury.predict(&data);
         
         assert_eq!(predictions.0.len(), data.sample_len);
         assert_eq!(predictions.1.len(), data.sample_len);
@@ -2167,7 +2167,7 @@ mod tests {
     #[test]
     fn test_compute_consensus_threshold_vote_requires_consensus_for_decision() {
         let population = Population::test();
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2178,8 +2178,8 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);
-        let predictions = court.predict(&data);
+        jury.evaluate(&data);
+        let predictions = jury.predict(&data);
         
         // With a high consensus threshold, there should be abstentions (class 2)
         assert!(predictions.0.contains(&2));
@@ -2190,7 +2190,7 @@ mod tests {
     #[test]
     fn test_compute_consensus_threshold_vote_abstains_when_no_consensus() {
         let population = Population::test();
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2201,8 +2201,8 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);
-        let predictions = court.predict(&data);
+        jury.evaluate(&data);
+        let predictions = jury.predict(&data);
         
         // With a very high threshold, the majority of predictions are likely to be abstentions
         let abstentions = predictions.0.iter().filter(|&&x| x == 2).count();
@@ -2214,7 +2214,7 @@ mod tests {
     #[test]
     fn test_compute_classes_method_stores_predictions_correctly() {
         let population = Population::test();
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2225,21 +2225,21 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);  
-        court.compute_classes(&data);
+        jury.evaluate(&data);  
+        jury.compute_classes(&data);
         
-        assert!(court.predicted_classes.is_some());
-        assert_eq!(court.predicted_classes.as_ref().unwrap().len(), data.sample_len);
+        assert!(jury.predicted_classes.is_some());
+        assert_eq!(jury.predicted_classes.as_ref().unwrap().len(), data.sample_len);
         
         // Check that all predictions are valid classes
-        let predictions = court.predicted_classes.as_ref().unwrap();
+        let predictions = jury.predicted_classes.as_ref().unwrap();
         assert!(predictions.iter().all(|&x| x == 0 || x == 1 || x == 2));
     }
 
     #[test]
     fn test_compute_rejection_rate_calculates_percentage_correctly() {
         let population = Population::test();
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2250,26 +2250,26 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);
-        let predictions = court.predict(&data);
+        jury.evaluate(&data);
+        let predictions = jury.predict(&data);
         
-        let rejection_rate = court.compute_rejection_rate(&predictions.0);
+        let rejection_rate = jury.compute_rejection_rate(&predictions.0);
         assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0);
         
         // Extreme cases
         let all_abstentions = vec![2u8; 10];
-        let all_abstention_rate = court.compute_rejection_rate(&all_abstentions);
+        let all_abstention_rate = jury.compute_rejection_rate(&all_abstentions);
         assert_eq!(all_abstention_rate, 1.0);
         
         let no_abstentions = vec![0u8, 1u8, 0u8, 1u8];
-        let no_abstention_rate = court.compute_rejection_rate(&no_abstentions);
+        let no_abstention_rate = jury.compute_rejection_rate(&no_abstentions);
         assert_eq!(no_abstention_rate, 0.0);
     }
 
     #[test]
     fn test_youden_optimization_adapts_step_size_to_sample_size() {
         let population = Population::test();
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2281,29 +2281,29 @@ mod tests {
         
         // Test with different sample sizes
         let small_data = Data::specific_test(30, 10);  // <= 50
-        court.evaluate(&small_data);
-        let threshold_small = court.voting_threshold;
+        jury.evaluate(&small_data);
+        let threshold_small = jury.voting_threshold;
         assert!(threshold_small > 0.0 && threshold_small <= 1.0);
         
         // Reset for next test
-        court.voting_threshold = 0.0;
+        jury.voting_threshold = 0.0;
         let medium_data = Data::specific_test(100, 10); // 51-200
-        court.evaluate(&medium_data);
-        let threshold_medium = court.voting_threshold;
+        jury.evaluate(&medium_data);
+        let threshold_medium = jury.voting_threshold;
         assert!(threshold_medium > 0.0 && threshold_medium <= 1.0);
         
         // Reset for next test
-        court.voting_threshold = 0.0;
+        jury.voting_threshold = 0.0;
         let large_data = Data::specific_test(500, 10); // > 200
-        court.evaluate(&large_data);
-        let threshold_large = court.voting_threshold;
+        jury.evaluate(&large_data);
+        let threshold_large = jury.voting_threshold;
         assert!(threshold_large > 0.0 && threshold_large <= 1.0);
     }
 
     #[test]
     fn test_get_expert_specialization_comprehensive() {
         let population = Population::test();
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2322,25 +2322,25 @@ mod tests {
  
         // Normal cases
         assert_eq!(
-            court.get_expert_specialization(&balanced, 0.7, 0.7),
+            jury.get_expert_specialization(&balanced, 0.7, 0.7),
             JudgeSpecialization::Balanced
         );
         assert_eq!(
-            court.get_expert_specialization(&pos_specialist, 0.7, 0.7),
+            jury.get_expert_specialization(&pos_specialist, 0.7, 0.7),
             JudgeSpecialization::PositiveSpecialist
         );
         assert_eq!(
-            court.get_expert_specialization(&neg_specialist, 0.7, 0.7),
+            jury.get_expert_specialization(&neg_specialist, 0.7, 0.7),
             JudgeSpecialization::NegativeSpecialist
         );
         assert_eq!(
-            court.get_expert_specialization(&ineffective, 0.7, 0.7),
+            jury.get_expert_specialization(&ineffective, 0.7, 0.7),
             JudgeSpecialization::Ineffective
         );
         
         // Boundary condition test (exact thresholds)
         assert_eq!(
-            court.get_expert_specialization(&edge_case, 0.7, 0.7),
+            jury.get_expert_specialization(&edge_case, 0.7, 0.7),
             JudgeSpecialization::Balanced
         );
     }
@@ -2348,7 +2348,7 @@ mod tests {
     #[test]
     fn test_count_effective_experts_uniform_counts_all() {
         let population = Population::test();
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2358,11 +2358,11 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        let (total, effective) = court.count_effective_experts();
+        let (total, effective) = jury.count_effective_experts();
         
         // In uniform mode, all experts are active.
         assert_eq!(total, effective);
-        assert_eq!(effective, court.experts.individuals.len());
+        assert_eq!(effective, jury.experts.individuals.len());
     }
 
     #[test]
@@ -2378,7 +2378,7 @@ mod tests {
             population.individuals[2].specificity = 0.2; 
         }
         
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2391,7 +2391,7 @@ mod tests {
             },
         );
         
-        let (total, effective) = court.count_effective_experts();
+        let (total, effective) = jury.count_effective_experts();
         
         // Should exclude ineffective experts
         assert!(effective <= total);
@@ -2416,7 +2416,7 @@ mod tests {
             population.individuals[3].specificity = 0.3;  // Ineffective
         }
         
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2429,10 +2429,10 @@ mod tests {
             },
         );
         
-        let weights = court.compute_group_strict_weights(0.7, 0.7);
+        let weights = jury.compute_group_strict_weights(0.7, 0.7);
         
         // Weights should be distributed fairly among active groups
-        assert_eq!(weights.len(), court.experts.individuals.len());
+        assert_eq!(weights.len(), jury.experts.individuals.len());
         
         // The sum of the weights of the effective experts must be 1.0.
         let sum_effective_weights: f64 = weights.iter().filter(|&&w| w > 0.0).sum();
@@ -2455,7 +2455,7 @@ mod tests {
             individual.specificity = 0.1;
         }
         
-        let court = Court::new(
+        let jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2468,7 +2468,7 @@ mod tests {
             },
         );
         
-        court.compute_group_strict_weights(0.9, 0.9);
+        jury.compute_group_strict_weights(0.9, 0.9);
     }
 
     #[test]
@@ -2476,7 +2476,7 @@ mod tests {
         let mut population = Population::test();
         population.individuals.truncate(1); 
         
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2488,9 +2488,9 @@ mod tests {
         
         let data = Data::test();
         
-        court.weights = Some(vec![0.0]);
+        jury.weights = Some(vec![0.0]);
         
-        let predictions = court.apply_voting_mechanism(&data, &[0.0]);
+        let predictions = jury.apply_voting_mechanism(&data, &[0.0]);
         
         // With a total weight of zero, all predictions should be abstentions (class 2).
         assert!(predictions.0.iter().all(|&x| x == 2));
@@ -2500,7 +2500,7 @@ mod tests {
     #[test]
     fn test_voting_mechanisms_handle_out_of_bounds_sample_indices() {
         let population = Population::test();
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2511,10 +2511,10 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);
+        jury.evaluate(&data);
         
         // Voting mechanisms should correctly handle sample indices.
-        let predictions = court.predict(&data);
+        let predictions = jury.predict(&data);
         assert_eq!(predictions.0.len(), data.sample_len);
         assert_eq!(predictions.1.len(), data.sample_len);
         assert!(predictions.0.iter().all(|&x| x == 0 || x == 1 || x == 2));
@@ -2522,11 +2522,11 @@ mod tests {
     }
 
     #[test]
-    fn test_complete_workflow_serialization_to_court_evaluation() {
+    fn test_complete_workflow_serialization_to_jury_evaluation() {
         let mut experiment = Experiment::test();
         experiment.final_population = Some(Population::test());
         
-        let court = Court::new(
+        let jury = Jury::new(
             experiment.final_population.as_ref().unwrap(),
             &0.0,
             &0.0,
@@ -2535,7 +2535,7 @@ mod tests {
             &0.0,
             &WeightingMethod::Uniform,
         );
-        experiment.others = Some(ExperimentMetadata::Court { court });
+        experiment.others = Some(ExperimentMetadata::Jury { jury });
         
         let temp_file = "test_complete_workflow.msgpack";
         experiment.save_auto(temp_file).unwrap();
@@ -2544,11 +2544,11 @@ mod tests {
         assert_eq!(experiment, loaded_experiment);
         
         match loaded_experiment.others {
-            Some(ExperimentMetadata::Court { court: loaded_court }) => {
-                assert_eq!(loaded_court.voting_method, VotingMethod::Majority);
-                assert_eq!(loaded_court.voting_threshold, 0.5);
+            Some(ExperimentMetadata::Jury { jury: loaded_jury }) => {
+                assert_eq!(loaded_jury.voting_method, VotingMethod::Majority);
+                assert_eq!(loaded_jury.voting_threshold, 0.5);
             },
-            _ => panic!("Court metadata not preserved"),
+            _ => panic!("Jury metadata not preserved"),
         }
         
         std::fs::remove_file(temp_file).unwrap();
@@ -2587,11 +2587,11 @@ mod tests {
     }
 
     #[test]
-    fn test_court_edge_case_single_expert_voting() {
+    fn test_jury_edge_case_single_expert_voting() {
         let mut population = Population::test();
         population.individuals.truncate(1);  
         
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2602,8 +2602,8 @@ mod tests {
         );
         
         let data = Data::test();
-        court.evaluate(&data);
-        let predictions = court.predict(&data);
+        jury.evaluate(&data);
+        let predictions = jury.predict(&data);
         
         assert_eq!(predictions.0.len(), data.sample_len);
         assert_eq!(predictions.1.len(), data.sample_len);
@@ -2611,7 +2611,7 @@ mod tests {
         assert!(predictions.1.iter().all(|&x| x >= 0.0 || x <= 1.0));
         
         // Test with consensus and a single expert
-        let mut consensus_court = Court::new(
+        let mut consensus_jury = Jury::new(
             &population,
             &0.0,
             &0.0,
@@ -2621,8 +2621,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
         
-        consensus_court.evaluate(&data);
-        let consensus_predictions = consensus_court.predict(&data);
+        consensus_jury.evaluate(&data);
+        let consensus_predictions = consensus_jury.predict(&data);
         
        // >i 100% consensus required and a single expert, all predictions should be the computed
         assert_eq!(consensus_predictions.0.len(), data.sample_len);
@@ -2680,7 +2680,7 @@ mod tests {
         let pop = create_population_with_votes(vec![1, 1, 1, 1, 1]);
         let data = create_single_sample_data(1);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0, // min_perf
             &0.0, // min_diversity
@@ -2690,8 +2690,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (pred_classes, scores) = court.predict(&data);
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         assert_eq!(pred_classes[0], 1, "Decision should be 1 (unanimous for)");
         assert!((scores[0] - 1.0).abs() < 1e-10, "Score should be 1.0, got {}", scores[0]);
@@ -2703,7 +2703,7 @@ mod tests {
         let pop = create_population_with_votes(vec![0, 0, 0, 0, 0]);
         let data = create_single_sample_data(0);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2713,8 +2713,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (pred_classes, scores) = court.predict(&data);
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         assert_eq!(pred_classes[0], 0, "Decision should be 0 (unanimous against)");
         assert!((scores[0] - 0.0).abs() < 1e-10, "Score should be 0.0, got {}", scores[0]);
@@ -2726,7 +2726,7 @@ mod tests {
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]);
         let data = create_single_sample_data(1);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2736,8 +2736,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (pred_classes, scores) = court.predict(&data);
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         assert_eq!(pred_classes[0], 1, "Decision should be 1 (simple majority)");
         assert!((scores[0] - 0.6).abs() < 1e-10, "Score should be 0.6 (3/5), got {}", scores[0]);
@@ -2749,7 +2749,7 @@ mod tests {
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]);
         let data = create_single_sample_data(1);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2759,8 +2759,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (pred_classes, scores) = court.predict(&data);
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         // Score = 0.6, threshold = 0.6, window = 10% = 0.1
         // |0.6 - 0.6| = 0.0 < 0.1 -> abstention
@@ -2774,7 +2774,7 @@ mod tests {
         let pop = create_population_with_votes(vec![1, 1, 1, 1, 0]);
         let data = create_single_sample_data(1);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2784,8 +2784,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (pred_classes, scores) = court.predict(&data);
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         assert_eq!(pred_classes[0], 1, "Decision should be 1 (consensus achieved)");
         assert!((scores[0] - 0.8).abs() < 1e-10, "Score should be 0.8 (4/5), got {}", scores[0]);
@@ -2797,7 +2797,7 @@ mod tests {
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]);
         let data = create_single_sample_data(1);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2807,8 +2807,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (pred_classes, scores) = court.predict(&data);
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         // Score = 0.6 < 0.8 threshold -> abstention
         assert_eq!(pred_classes[0], 2, "Decision should be 2 (consensus failed)");
@@ -2821,9 +2821,9 @@ mod tests {
         let pop = create_population_with_votes(vec![1, 1, 0, 0, 0]);
         let data = create_single_sample_data(1);
 
-        // To simulate different weights, we create a Court with min_perf
+        // To simulate different weights, we create a Jury with min_perf
         // that will filter certain experts based on their performance
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2833,12 +2833,12 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
+        jury.evaluate(&data);
         
         // Manually simulate different weights
-        court.weights = Some(vec![2.0, 2.0, 1.0, 1.0, 1.0]);
+        jury.weights = Some(vec![2.0, 2.0, 1.0, 1.0, 1.0]);
         
-        let (pred_classes, scores) = court.predict(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         // Weighted votes: 2*1 + 2*1 + 1*0 + 1*0 + 1*0 = 4
         // Total weight: 2 + 2 + 1 + 1 + 1 = 7
@@ -2853,7 +2853,7 @@ mod tests {
         let pop = create_population_with_votes(vec![1, 1, 0, 0]);
         let data = create_single_sample_data(1);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2863,8 +2863,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (pred_classes, scores) = court.predict(&data);
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         // Score = 0.5, threshold = 0.5, window = 5% = 0.05
         // |0.5 - 0.5| = 0.0 < 0.05 -> abstention
@@ -2879,7 +2879,7 @@ mod tests {
         let data = create_single_sample_data(1);
 
         // Majority Test (threshold 0.5)
-        let mut court_majority = Court::new(
+        let mut jury_majority = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2888,11 +2888,11 @@ mod tests {
             &0.0,
             &WeightingMethod::Uniform,
         );
-        court_majority.evaluate(&data);
-        let (pred_maj, _) = court_majority.predict(&data);
+        jury_majority.evaluate(&data);
+        let (pred_maj, _) = jury_majority.predict(&data);
 
         // Consensus Test  (threshold 0.8)
-        let mut court_consensus = Court::new(
+        let mut jury_consensus = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2901,8 +2901,8 @@ mod tests {
             &0.0,
             &WeightingMethod::Uniform,
         );
-        court_consensus.evaluate(&data);
-        let (pred_cons, _) = court_consensus.predict(&data);
+        jury_consensus.evaluate(&data);
+        let (pred_cons, _) = jury_consensus.predict(&data);
 
         assert_eq!(pred_maj[0], 1, "Majority should decide 1");
         assert_eq!(pred_cons[0], 2, "Consensus should abstain (0.6 < 0.8)");
@@ -2914,7 +2914,7 @@ mod tests {
         let data = create_single_sample_data(1);
 
         // Case 1: window too small -> no abstention
-        let mut court1 = Court::new(
+        let mut jury1 = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2923,13 +2923,13 @@ mod tests {
             &1.0,  // window = 1% = 0.01
             &WeightingMethod::Uniform,
         );
-        court1.evaluate(&data);
-        let (pred1, _) = court1.predict(&data);
+        jury1.evaluate(&data);
+        let (pred1, _) = jury1.predict(&data);
         // |0.6 - 0.5| = 0.1 > 0.01 -> no abstention
         assert_eq!(pred1[0], 1, "Should decide 1 (window too small)");
 
         // Case 2: window large enough -> abstention
-        let mut court2 = Court::new(
+        let mut jury2 = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2938,8 +2938,8 @@ mod tests {
             &15.0,  // window = 15% = 0.15
             &WeightingMethod::Uniform,
         );
-        court2.evaluate(&data);
-        let (pred2, _) = court2.predict(&data);
+        jury2.evaluate(&data);
+        let (pred2, _) = jury2.predict(&data);
         // |0.6 - 0.5| = 0.1 < 0.15 -> abstention
         assert_eq!(pred2[0], 2, "Should abstain (window large enough)");
     }
@@ -2952,7 +2952,7 @@ mod tests {
         // Data with true class = 1
         let data_positive = create_single_sample_data(1);
         
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -2962,18 +2962,18 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data_positive);
+        jury.evaluate(&data_positive);
         let (auc, accuracy, sensitivity, specificity, rejection_rate) = 
-            court.compute_new_metrics(&data_positive);
+            jury.compute_new_metrics(&data_positive);
 
-        // Court predicts 1, true class = 1 -> True Positive
+        // Jury predicts 1, true class = 1 -> True Positive
         assert_eq!(accuracy, 1.0, "Accuracy should be 1.0 (correct prediction)");
         assert_eq!(sensitivity, 1.0, "Sensitivity should be 1.0 (TP detected)");
         assert_eq!(rejection_rate, 0.0, "No rejection expected");
 
         // Test on negative class
         let data_negative = create_single_sample_data(0);
-        let (_, accuracy_neg, _, specificity_neg, _) = court.compute_new_metrics(&data_negative);
+        let (_, accuracy_neg, _, specificity_neg, _) = jury.compute_new_metrics(&data_negative);
         
         // Short predicts 1, true class = 0 -> False Positive
         assert_eq!(accuracy_neg, 0.0, "Accuracy should be 0.0 (wrong prediction)");
@@ -3004,7 +3004,7 @@ mod tests {
             classes: vec!["class0".to_string(), "class1".to_string()],
         };
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3014,8 +3014,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (_, _, _, _, rejection_rate) = court.compute_new_metrics(&data);
+        jury.evaluate(&data);
+        let (_, _, _, _, rejection_rate) = jury.compute_new_metrics(&data);
 
         // All samples should be rejected (perfect tie in window)
         assert_eq!(rejection_rate, 1.0, "All samples should be rejected (perfect tie)");
@@ -3027,7 +3027,7 @@ mod tests {
         let pop = create_population_with_votes(vec![1]);
         let data = create_single_sample_data(1);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3037,8 +3037,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (pred_classes, scores) = court.predict(&data);
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
 
         assert_eq!(pred_classes[0], 1, "Single expert voting 1 should result in decision 1");
         assert_eq!(scores[0], 1.0, "Score should be 1.0 with single expert voting 1");
@@ -3100,7 +3100,7 @@ mod tests {
         let pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
         let data = create_multi_sample_data(vec![1, 1, 0, 0, 1]);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3110,18 +3110,18 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (ext_auc, ext_accuracy, ext_sensitivity, ext_specificity, _) = court.compute_new_metrics(&data);
+        jury.evaluate(&data);
+        let (ext_auc, ext_accuracy, ext_sensitivity, ext_specificity, _) = jury.compute_new_metrics(&data);
 
         // External metrics must be identical
-        assert!((court.auc - ext_auc).abs() < 1e-10, 
-                "AUC mismatch: internal={}, external={}", court.auc, ext_auc);
-        assert!((court.accuracy - ext_accuracy).abs() < 1e-10, 
-                "Accuracy mismatch: internal={}, external={}", court.accuracy, ext_accuracy);
-        assert!((court.sensitivity - ext_sensitivity).abs() < 1e-10, 
-                "Sensitivity mismatch: internal={}, external={}", court.sensitivity, ext_sensitivity);
-        assert!((court.specificity - ext_specificity).abs() < 1e-10, 
-                "Specificity mismatch: internal={}, external={}", court.specificity, ext_specificity);
+        assert!((jury.auc - ext_auc).abs() < 1e-10, 
+                "AUC mismatch: internal={}, external={}", jury.auc, ext_auc);
+        assert!((jury.accuracy - ext_accuracy).abs() < 1e-10, 
+                "Accuracy mismatch: internal={}, external={}", jury.accuracy, ext_accuracy);
+        assert!((jury.sensitivity - ext_sensitivity).abs() < 1e-10, 
+                "Sensitivity mismatch: internal={}, external={}", jury.sensitivity, ext_sensitivity);
+        assert!((jury.specificity - ext_specificity).abs() < 1e-10, 
+                "Specificity mismatch: internal={}, external={}", jury.specificity, ext_specificity);
     }
 
     #[test]
@@ -3130,7 +3130,7 @@ mod tests {
         let pop = create_controlled_population(vec![1, 1, 0, 0]); // Perfect tie at 0.5
         let data = create_multi_sample_data(vec![1, 0, 1]);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3140,11 +3140,11 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (_, _, _, _, rejection_rate) = court.compute_new_metrics(&data);
+        jury.evaluate(&data);
+        let (_, _, _, _, rejection_rate) = jury.compute_new_metrics(&data);
 
         // Manual calculation of the rejection rate
-        let (pred_classes, _) = court.predict(&data);
+        let (pred_classes, _) = jury.predict(&data);
         let manual_rejection_rate = pred_classes.iter().filter(|&&x| x == 2).count() as f64 / pred_classes.len() as f64;
 
         assert!((rejection_rate - manual_rejection_rate).abs() < 1e-10,
@@ -3159,7 +3159,7 @@ mod tests {
         let pop = create_controlled_population(vec![1, 1, 1, 1, 0]);
         let data = create_multi_sample_data(vec![1, 1, 0, 0, 1, 0]);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3170,17 +3170,17 @@ mod tests {
         );
 
         // Test on training data
-        court.evaluate(&data);
-        let (train_auc, train_acc, train_sens, train_spec, _) = court.compute_new_metrics(&data);
+        jury.evaluate(&data);
+        let (train_auc, train_acc, train_sens, train_spec, _) = jury.compute_new_metrics(&data);
         
-        assert_eq!(train_auc, court.auc, "Training AUC should match");
-        assert_eq!(train_acc, court.accuracy, "Training accuracy should match");
-        assert_eq!(train_sens, court.sensitivity, "Training sensitivity should match");
-        assert_eq!(train_spec, court.specificity, "Training specificity should match");
+        assert_eq!(train_auc, jury.auc, "Training AUC should match");
+        assert_eq!(train_acc, jury.accuracy, "Training accuracy should match");
+        assert_eq!(train_sens, jury.sensitivity, "Training sensitivity should match");
+        assert_eq!(train_spec, jury.specificity, "Training specificity should match");
 
         // Test on different test data
         let test_data = create_multi_sample_data(vec![0, 0, 1, 1]);
-        let (test_auc, test_acc, test_sens, test_spec, _) = court.compute_new_metrics(&test_data);
+        let (test_auc, test_acc, test_sens, test_spec, _) = jury.compute_new_metrics(&test_data);
         
         // Metrics may differ based on different data,
         // but must remain within valid ranges.
@@ -3199,7 +3199,7 @@ mod tests {
         let mut results = Vec::new();
 
         for threshold in thresholds {
-            let mut court = Court::new(
+            let mut jury = Jury::new(
                 &pop,
                 &0.0,
                 &0.0,
@@ -3209,9 +3209,9 @@ mod tests {
                 &WeightingMethod::Uniform,
             );
 
-            court.evaluate(&data);
-            let (pred_classes, scores) = court.predict(&data);
-            let (_, _, _, _, rejection_rate) = court.compute_new_metrics(&data);
+            jury.evaluate(&data);
+            let (pred_classes, scores) = jury.predict(&data);
+            let (_, _, _, _, rejection_rate) = jury.compute_new_metrics(&data);
             
             results.push((threshold, pred_classes[0], scores[0], rejection_rate));
         }
@@ -3235,7 +3235,7 @@ mod tests {
         let windows = vec![1.0, 5.0, 15.0, 25.0]; // 1%, 5%, 15%, 25%
         
         for window in windows {
-            let mut court = Court::new(
+            let mut jury = Jury::new(
                 &pop,
                 &0.0,
                 &0.0,
@@ -3245,8 +3245,8 @@ mod tests {
                 &WeightingMethod::Uniform,
             );
 
-            court.evaluate(&data);
-            let (pred_classes, scores) = court.predict(&data);
+            jury.evaluate(&data);
+            let (pred_classes, scores) = jury.predict(&data);
             
             // Score = 0.6, threshold = 0.5, |0.6 - 0.5| = 0.1 = 10%
             if window < 10.0 {
@@ -3272,7 +3272,7 @@ mod tests {
 
         for (threshold, expected_majority, expected_consensus) in test_cases {
             // Test Majority
-            let mut court_maj = Court::new(
+            let mut jury_maj = Jury::new(
                 &pop,
                 &0.0,
                 &0.0,
@@ -3281,11 +3281,11 @@ mod tests {
                 &0.0,
                 &WeightingMethod::Uniform,
             );
-            court_maj.evaluate(&data);
-            let (pred_maj, _) = court_maj.predict(&data);
+            jury_maj.evaluate(&data);
+            let (pred_maj, _) = jury_maj.predict(&data);
 
             // Test Consensus
-            let mut court_cons = Court::new(
+            let mut jury_cons = Jury::new(
                 &pop,
                 &0.0,
                 &0.0,
@@ -3294,8 +3294,8 @@ mod tests {
                 &0.0,
                 &WeightingMethod::Uniform,
             );
-            court_cons.evaluate(&data);
-            let (pred_cons, _) = court_cons.predict(&data);
+            jury_cons.evaluate(&data);
+            let (pred_cons, _) = jury_cons.predict(&data);
 
             assert_eq!(pred_maj[0], expected_majority, 
                       "Majority with threshold {}: expected {}, got {}", threshold, expected_majority, pred_maj[0]);
@@ -3310,7 +3310,7 @@ mod tests {
         let data = create_multi_sample_data(vec![1]);
 
         // Threshold test at 0.0
-        let mut court_min = Court::new(
+        let mut jury_min = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3319,13 +3319,13 @@ mod tests {
             &10.0,
             &WeightingMethod::Uniform,
         );
-        court_min.evaluate(&data);
-        court_min.voting_threshold = 0.0; // avoid optimization with Youden Maxima
-        let (pred_min, _) = court_min.predict(&data);
+        jury_min.evaluate(&data);
+        jury_min.voting_threshold = 0.0; // avoid optimization with Youden Maxima
+        let (pred_min, _) = jury_min.predict(&data);
         assert_eq!(pred_min[0], 1, "Threshold 0.0: should always decide 1 for score > 0");
 
         // Test seuil à 1.0
-        let mut court_max = Court::new(
+        let mut jury_max = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3334,12 +3334,12 @@ mod tests {
             &0.0,
             &WeightingMethod::Uniform,
         );
-        court_max.evaluate(&data);
-        let (pred_max, _) = court_max.predict(&data);
+        jury_max.evaluate(&data);
+        let (pred_max, _) = jury_max.predict(&data);
         assert_eq!(pred_max[0], 0, "Threshold 1.0: should decide 0 for score < 1");
 
         // Extreme window test
-        let mut court_extreme_window = Court::new(
+        let mut jury_extreme_window = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3348,8 +3348,8 @@ mod tests {
             &100.0,  // 100% window -> always abstain
             &WeightingMethod::Uniform,
         );
-        court_extreme_window.evaluate(&data);
-        let (pred_extreme, _) = court_extreme_window.predict(&data);
+        jury_extreme_window.evaluate(&data);
+        let (pred_extreme, _) = jury_extreme_window.predict(&data);
         assert_eq!(pred_extreme[0], 2, "Window 100%: should always abstain");
     }
 
@@ -3364,7 +3364,7 @@ mod tests {
         let pop = create_controlled_population(large_votes);
         let data = create_multi_sample_data(vec![1, 0, 1, 0]);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3374,8 +3374,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (auc, accuracy, sensitivity, specificity, rejection_rate) = court.compute_new_metrics(&data);
+        jury.evaluate(&data);
+        let (auc, accuracy, sensitivity, specificity, rejection_rate) = jury.compute_new_metrics(&data);
 
         // Verify that metrics remain stable with a large population
         assert!(auc >= 0.0 && auc <= 1.0, "AUC out of bounds with large population");
@@ -3384,9 +3384,9 @@ mod tests {
         assert!(specificity >= 0.0 && specificity <= 1.0, "Specificity out of bounds with large population");
         assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0, "Rejection rate out of bounds with large population");
         
-        // Verify that the Court is effectively managing 50 experts
-        assert_eq!(court.experts.individuals.len(), 50, "Should retain all 50 experts");
-        assert_eq!(court.weights.as_ref().unwrap().len(), 50, "Should have 50 weights");
+        // Verify that the Jury is effectively managing 50 experts
+        assert_eq!(jury.experts.individuals.len(), 50, "Should retain all 50 experts");
+        assert_eq!(jury.weights.as_ref().unwrap().len(), 50, "Should have 50 weights");
     }
 
     #[test]
@@ -3400,7 +3400,7 @@ mod tests {
         }
         let large_data = create_multi_sample_data(large_classes);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3410,8 +3410,8 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&large_data);
-        let (auc, accuracy, sensitivity, specificity, rejection_rate) = court.compute_new_metrics(&large_data);
+        jury.evaluate(&large_data);
+        let (auc, accuracy, sensitivity, specificity, rejection_rate) = jury.compute_new_metrics(&large_data);
 
         // Check consistency on large dataset
         assert!(auc >= 0.0 && auc <= 1.0, "AUC inconsistent on large dataset");
@@ -3421,7 +3421,7 @@ mod tests {
         assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0, "Rejection rate inconsistent on large dataset");
 
         // Check that all predictions are valid
-        let (predictions, _) = court.predict(&large_data);
+        let (predictions, _) = jury.predict(&large_data);
         assert_eq!(predictions.len(), 100, "Should have 100 predictions");
         assert!(predictions.iter().all(|&x| x == 0 || x == 1 || x == 2), "All predictions should be valid classes");
     }
@@ -3432,7 +3432,7 @@ mod tests {
         let pop = create_controlled_population(vec![1, 1, 0, 0]); // Perfect Tie 0.5
         let data = create_multi_sample_data(vec![1, 0, 1, 0]);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3442,11 +3442,11 @@ mod tests {
             &WeightingMethod::Uniform,
         );
 
-        court.evaluate(&data);
-        let (_, _, _, _, rejection_rate) = court.compute_new_metrics(&data);
+        jury.evaluate(&data);
+        let (_, _, _, _, rejection_rate) = jury.compute_new_metrics(&data);
 
         // Expected mathematical calculation
-        let (predictions, _) = court.predict(&data);
+        let (predictions, _) = jury.predict(&data);
         let expected_rejections = predictions.iter().filter(|&&x| x == 2).count();
         let expected_rate = expected_rejections as f64 / predictions.len() as f64;
 
@@ -3455,11 +3455,11 @@ mod tests {
 
         // Extreme case testing
         let all_abstain = vec![2u8; 5];
-        let rate_all = court.compute_rejection_rate(&all_abstain);
+        let rate_all = jury.compute_rejection_rate(&all_abstain);
         assert_eq!(rate_all, 1.0, "All abstentions should give 100% rejection rate");
 
         let no_abstain = vec![0u8, 1u8, 0u8, 1u8];
-        let rate_none = court.compute_rejection_rate(&no_abstain);
+        let rate_none = jury.compute_rejection_rate(&no_abstain);
         assert_eq!(rate_none, 0.0, "No abstentions should give 0% rejection rate");
     }
 
@@ -3480,7 +3480,7 @@ mod tests {
 
         let data = create_multi_sample_data(vec![1]);
 
-        let mut court = Court::new(
+        let mut jury = Jury::new(
             &pop,
             &0.0,
             &0.0,
@@ -3493,15 +3493,15 @@ mod tests {
             },
         );
 
-        court.evaluate(&data);
+        jury.evaluate(&data);
         
-        let weights = court.weights.as_ref().unwrap();
+        let weights = jury.weights.as_ref().unwrap();
         assert_eq!(weights.len(), 4, "Should have 4 weights");
         
         let effective_weight_sum: f64 = weights.iter().filter(|&&w| w > 0.0).sum();
         assert!((effective_weight_sum - 1.0).abs() < 1e-10, "Effective weights should sum to 1.0");
         
-        let (auc, accuracy, sensitivity, specificity, rejection_rate) = court.compute_new_metrics(&data);
+        let (auc, accuracy, sensitivity, specificity, rejection_rate) = jury.compute_new_metrics(&data);
         assert!(auc >= 0.0 && auc <= 1.0, "AUC should be valid with specialized weighting");
         assert!(accuracy >= 0.0 && accuracy <= 1.0, "Accuracy should be valid with specialized weighting");
         assert!(sensitivity >= 0.0 && sensitivity <= 1.0, "Sensitivity should be valid with specialized weighting");

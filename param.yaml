@@ -16,7 +16,7 @@ general:
   log_level: info                             # possible values are trace, debug, info, warning or error 
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
-  keep_trace: false                            # keep this setting to false when using gpredomics as a binary
+  keep_trace: false                           # keep this setting to false when using gpredomics as a binary
   #save_exp: exp.mp                           # uncomment to save experiment in timestamp-save_exp, which can be reloaded with --load timestamp-save_exp. Extention should be .json, .mp/.msgpack or .bin
 
 data:
@@ -37,8 +37,8 @@ data:
     - "unknown"
 
 cv:
-  inner_folds: 5                              # number of folds used to penalize overfit (fit = fit on k-1 - delta with last fold * overfit_penalty) if overfit_penalty > 0
-  overfit_penalty: 0                          # this penalty is deduced from fit function
+  inner_folds: 5                              # number of folds used to penalize overfit if overfit_penalty > 0
+  overfit_penalty: 0                          # this penalty is deduced from fit function (fit = fit on k-1 - abs(delta with last fold) * overfit_penalty)
   outer_folds: 5                              # number of folds used for cross-validation (launch algorithm on each k-1 folds then merge Families of Best Models).
   fit_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
   cv_best_models_ci_alpha: 0.05               # alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
