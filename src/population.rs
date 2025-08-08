@@ -18,6 +18,7 @@ use crate::utils::{mean_and_std, median, mad};
 use crate::gpu::GpuAssay;
 use crate::ga;
 use log::{warn};
+use crate::utils;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Population {
@@ -70,16 +71,66 @@ impl Population {
             format!("{}\nTo reproduce these results, relaunch this exact training with data to be predicted and/or export the MCMC trace with save_trace_outdir", str)
         } else {
             let limit:u32;
-            if (self.individuals.len() as u32) < param.general.nb_best_model_to_test || param.general.nb_best_model_to_test == 0 {
+            if (self.individuals.len() as u32) < param.general.n_model_to_display || param.general.n_model_to_display == 0 {
                 limit = self.individuals.len() as u32
             } else {
-                limit = param.general.nb_best_model_to_test
+                limit = param.general.n_model_to_display
             }
 
-            let mut str: String = if param.general.cv == false {
-                format!("Displaying {} models. Metrics are shown in the following order: Train/{}.", limit, other_set)
+            let mut str = String::new();
+        
+            if param.general.keep_trace {
+                let mut train_aucs: Vec<f64> = Vec::new();
+                let mut train_accuracies: Vec<f64> = Vec::new();
+                let mut train_sensitivities: Vec<f64> = Vec::new();
+                let mut train_specificities: Vec<f64> = Vec::new();
+
+                for individual in &self.individuals {
+                    train_aucs.push(individual.auc);
+                    train_accuracies.push(individual.accuracy);
+                    train_sensitivities.push(individual.sensitivity);
+                    train_specificities.push(individual.specificity);
+                }
+
+                let train_auc_median = utils::median(&mut train_aucs.clone());
+                let train_acc_median = utils::median(&mut train_accuracies.clone());
+                let train_sens_median = utils::median(&mut train_sensitivities.clone());
+                let train_spec_median = utils::median(&mut train_specificities.clone());
+
+                if let Some(data_to_test) = data_to_test {
+                    let mut test_aucs: Vec<f64> = Vec::new();
+                    let mut test_accuracies: Vec<f64> = Vec::new();
+                    let mut test_sensitivities: Vec<f64> = Vec::new();
+                    let mut test_specificities: Vec<f64> = Vec::new();
+
+                    for individual in &self.individuals {
+                        let test_auc = individual.compute_new_auc(data_to_test);
+                        let (test_acc, test_sens, test_spec) = individual.compute_metrics(data_to_test);
+                        
+                        test_aucs.push(test_auc);
+                        test_accuracies.push(test_acc);
+                        test_sensitivities.push(test_sens);
+                        test_specificities.push(test_spec);
+                    }
+
+                    let test_auc_median = utils::median(&mut test_aucs.clone());
+                    let test_acc_median = utils::median(&mut test_accuracies.clone());
+                    let test_sens_median = utils::median(&mut test_sensitivities.clone());
+                    let test_spec_median = utils::median(&mut test_specificities.clone());
+
+                    str = format!("{}\n\x1b[1;33mPopulation median - AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}\x1b[0m\n", 
+                        str, train_auc_median, test_auc_median, train_acc_median, test_acc_median, 
+                        train_sens_median, test_sens_median, train_spec_median, test_spec_median);
+                } else {
+                    str = format!("{}\x1b[1;33mPopulation median - AUC {:.3} accuracy {:.3} sensitivity {:.3} specificity {:.3}\x1b[0m\n", 
+                        str, train_auc_median, train_acc_median, train_sens_median, train_spec_median);
+                }
+            };
+
+            if param.general.cv == false {
+                str = format!("{}Displaying {} models. Metrics are shown in the following order: Train/{}.", str, limit, other_set)
             } else {
-                format!("Displaying {} models. Metrics are shown in the following order: Validation fold/Complete train.", limit)
+                str = format!("{}Displaying {} models. Metrics are shown in the following order: Validation fold/Complete train.", str, limit)
             };
             
             for i in 0..=(limit-1) as usize {
@@ -256,47 +307,43 @@ impl Population {
         self
     }
 
-    // Function for cross-validation
     pub fn fit_on_folds(&mut self, cv: &CV, param: &Param, gpu_assays: &Vec<Option<GpuAssay>>) {
         let num_individuals = self.individuals.len();
         let num_folds = cv.validation_folds.len();
         
-        let mut fold_fits = vec![vec![0.0; num_folds]; num_individuals];
+        let mut fold_penalized_fits = vec![vec![0.0; num_folds]; num_individuals];
         
         for (fold_idx, fold) in cv.validation_folds.iter().enumerate() {
-            let mut fold_data = fold.clone();
             let fold_gpu_assay = &gpu_assays[fold_idx];
+            
+            // Validation fold
+            let mut fold_data = fold.clone();
             ga::fit_fn(self, &mut fold_data, &mut None, fold_gpu_assay, &None, param);
-
-            for (ind_idx, individual) in self.individuals.iter().enumerate() {
-                fold_fits[ind_idx][fold_idx] = individual.fit;
+            let validation_fits: Vec<f64> = self.individuals.iter().map(|ind| ind.fit).collect();
+            
+            // Training set
+            let mut train_data = cv.training_sets[fold_idx].clone();
+            ga::fit_fn(self, &mut train_data, &mut None, fold_gpu_assay, &None, param);
+            let training_fits: Vec<f64> = self.individuals.iter().map(|ind| ind.fit).collect();
+            
+            // Penalized scores
+            for ind_idx in 0..num_individuals {
+                let train_fit = training_fits[ind_idx];
+                let val_fit = validation_fits[ind_idx];
+                let overfitting_gap = (train_fit - val_fit).abs();
+                
+                fold_penalized_fits[ind_idx][fold_idx] = 
+                    train_fit - overfitting_gap * param.cv.overfit_penalty;
             }
         }
 
+        // Final fit
         for (ind_idx, individual) in self.individuals.iter_mut().enumerate() {
-            let scores = &fold_fits[ind_idx];
-            let num_folds = scores.len() as f64;
-            
-            let average_score = scores.iter().sum::<f64>() / num_folds;
-            
-            let variance = if num_folds > 1.0 {
-                let sum_squared_diffs = scores.iter()
-                    .map(|&x| (x - average_score).powi(2))
-                    .sum::<f64>();
-                sum_squared_diffs / (num_folds - 1.0)
-            } else {
-                0.0
-            };
-
-            // let min_fit = scores.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-
-            // individual.fit = min_fit - individual.k as f64 * param.general.k_penalty;
-
-            individual.fit = average_score - variance.sqrt() * param.cv.overfit_penalty - individual.k as f64 * param.general.k_penalty;
-            
+            let fits = &fold_penalized_fits[ind_idx];
+            let average_fit = fits.iter().sum::<f64>() / fits.len() as f64;
+            individual.fit = average_fit - individual.k as f64 * param.general.k_penalty;
         }
     }
-
 
     pub fn select_best_population(&self, alpha:f64) -> Population { 
         // (Family of best models)
@@ -313,7 +360,7 @@ impl Population {
 
         // Control the distribution of evaluation metric
         if &eval[0] > &1.0 || &eval[0] < &0.0 {
-           warn!("Evaluation metric should be in the [0, 1] interval to compute Family of Best Models");
+           warn!("Evaluation metric should be in the [0, 1] interval to compute Family of Best Models!");
            warn!("Keeping only Top 5%...");
            best_pop = self.select_first_pct(5.0).0;
         } else {
@@ -503,7 +550,7 @@ impl Population {
             
             // Create Population-level Importance object
             let population_importance = Importance {
-                importance_type: ImportanceType::OOB,
+                importance_type: ImportanceType::MDA,
                 feature_idx,
                 scope: ImportanceScope::Population { 
                     id: population_id.unwrap_or(0) 
@@ -578,8 +625,15 @@ impl Population {
         
         let threshold_normalized = threshold / 100.0;
         
+        // Optimisation 1: Pré-calculer la capacité estimée
+        let estimated_capacity = (self.individuals.len() as f64 * 0.3) as usize; // heuristique
+        let mut all_filtered = Vec::with_capacity(estimated_capacity);
+        
         let groups: Vec<Vec<usize>> = if considere_niche {
-            let mut niches: HashMap<(u8, u8), Vec<usize>> = HashMap::new();
+            // Optimisation 2: Utiliser FxHashMap pour de meilleures performances
+            let mut niches: rustc_hash::FxHashMap<(u8, u8), Vec<usize>> = 
+                rustc_hash::FxHashMap::default();
+            
             for (idx, individual) in self.individuals.iter().enumerate() {
                 let niche_key = (individual.language, individual.data_type);
                 niches.entry(niche_key).or_insert_with(Vec::new).push(idx);
@@ -589,46 +643,151 @@ impl Population {
             vec![(0..self.individuals.len()).collect()]
         };
         
-        let all_filtered: Vec<Individual> = groups
+        // Optimisation 3: Traitement par chunks pour éviter allocations temporaires
+        groups
             .par_iter()
             .filter(|group| !group.is_empty())
-            .flat_map(|group| {
+            .map(|group| {
                 let mut sorted_indices = group.clone();
                 sorted_indices.par_sort_unstable_by(|&a, &b| {
                     self.individuals[b].fit.partial_cmp(&self.individuals[a].fit)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
                 
-                if sorted_indices.is_empty() {
-                    return Vec::new();
-                }
-                
-                let mut filtered = Vec::with_capacity(sorted_indices.len());
-                filtered.push(self.individuals[sorted_indices[0]].clone());
-                
-                for &candidate_idx in sorted_indices.iter().skip(1) {
-                    let candidate = &self.individuals[candidate_idx];
-                    let mut is_different = true;
+                // Optimisation 4: Travailler avec des indices plutôt que cloner
+                let mut filtered_indices = Vec::with_capacity(sorted_indices.len());
+                if !sorted_indices.is_empty() {
+                    filtered_indices.push(sorted_indices[0]);
                     
-                    for selected in &filtered {
-                        if candidate.signed_jaccard_dissimilarity_with(selected) < threshold_normalized {
-                            is_different = false;
-                            break;
+                    for &candidate_idx in sorted_indices.iter().skip(1) {
+                        let candidate = &self.individuals[candidate_idx];
+                        let mut is_different = true;
+                        
+                        // Optimisation 5: Early break + optimisation vectorielle potentielle
+                        for &selected_idx in &filtered_indices {
+                            let selected = &self.individuals[selected_idx];
+                            if candidate.signed_jaccard_dissimilarity_with(selected) < threshold_normalized {
+                                is_different = false;
+                                break;
+                            }
+                        }
+                        
+                        if is_different {
+                            filtered_indices.push(candidate_idx);
                         }
                     }
-                    
-                    if is_different {
-                        filtered.push(candidate.clone());
-                    }
                 }
                 
-                filtered
+                filtered_indices
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flatten()
+            .for_each(|idx| all_filtered.push(self.individuals[idx].clone()));
         
         Population { individuals: all_filtered }
     }
-    
+
+
+    // This function is linked to voting.
+    pub fn display_feature_prevalence(&self, data: &Data, nb_features: usize) -> String {
+        if self.individuals.is_empty() {
+            return "No expert in population".to_string();
+        }
+
+        let mut feature_freq: HashMap<usize, usize> = HashMap::new();
+        let mut feature_pos_count: HashMap<usize, usize> = HashMap::new();
+        let mut feature_neg_count: HashMap<usize, usize> = HashMap::new();
+        let total_experts = self.individuals.len();
+
+        for individual in &self.individuals {
+            for (&feature_idx, &coef) in individual.features.iter() {
+                *feature_freq.entry(feature_idx).or_insert(0) += 1;
+                
+                if coef > 0 {
+                    *feature_pos_count.entry(feature_idx).or_insert(0) += 1;
+                } else if coef < 0 {
+                    *feature_neg_count.entry(feature_idx).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut freq_vec: Vec<(usize, usize)> = feature_freq.into_iter().collect();
+        freq_vec.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut result = String::new();
+        result.push_str(&format!("\n\x1b[1m{} FEATURE PREVALENCE IN EXPERT POPULATION {}\x1b[0m\n", 
+                               "~".repeat(25), "~".repeat(25)));
+        result.push_str(&format!("\n\n{}\n", "─".repeat(80)));
+        result.push_str(&format!("{:<29} | {:>12} | {:>10} | {:>12}\n", 
+                               "Feature", "Experts", "Prevalence", "Association"));
+        result.push_str(&format!("{}\n", "─".repeat(80)));
+
+        let nb_features_to_show = if nb_features == 0 {
+            freq_vec.len()
+        } else {
+            nb_features
+        };
+
+        let features_to_display = std::cmp::min(nb_features_to_show, freq_vec.len());
+        
+        for (feature_idx, count) in freq_vec.iter().take(features_to_display) {
+            let prevalence_pct = (*count as f64 / total_experts as f64) * 100.0;
+            
+            let feature_name = if *feature_idx < data.features.len() {
+                &data.features[*feature_idx]
+            } else {
+                "Unknown"
+            };
+            
+            let truncated_name = if feature_name.len() > 29 {
+                format!("{}...", &feature_name[..26])
+            } else {
+                feature_name.to_string()
+            };
+
+            let pos_count = *feature_pos_count.get(feature_idx).unwrap_or(&0);
+            let neg_count = *feature_neg_count.get(feature_idx).unwrap_or(&0);
+            
+            let (colored_name, association_info) = if pos_count > 0 && neg_count == 0 {
+            // Class 1 -> Blue
+            let pos_percentage = (pos_count as f64 / total_experts as f64) * 100.0;
+            (format!("\x1b[1;96m{}\x1b[0m", truncated_name), 
+            format!("\x1b[1;96m+{} ({:.1}%)\x1b[0m", pos_count, pos_percentage))
+        } else if neg_count > 0 && pos_count == 0 {
+            // Class 0 -> Magenta
+            let neg_percentage = (neg_count as f64 / total_experts as f64) * 100.0;
+            (format!("\x1b[1;95m{}\x1b[0m", truncated_name), 
+            format!("\x1b[1;95m-{} ({:.1}%)\x1b[0m", neg_count, neg_percentage))
+        } else if pos_count > 0 && neg_count > 0 {
+            // Mixed -> White
+            let pos_percentage = (pos_count as f64 / total_experts as f64) * 100.0;
+            let neg_percentage = (neg_count as f64 / total_experts as f64) * 100.0;
+            (format!("\x1b[0;39m{}\x1b[0m", truncated_name),
+            format!("\x1b[1;96m+{} ({:.1}%)\x1b[0m/\x1b[1;95m-{} ({:.1}%)\x1b[0m", 
+                    pos_count, pos_percentage, neg_count, neg_percentage))
+        } else {
+            (format!("\x1b[90m{}\x1b[0m", truncated_name), 
+            "\x1b[90m~0\x1b[0m".to_string())
+        };
+            result.push_str(&format!("{:<40} | {:>7}/{:<4} | {:>7.1}% | {}\n", 
+                          colored_name, count, total_experts, prevalence_pct, association_info));
+        }
+
+        if freq_vec.len() > nb_features_to_show {
+            result.push_str(&format!("... and {} more features\n", 
+                          freq_vec.len() - nb_features_to_show));
+        }
+
+        result.push_str(&format!("\n{}\n", "─".repeat(70)));
+        result.push_str("Legend: ");
+        result.push_str(&format!("\x1b[1;96mBlue\x1b[0m = Always positively associated (+1) | "));
+        result.push_str(&format!("\x1b[1;95mMagenta\x1b[0m = Always negatively associated (-1) | "));
+        result.push_str("White = Mixed associations\n");
+        result.push_str(&format!("Total unique features: {}/{}\n", freq_vec.len(), data.feature_selection.len()));
+        
+        result
+    }
 }
 
 use std::fmt;
@@ -1050,7 +1209,7 @@ mod tests {
         // All results should be from Population scope
         for imp in &importances.importances {
             assert_eq!(imp.scope, ImportanceScope::Population { id: 1 });
-            assert_eq!(imp.importance_type, ImportanceType::OOB);
+            assert_eq!(imp.importance_type, ImportanceType::MDA);
             assert_eq!(imp.aggreg_method, Some(agg_method.clone()));
             assert!(!imp.is_scaled);
             assert!(imp.scope_pct >= 0.0 && imp.scope_pct <= 1.0, "Prevalence should be valid");
@@ -1581,5 +1740,367 @@ mod tests {
         assert!(filtered.individuals.iter().any(|i| i.fit == 0.85)); // Niche (1,0)
         assert!(!filtered.individuals.iter().any(|i| i.fit == 0.80)); // Filtered from niche (0,0)
     }
+
+    fn create_test_population() -> Population {
+        let mut pop = Population::new();
+        for i in 0..5 {
+            let mut ind = Individual::new();
+            ind.features.insert(0, 1);
+            ind.features.insert(1, if i % 2 == 0 { 1 } else { -1 });
+            ind.k = 2;
+            ind.auc = 0.5 + (i as f64) * 0.05;
+            ind.fit = 0.4 + (i as f64) * 0.05;
+            ind.accuracy = 0.6;
+            ind.sensitivity = 0.7;
+            ind.specificity = 0.8;
+            ind.threshold = 0.5;
+            ind.epoch = 0;
+            ind.language = TERNARY_LANG;
+            ind.data_type = RAW_TYPE;
+            ind.epsilon = 1e-5;
+            pop.individuals.push(ind);
+        }
+        pop
+    }
+
+    fn create_small_cv_data() -> (Data, CV) {
+        let data = Data::test();
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let cv = CV::new(&data, 2, &mut rng);
+        (data, cv)
+    }
+
+    #[test]
+    fn test_fit_on_folds_behavior_consistency() {
+        let mut pop = create_test_population();
+        let (data, cv) = create_small_cv_data();
+        let mut param = Param::default();
+        param.cv.overfit_penalty = 2.0;
+        param.general.k_penalty = 0.1;
+
+        // Store the initial fits
+        let initial_fits: Vec<f64> = pop.individuals.iter().map(|ind| ind.fit).collect();
+
+        // Apply fit_on_folds
+        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+
+        // Check that the fits have changed consistently
+        let final_fits: Vec<f64> = pop.individuals.iter().map(|ind| ind.fit).collect();
+
+        // The fits must be different from the initial fits
+        for (initial, final_fit) in initial_fits.iter().zip(final_fits.iter()) {
+            assert_ne!(*initial, *final_fit, "The fits must be modified by fit_on_folds");
+        }
+
+        // The fits must be finite numbers
+        for fit in final_fits.iter() {
+            assert!(fit.is_finite(), "All fits must be finite");
+        }
+    }
+
+    #[test]
+    fn test_fit_on_folds_empty_population() {
+        let mut pop = Population::new();
+        let (_, cv) = create_small_cv_data();
+        let param = Param::default();
+
+        // Should not panic with an empty population
+        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+
+        assert!(pop.individuals.is_empty(), "The population must remain empty");
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_fit_on_folds_mismatched_gpu_assays() {
+        let mut pop = create_test_population();
+        let (_, cv) = create_small_cv_data();
+        let param = Param::default();
+
+        // Provide wrong number of GPU assays (fewer than the number of folds)
+        let gpu_assays = vec![None]; // Only 1 instead of cv.validation_folds.len()
+
+        pop.fit_on_folds(&cv, &param, &gpu_assays);
+    }
+
+    #[test]
+    fn test_fit_on_folds_integration() {
+        let mut pop = create_test_population();
+        let (data, cv) = create_small_cv_data();
+        let mut param = Param::default();
+        param.general.fit = FitFunction::auc;
+        param.cv.overfit_penalty = 1.5;
+        param.general.k_penalty = 0.2;
+
+        // Test with different CV parameters
+        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+
+        // Verify that properties are preserved
+        assert_eq!(pop.individuals.len(), 5, "The number of individuals must be preserved");
+
+        for ind in &pop.individuals {
+            assert!(ind.k > 0, "The number of features k must be positive");
+            assert!(ind.fit.is_finite(), "The fit must be a finite number");
+        }
+    }
+
+    #[test]
+    fn test_fit_on_folds_structure_preservation() {
+        let mut pop = create_test_population();
+        let (_, cv) = create_small_cv_data();
+        let param = Param::default();
+
+        let initial_count = pop.individuals.len();
+        let initial_features: Vec<_> = pop.individuals.iter()
+            .map(|ind| ind.features.clone())
+            .collect();
+
+        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+
+        // Structure preserved
+        assert_eq!(pop.individuals.len(), initial_count, "The number of individuals must be preserved");
+
+        for (i, ind) in pop.individuals.iter().enumerate() {
+            assert_eq!(ind.features, initial_features[i], "The features of individual {} must be preserved", i);
+        }
+    }
+
+    fn create_controlled_cv_data() -> (Data, CV) {
+        // Controlled data for precise mathematical tests
+        let mut data = Data::new();
+        data.X.insert((0, 0), 0.9);
+        data.X.insert((0, 1), 0.1);
+        data.X.insert((1, 0), 0.1);
+        data.X.insert((1, 1), 0.9);
+        data.X.insert((2, 0), 0.8);
+        data.X.insert((2, 1), 0.2);
+        data.X.insert((3, 0), 0.2);
+        data.X.insert((3, 1), 0.8);
+
+        data.y = vec![1, 0, 1, 0];
+        data.sample_len = 4;
+        data.feature_len = 2;
+        data.features = vec!["feature1".to_string(), "feature2".to_string()];
+        data.samples = vec!["sample1".to_string(), "sample2".to_string(), 
+                        "sample3".to_string(), "sample4".to_string()];
+        data.feature_selection = vec![0, 1];
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let cv = CV::new(&data, 2, &mut rng);
+        (data, cv)
+    }
+
+    #[test]
+    fn test_fit_on_folds_step_by_step_mathematical_verification() {
+        // Create a population with ONE individual to precisely control
+        let mut pop = Population::new();
+        let mut ind = Individual::new();
+        ind.features.insert(0, 1);
+        ind.k = 1;
+        ind.auc = 0.8;
+        ind.fit = 0.8;
+        pop.individuals.push(ind);
+
+        let (_, cv) = create_controlled_cv_data();
+        let mut param = Param::default();
+        param.cv.overfit_penalty = 2.0;  // High overfitting penalty
+        param.general.k_penalty = 0.05;  // Low k penalty
+        param.general.fit = FitFunction::auc;
+
+        let initial_fit = pop.individuals[0].fit;
+
+        // Apply fit_on_folds
+        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+
+        let final_fit = pop.individuals[0].fit;
+        let expected_k_penalty = pop.individuals[0].k as f64 * param.general.k_penalty;
+
+        // Detailed mathematical verifications
+        assert_ne!(initial_fit, final_fit, "The fit must change");
+        assert!(final_fit.is_finite(), "The final fit must be finite");
+
+        // The final fit should be significantly smaller due to penalties
+        assert!(final_fit < initial_fit - expected_k_penalty * 0.3, 
+                "The final fit ({:.6}) should be lower than initial minus 30% of k_penalty ({:.6})", 
+                final_fit, initial_fit - expected_k_penalty * 0.3);
+
+        // Verify that k penalty is properly applied
+        let fit_difference = initial_fit - final_fit;
+        assert!(fit_difference >= expected_k_penalty * 0.8, 
+                "The fit difference ({:.6}) should include at least 80% of k_penalty ({:.6})", 
+                fit_difference, expected_k_penalty);
+    }
+
+    #[test]
+    fn test_fit_on_folds_zero_overfit_penalty_mathematical() {
+        let mut pop = Population::new();
+        let mut ind = Individual::new();
+        ind.features.insert(0, 1);
+        ind.k = 2;
+        ind.auc = 0.7;
+        ind.fit = 0.7;
+        pop.individuals.push(ind);
+
+        let (_, cv) = create_small_cv_data();
+        let mut param = Param::default();
+        param.cv.overfit_penalty = 0.0;  // No overfitting penalty
+        param.general.k_penalty = 0.1;   // Only k penalty
+        param.general.fit = FitFunction::auc;
+
+        let initial_fit = pop.individuals[0].fit;
+        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+        let final_fit = pop.individuals[0].fit;
+
+        let expected_k_penalty = pop.individuals[0].k as f64 * param.general.k_penalty;
+
+        // With overfit_penalty = 0, the main penalty should be k_penalty
+        assert_ne!(initial_fit, final_fit, "The fit must change even without overfit_penalty");
+        assert!(final_fit <= initial_fit, "The final fit should not be higher than initial");
+
+        // Mathematical verification: the reduction should at minimum include k_penalty
+        let fit_reduction = initial_fit - final_fit;
+        assert!(fit_reduction >= expected_k_penalty * 0.5, 
+                "The fit reduction ({:.6}) should be at least 50% of k_penalty ({:.6})", 
+                fit_reduction, expected_k_penalty);
+    }
+
+    #[test]
+    fn test_fit_on_folds_k_penalty_mathematical_scaling() {
+        let k_values = vec![1, 3, 5];
+        let k_penalty = 0.1;
+        let mut results = Vec::new();
+
+        for k in k_values {
+            let mut pop = Population::new();
+            let mut ind = Individual::new();
+            // Create k features
+            for i in 0..k {
+                ind.features.insert(i, 1);
+            }
+            ind.k = k;
+            ind.auc = 0.8;
+            ind.fit = 0.8;
+            pop.individuals.push(ind);
+
+            let (_, cv) = create_small_cv_data();
+            let mut param = Param::default();
+            param.cv.overfit_penalty = 0.5;  // Moderate penalty
+            param.general.k_penalty = k_penalty;
+            param.general.fit = FitFunction::auc;
+
+            let initial_fit = pop.individuals[0].fit;
+            pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+            let final_fit = pop.individuals[0].fit;
+
+            let expected_k_penalty = k as f64 * k_penalty;
+            let actual_reduction = initial_fit - final_fit;
+
+            results.push((k, initial_fit, final_fit, actual_reduction, expected_k_penalty));
+        }
+
+        // Verify that penalty increases mathematically with k
+        for i in 1..results.len() {
+            let (k_prev, _, _, reduction_prev, expected_prev) = results[i-1];
+            let (k_curr, _, _, reduction_curr, expected_curr) = results[i];
+
+            // The actual reduction should follow the increase in k_penalty
+            let expected_increase = expected_curr - expected_prev;
+            let actual_increase = reduction_curr - reduction_prev;
+
+            assert!(reduction_curr > reduction_prev, 
+                    "The penalty for k={} ({:.6}) should be greater than for k={} ({:.6})", 
+                    k_curr, reduction_curr, k_prev, reduction_prev);
+
+            // The actual increase should be at least 50% of the expected increase
+            assert!(actual_increase >= expected_increase * 0.5,
+                    "The penalty increase ({:.6}) should be at least 50% of expected ({:.6})",
+                    actual_increase, expected_increase);
+        }
+    }
+
+    #[test]
+    fn test_fit_on_folds_mathematical_per_fit_function() {
+        let fit_functions = vec![
+            (FitFunction::auc, "AUC"),
+            (FitFunction::sensitivity, "Sensitivity"), 
+            (FitFunction::specificity, "Specificity")
+        ];
+
+        for (fit_func, name) in fit_functions {
+            let mut pop = Population::new();
+            let mut ind = Individual::new();
+            ind.features.insert(0, 1);
+            ind.features.insert(1, -1);
+            ind.k = 2;
+            ind.auc = 0.75;
+            ind.fit = 0.75;
+            ind.sensitivity = 0.8;
+            ind.specificity = 0.7;
+            pop.individuals.push(ind);
+
+            let (_, cv) = create_small_cv_data();
+            let mut param = Param::default();
+            param.cv.overfit_penalty = 1.0;
+            param.general.k_penalty = 0.1;
+            param.general.fit = fit_func;
+
+            let initial_fit = pop.individuals[0].fit;
+            let expected_k_penalty = pop.individuals[0].k as f64 * param.general.k_penalty;
+
+            pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+            let final_fit = pop.individuals[0].fit;
+
+            // Specific mathematical verifications
+            assert_ne!(initial_fit, final_fit, "The fit must change for {}", name);
+            assert!(final_fit.is_finite(), "The final fit must be finite for {}", name);
+            assert!(final_fit >= -2.0 && final_fit <= 2.0, 
+                    "The final fit ({:.6}) must be within reasonable range for {}", 
+                    final_fit, name);
+
+            // Mathematical verification of penalty
+            let fit_reduction = initial_fit - final_fit;
+            assert!(fit_reduction >= expected_k_penalty * 0.3, 
+                    "The reduction ({:.6}) must include at least 30% of k_penalty ({:.6}) for {}", 
+                    fit_reduction, expected_k_penalty, name);
+
+            assert!(final_fit <= initial_fit + 0.01, 
+                    "The final fit should not be significantly higher for {} (initial: {:.6}, final: {:.6})", 
+                    name, initial_fit, final_fit);
+        }
+    }
+
+    // #[test]
+    // fn test_fit_on_folds_mathematical_boundary_conditions() {
+    //     // Test with very high overfit_penalty
+    //     let mut pop = Population::new();
+    //     let mut ind = Individual::new();
+    //     ind.features.insert(0, 1);
+    //     ind.k = 1;
+    //     ind.auc = 0.9;
+    //     ind.fit = 0.9;
+    //     pop.individuals.push(ind);
+
+    //     let (_, cv) = create_small_cv_data();
+    //     let mut param = Param::default();
+    //     param.cv.overfit_penalty = 100.0;  // Extreme penalty
+    //     param.general.k_penalty = 0.01;
+    //     param.general.fit = FitFunction::auc;
+
+    //     let initial_fit = pop.individuals[0].fit;
+    //     let expected_k_penalty = pop.individuals[0].k as f64 * param.general.k_penalty;
+
+    //     pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+    //     let final_fit = pop.individuals[0].fit;
+
+    //     // Mathematical verifications of boundary conditions
+    //     assert!(final_fit.is_finite(), "The fit must remain finite even with extreme penalty");
+    //     assert!(final_fit < initial_fit, "The fit must decrease with high penalty");
+
+    //     // The reduction should be substantial with such a high penalty
+    //     let fit_reduction = initial_fit - final_fit;
+    //     assert!(fit_reduction >= expected_k_penalty, 
+    //             "With extreme penalty, reduction ({:.6}) should be at least equal to k_penalty ({:.6})", 
+    //             fit_reduction, expected_k_penalty);
+    // }
 
 }

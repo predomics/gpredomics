@@ -72,8 +72,8 @@ pub struct General {
     pub k_penalty: f64,                       
     #[serde(default = "zero_default")] 
     pub fr_penalty: f64,
-    #[serde(default = "nb_best_model_to_test_default")] 
-    pub nb_best_model_to_test: u32,
+    #[serde(default = "n_model_to_display_default")] 
+    pub n_model_to_display: u32,
     #[serde(default = "false_default")] 
     pub gpu: bool,
     #[serde(default = "false_default")] 
@@ -99,7 +99,7 @@ pub struct Data {
     #[serde(default = "empty_string")]                     
     pub ytest: String,
     #[serde(default = "uzero_default")]                      
-    pub features_maximal_number_per_class: usize,
+    pub feature_maximal_number_per_class: usize,
     #[serde(default = "feature_selection_method_default")]                      
     pub feature_selection_method: String,
     #[serde(default = "feature_minimal_prevalence_pct_default")]                     
@@ -136,7 +136,7 @@ pub struct CV {
 pub struct Voting {
   #[serde(default = "false_default")]
   pub vote: bool,
-  #[serde(default = "false_default")]
+  #[serde(default = "true_default")]
   pub use_fbm: bool,
   #[serde(default = "half_default")] 
   pub min_perf: f64,
@@ -146,6 +146,10 @@ pub struct Voting {
   pub method: VotingMethod,   
   #[serde(default = "half_default")]                         
   pub method_threshold: f64,  
+  #[serde(default = "zero_default")]        
+  pub threshold_windows_pct: f64,
+  #[serde(default = "false_default")]        
+  pub complete_display: bool,
   #[serde(default = "false_default")]                        
   pub specialized: bool,                 
   #[serde(default = "specialized_default")]            
@@ -183,9 +187,11 @@ pub struct GA {
     #[serde(default = "zero_default")] 
     pub forced_diversity_pct: f64,    
     #[serde(default = "uzero_default")] 
-    pub random_samples: usize,         
+    pub forced_diversity_epochs: usize,    
+    #[serde(default = "zero_default")] 
+    pub random_sampling_pct: f64,         
     #[serde(default = "uzero_default")]                 
-    pub max_age_randomized_samples: usize,       
+    pub random_sampling_epochs: usize,       
     #[serde(default = "uzero_default")]       
     pub n_epochs_before_global: usize,    
 }
@@ -351,7 +357,7 @@ fn folds_default() -> usize { 5 }
 fn n_permutations_oob_default() -> usize { 100 }
 fn importance_aggregation_default() -> ImportanceAggregation { ImportanceAggregation::mean }
 fn fit_default() -> FitFunction { FitFunction::auc }
-fn nb_best_model_to_test_default() -> u32 { 10 }
+fn n_model_to_display_default() -> u32 { 10 }
 fn false_default() -> bool { false }
 fn true_default() -> bool { true }
 fn display_level_default() -> usize { 2 }

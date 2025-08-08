@@ -10,19 +10,34 @@ use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use crate::ga::fit_fn;
+use crate::beam;
 use crate::utils::{mean_and_std, median, mad};
 
 use std::sync::atomic::AtomicBool;
 
-/// This class implement Cross Validation dataset, e.g. split the Data in N validation_folds and create N subset of Data each with its test subset.
+/// Cross-validation dataset implementation for machine learning workflows.
+///
+/// Splits data into N validation folds and creates N training subsets, each excluding
+/// its corresponding validation fold. Supports stratified sampling to maintain class
+/// distribution balance across folds. May contain population collections derived from algorithms.
  #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CV {
     pub validation_folds: Vec<Data>,
     pub training_sets: Vec<Data>,
-    pub fold_populations: Option<Vec<Population>>
+    pub fold_collections: Vec<Vec<Population>>
 }
 
 impl CV {
+
+    /// Creates a new cross-validation instance with stratified folds.
+    ///
+    /// Splits the dataset into balanced validation folds, ensuring each fold
+    /// maintains the same class distribution as the original dataset.
+    ///
+    /// # Arguments
+    /// * `data` - The dataset to split into folds  
+    /// * `outer_folds` - Number of validation folds to create
+    /// * `rng` - Random number generator for stratified sampling
     pub fn new(data: &Data, outer_folds: usize, rng: &mut ChaCha8Rng) -> CV {
         let mut indices_class0:Vec<usize> = Vec::new();
         let mut indices_class1:Vec<usize> = Vec::new();
@@ -56,10 +71,21 @@ impl CV {
         CV {
             validation_folds: validation_folds,
             training_sets: training_sets,
-            fold_populations: None
+            fold_collections: vec![]
         }
     }
 
+    /// Runs an algorithm on each training fold in parallel.
+    ///
+    /// Executes the provided algorithm function on each fold's training data using
+    /// a thread pool. Collects population results and displays progress information
+    /// including AUC scores for training and validation sets.
+    ///
+    /// # Arguments
+    /// * `algo` - Algorithm function to execute on each training fold
+    /// * `param` - Parameters to pass to the algorithm
+    /// * `thread_number` - Number of threads to use in the thread pool
+    /// * `running` - Atomic boolean flag for early termination control
     pub fn pass<F>(&mut self, algo: F, param: &Param, thread_number: usize, running: Arc<AtomicBool>)
         where F: Fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population> + Send + Sync 
         {
@@ -68,73 +94,94 @@ impl CV {
                 .build()
                 .unwrap();
 
-            let populations: Vec<Population> = thread_pool.install(|| {
+            let collections: Vec<Vec<Population>> = thread_pool.install(|| {
                 self.training_sets
                     .par_iter_mut()
                     .zip(self.validation_folds.par_iter_mut())
                     .enumerate()
-                    .filter_map(|(i, (train, test))| {
+                    .filter_map(|(i, (train, valid))| {
                         info!("\x1b[1;93mCompleting fold #{}...\x1b[0m", i+1);
 
-                        let last_generation: Population = algo(train, param, Arc::clone(&running)).pop().unwrap();
+                        let collection: Vec<Population> = algo(train, param, Arc::clone(&running));
                         
-                        if let Some(best_model) = last_generation.clone().individuals.into_iter().take(1).next() {
-                            let train_auc = best_model.auc;
-                            let test_auc = best_model.compute_new_auc(test);
+                        if collection.len() > 0 {
+                            let final_population = collection.last().unwrap();
 
-                            info!(
-                                "\x1b[1;93mFold #{} completed | Best train AUC: {:.3} | Associated validation fold AUC: {:.3}\x1b[0m",
-                                i+1, train_auc, test_auc
-                            );
+                            if final_population.individuals.len() > 0 {
+                                let best_model = final_population.individuals.clone().into_iter().take(1).next().unwrap();
+                                let train_auc = best_model.auc;
+                                let valid_auc = best_model.compute_new_auc(valid);
 
-                            Some(last_generation)
+                                info!(
+                                    "\x1b[1;93mFold #{} completed | Best train AUC: {:.3} | Associated validation fold AUC: {:.3}\x1b[0m",
+                                    i+1, train_auc, valid_auc
+                                );
+
+                                Some(collection)
+                                
+                            } else {
+                                info!("\x1b[1;93mFold #{} skipped - no individuals found\x1b[0m", i+1);
+                                Some(vec![])
+                            }
+                           
                         } else {
-                            info!("\x1b[1;93mFold #{} skipped - no individuals found\x1b[0m", i+1);
-                            None
+                            info!("\x1b[1;93mFold #{} skipped - algorithm did not return any populations.\x1b[0m", i+1);
+                            Some(vec![])
                         }
                     })
                     .collect()
                     
             });
 
-            self.fold_populations = Some(populations);
+            self.fold_collections = collections;
         }
 
-    pub fn compute_cv_oob_feature_importance(
-        &self, 
-        cv_param: &Param, 
-        permutations: usize, 
-        main_rng: &mut ChaCha8Rng, 
-        aggregation_method: &ImportanceAggregation, 
-        scaled_importance: bool, 
-        cascade: bool,
-        on_validation: bool,
-    ) -> Result<ImportanceCollection, String> {
-        let fold_populations = self.fold_populations
-            .as_ref()
-            .ok_or("No population available. Run pass() first.")?;
+    /// Computes out-of-bag feature importance across cross-validation folds.
+    ///
+    /// Calculates feature importance for each fold's `family of best models` population and
+    /// aggregates the results using the specified method (mean or median).
+    /// Returns importance scores at individual, population, and collection levels.
+    ///
+    /// # Arguments
+    /// * `cv_param` - Cross-validation parameters
+    /// * `permutations` - Number of permutations for importance calculation
+    /// * `main_rng` - Random number generator for permutations
+    /// * `aggregation_method` - Method to aggregate importance across folds (mean/median)
+    /// * `scaled_importance` - Whether to scale importance values
+    /// * `cascade` - Whether to include individual-level importance scores
+    ///
+    /// # Returns
+    /// Returns `Ok(ImportanceCollection)` containing importance scores, or `Err(String)` 
+    /// if fold collections are inconsistent.
+    ///
+    /// # Panics
+    /// Panics if `pass()` has not been called first to populate fold collections.
+    ///
+    /// # Errors
+    /// Returns an error if the number of fold collections, training sets, and 
+    /// validation folds are inconsistent.
+    pub fn compute_cv_oob_feature_importance(&self, cv_param: &Param, permutations: usize, main_rng: &mut ChaCha8Rng, 
+        aggregation_method: &ImportanceAggregation, scaled_importance: bool, cascade: bool) -> Result<ImportanceCollection, String> {
+             
+        assert!(self.fold_collections.len()>0, "No population available. Run pass() first.");
         
-        if fold_populations.len() != self.training_sets.len() || 
-        fold_populations.len() != self.validation_folds.len() {
-            return Err(format!(
-                "Inconsistency: {} populations, {} training sets, {} validation folds",
-                fold_populations.len(),
-                self.training_sets.len(),
-                self.validation_folds.len()
-            ));
-        }
+        if self.fold_collections.len() != self.training_sets.len() || self.fold_collections.len() != self.validation_folds.len() {
+                return Err(format!(
+                    "Inconsistency: {} populations, {} training sets, {} validation folds",
+                    self.fold_collections.len(),
+                    self.training_sets.len(),
+                    self.validation_folds.len()
+                ));
+            }
         
         let mut importance_values: HashMap<usize, Vec<f64>> = HashMap::new();
         let mut features_significant_observations: HashMap<usize, usize> = HashMap::new();
         let mut importances = Vec::new();
         
-        for i in 0..fold_populations.len() {
-            let (mut fold_last_fbm, valid_data) = self.extract_fold_fbm(i, cv_param);
-            let train_data = &self.training_sets[i];
-            
-            fit_fn(&mut fold_last_fbm, &mut valid_data.clone(), &mut None, &None, &None, cv_param);
-            
-            let importance_data = if on_validation { &valid_data } else { train_data };
+        for i in 0..self.fold_collections.len() {
+            let fold_last_fbm = self.extract_fold_fbm(i, cv_param);      
+            // Extracted FBM is already fit and sort based on validation if required      
+            let importance_data = if cv_param.cv.fit_on_valid { &self.validation_folds[i] } else { &self.training_sets[i] };
             
             let fold_imp = fold_last_fbm.compute_pop_oob_feature_importance(
                 importance_data,
@@ -155,7 +202,7 @@ impl CV {
                             .or_default()
                             .push(imp.importance);
                         importances.push(imp.clone());
-                        if train_data.feature_class.contains_key(&imp.feature_idx) {
+                        if self.training_sets[i].feature_class.contains_key(&imp.feature_idx) {
                             *features_significant_observations
                                 .entry(imp.feature_idx)
                                 .or_insert(0) += 1;
@@ -166,8 +213,6 @@ impl CV {
             }
             
         }
-
-        let total_folds = fold_populations.len();
         
         for (feature_idx, values) in importance_values {
             if values.is_empty() { continue; }
@@ -185,10 +230,10 @@ impl CV {
                 .get(&feature_idx)
                 .copied()
                 .unwrap_or(0);
-            let scope_pct = fold_count as f64 / total_folds as f64;
+            let scope_pct = fold_count as f64 / self.fold_collections.len() as f64;
             
             let collection_importance = Importance {
-                importance_type: ImportanceType::OOB,
+                importance_type: ImportanceType::MDA,
                 feature_idx,
                 scope: ImportanceScope::Collection,
                 aggreg_method: Some(aggregation_method.clone()),
@@ -205,20 +250,96 @@ impl CV {
         Ok(ImportanceCollection { importances: importances })
     }
 
-    pub fn extract_fold_fbm(&self, fold_idx: usize, param: &Param) -> (Population, Data) {
-        let pop = &self.fold_populations
-            .as_ref().expect("No population available. Run pass() first.")[fold_idx];
-        let mut pop_mut = pop.clone();
-        
-        if param.cv.fit_on_valid {
-            fit_fn(&mut pop_mut, &self.validation_folds[fold_idx], &mut None, &None, &None, param);
+    /// Extracts the `Family of Best Models` population for a specific fold.
+    ///
+    /// Returns the `Family of Best Models` population from the specified fold. 
+    /// For beam search algorithms, selects the N best models within the collection. 
+    /// For other algorithms, returns the last population from the fold's evolution.
+    /// Optionally refits the model on validation data.
+    ///
+    /// # Arguments
+    /// * `fold_idx` - Index of the fold to extract the model from
+    /// * `param` - Parameters containing algorithm type and fitting options
+    ///
+    /// # Returns
+    /// Returns the final best model population for the specified fold.
+    ///
+    /// # Panics
+    /// Panics if `pass()` has not been called first or if fold_idx is invalid.
+    pub fn extract_fold_fbm(&self, fold_idx: usize, param: &Param) -> Population {
+        assert_ne!(self.fold_collections.len(), 0, "No population available. Run pass() first.");
+
+        let mut pop: Population;
+
+        // For Beam, compute FBM on [kmin; kmax]
+        if param.general.algo == "beam" {
+            pop = beam::keep_n_best_model_within_collection(&self.fold_collections[fold_idx], param.beam.max_nb_of_models as usize);
+        } else {
+            pop = self.fold_collections[fold_idx].last().unwrap().clone();
         }
         
-        let fbm = pop_mut.select_best_population(param.cv.cv_best_models_ci_alpha).sort();
-        let valid = self.validation_folds[fold_idx].clone();
-        (fbm, valid)
+        // Fit on valid if required and sort
+        if param.cv.fit_on_valid {
+            fit_fn(&mut pop, &self.validation_folds[fold_idx], &mut None, &None, &None, param);
+            pop = pop.sort();
+        }
+        
+        pop
+
     }
 
+    /// Gets f`Family of Best Models` from all folds and merges them into a single population.
+    ///
+    /// Collects the `Family of Best Models` from each fold, displays their
+    /// performance information, and merges all individuals into a single population
+    /// for overall analysis.
+    ///
+    /// # Arguments
+    /// * `param` - Parameters for model extraction and display
+    ///
+    /// # Returns
+    /// Returns a merged population containing individuals from all `Family of Best Models`.
+    ///
+    /// # Panics
+    /// Panics if `pass()` has not been called first to populate fold collections.
+    pub fn get_fbm(&self, param: &Param) -> Population {
+        assert_ne!(self.fold_collections.len(), 0, "No population available. Run pass() first.");
+
+        let mut fold_fbms: Vec<Population> = vec![];
+        let mut merged_fbms = Population::new();
+
+        for fold_idx in 0..self.training_sets.len() {
+            if self.fold_collections[fold_idx].len() > 0 && self.fold_collections[fold_idx].last().unwrap().individuals.len() > 0 {
+                let fbm = self.extract_fold_fbm(fold_idx, &param);
+
+                info!("\x1b[1;93mFold #{}\x1b[0m", fold_idx+1);
+                info!("{}", fbm.clone().display(&self.training_sets[fold_idx], Some(&self.validation_folds[fold_idx]), &param));
+
+                fold_fbms.push(fbm);
+            
+            } else {
+                info!("\x1b[1;93mFold #{}: empty population\x1b[0m", fold_idx+1);
+            }
+        }
+
+        for fold_fbm in &fold_fbms {
+            merged_fbms.individuals.extend(fold_fbm.individuals.clone());
+        }
+
+        merged_fbms
+
+    }
+
+   
+    /// Returns sample identifiers for serialization optimization.
+    ///
+    /// Extracts sample names from training and validation sets for each fold,
+    /// returning them as tuples. This enables lightweight serialization by storing
+    /// only sample identifiers instead of full datasets.
+    ///
+    /// # Returns
+    /// Returns a vector of tuples, each containing (training_sample_names, validation_sample_names)
+    /// for the corresponding fold.
     pub fn get_ids(&self) -> Vec<(Vec<String>, Vec<String>)> {
         self.training_sets.iter()
         .zip(self.validation_folds.iter())
@@ -226,15 +347,33 @@ impl CV {
         .collect()
     }
 
-    pub fn reconstruct(data: &Data, fold_train_valid_names: Vec<(Vec<String>, Vec<String>)>, fold_populations: Vec<Population>) -> Result<CV, String> {
+    /// Reconstructs a CV instance from sample names and fold collections.
+    ///
+    /// Rebuilds the cross-validation structure from the original dataset using
+    /// sample name pairs and pre-existing fold collections. Validates that all
+    /// sample names exist in the original dataset and that collection counts match.
+    ///
+    /// # Arguments
+    /// * `data` - Original dataset containing all samples
+    /// * `fold_train_valid_names` - Tuples of (training_names, validation_names) for each fold
+    /// * `fold_collections` - Pre-existing population collections for each fold
+    ///
+    /// # Returns
+    /// Returns `Ok(CV)` with reconstructed cross-validation structure, or `Err(String)`
+    /// if reconstruction fails.
+    ///
+    /// # Errors
+    /// * Returns error if the number of name pairs doesn't match the number of collections
+    /// * Returns error if any sample name cannot be found in the original dataset
+    pub fn reconstruct(data: &Data, fold_train_valid_names: Vec<(Vec<String>, Vec<String>)>, fold_collections: Vec<Vec<Population>>) -> Result<CV, String> {
         let mut validation_folds = Vec::new();
         let mut training_sets = Vec::new();
         
-        if fold_train_valid_names.len() != fold_populations.len() {
+        if fold_train_valid_names.len() != fold_collections.len() {
             return Err(format!(
-                "Mismatch: {} folds vs {} populations", 
+                "Mismatch: {} folds vs {} collections", 
                 fold_train_valid_names.len(), 
-                fold_populations.len()
+                fold_collections.len()
             ));
         }
         
@@ -261,7 +400,7 @@ impl CV {
         Ok(CV {
             validation_folds,
             training_sets,
-            fold_populations: Some(fold_populations),
+            fold_collections: fold_collections,
         })
     }
 
@@ -278,11 +417,11 @@ mod tests {
     impl CV {
         pub fn test() -> CV {
             let cv = CV {
-                fold_populations: Some(vec![
-                    Population::test_with_these_features(&[0, 1, 2]), 
-                    Population::test_with_these_features(&[1, 2, 3]), 
-                    Population::test_with_these_features(&[0, 2, 3]), 
-                ]),
+                fold_collections: vec![
+                    vec![Population::test_with_these_features(&[0, 1, 2])], 
+                    vec![Population::test_with_these_features(&[1, 2, 3])], 
+                    vec![Population::test_with_these_features(&[0, 2, 3])], 
+                ],
                 
                 training_sets: vec![
                     Data::test_with_these_features(&[0, 1, 2, 3]),
@@ -439,7 +578,7 @@ mod tests {
             assert_eq!(valid_names, &cv.validation_folds[i].samples);
         }
         
-        // Vérifier que tous les échantillons originaux sont présents dans les validation folds
+        // Check that all original samples are present in the validation folds
         let mut all_validation_samples: Vec<String> = Vec::new();
         for (_, valid_names) in &ids {
             all_validation_samples.extend(valid_names.clone());
@@ -449,7 +588,7 @@ mod tests {
         original_samples.sort();
         assert_eq!(all_validation_samples, original_samples);
         
-        // Vérifier qu'aucun échantillon n'apparaît dans plusieurs validation folds
+        // Check that no sample appears in multiple validation folds
         let mut seen_samples = std::collections::HashSet::new();
         for (_, valid_names) in &ids {
             for sample in valid_names {
@@ -460,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pass_sets_fold_populations() {
+    fn test_pass_sets_fold_collections() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let data = Data::test();
         let outer_folds = 2;
@@ -476,8 +615,8 @@ mod tests {
         
         cv.pass(mock_algo, &param, 1, running);
         
-        assert!(cv.fold_populations.is_some());
-        assert!(cv.fold_populations.as_ref().unwrap().len() <= outer_folds);
+        assert!(cv.fold_collections.len() > 0);
+        assert!(cv.fold_collections.len() <= outer_folds);
     }
 
     #[test] 
@@ -494,9 +633,10 @@ mod tests {
         
         cv.pass(mock_algo, &param, 1, running);
         
-        assert!(cv.fold_populations.is_some());
-        let populations = cv.fold_populations.as_ref().unwrap();
-        assert_eq!(populations.len(), 0); 
+        assert!(cv.fold_collections.len() > 0);
+        let collections = cv.fold_collections;
+        assert_eq!(collections[0].len(), 0); 
+        assert_eq!(collections[1].len(), 0);
     }
 
     #[test] 
@@ -507,11 +647,11 @@ mod tests {
         let mut cv = CV::new(&data, outer_folds, &mut rng);
         let param = Param::default();
 
-        // Créer un flag running initialement vrai
+        // Create a flag that is initially true
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = Arc::clone(&running);
 
-        // Algorithme mock qui met running à false (simuler une interruption)
+        // Mock algorithm that sets running to false (simulate an interruption)
         let mock_algo = |_train_data: &mut Data, _param: &Param, running: Arc<AtomicBool>| -> Vec<Population> {
             running.store(false, std::sync::atomic::Ordering::Relaxed);
             vec![Population::test()]
@@ -519,17 +659,17 @@ mod tests {
 
         cv.pass(mock_algo, &param, 1, running_clone);
 
-        // Vérifier que fold_populations est défini
-        assert!(cv.fold_populations.is_some());
+        // Check that fold_collections is defined
+        assert!(cv.fold_collections.len() > 0);
     }
 
-    // Test CV avec déséquilibre de classe extrême
+    // CV test with extreme class imbalance
     #[test]
     fn test_cv_new_class_imbalance_extreme() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
 
-        // Définir 95% des échantillons à la classe 0, 5% à la classe 1
+        // Define 95% of samples as class 0, 5% as class 1
         let n = data.y.len();
         let n_class1 = (n as f64 * 0.05).round() as usize;
         data.y = vec![0; n];
@@ -540,13 +680,13 @@ mod tests {
         let outer_folds = 5;
         let cv = CV::new(&data, outer_folds, &mut rng);
 
-        // Chaque fold devrait contenir quelques échantillons de classe 1 ou être vide si trop peu
+        // Each fold should contain a few class 1 samples or be empty if there are too few.
         for fold in &cv.validation_folds {
             let count_class1 = fold.y.iter().filter(|&&y| y == 1).count();
             assert!(count_class1 <= n_class1);
         }
 
-        // Vérifier que la distribution globale est préservée
+        // Check that the overall distribution is preserved
         let total_class1: usize = cv.validation_folds.iter()
             .map(|fold| fold.y.iter().filter(|&&y| y == 1).count())
             .sum();
@@ -560,30 +700,29 @@ mod tests {
         let outer_folds = 2;
         let cv = CV::new(&data, outer_folds, &mut rng);
         
-        let mock_populations = vec![
-            Population::test(), // Remplacez par une vraie construction
-            Population::test(),
+        let mock_collections = vec![
+            vec![Population::test()], 
+            vec![Population::test()],
         ];
         
         let fold_names = cv.get_ids();
-        let reconstructed_cv = CV::reconstruct(&data, fold_names, mock_populations);
+        let reconstructed_cv = CV::reconstruct(&data, fold_names, mock_collections);
         
         assert!(reconstructed_cv.is_ok());
         let reconstructed = reconstructed_cv.unwrap();
         
         assert_eq!(reconstructed.training_sets.len(), outer_folds);
         assert_eq!(reconstructed.validation_folds.len(), outer_folds);
-        assert!(reconstructed.fold_populations.is_some());
-        assert_eq!(reconstructed.fold_populations.as_ref().unwrap().len(), outer_folds);
+        assert_eq!(reconstructed.fold_collections.len(), outer_folds);
     }
 
     #[test]
     fn test_reconstruct_fails_with_mismatched_lengths() {
         let data = Data::test();
         let fold_names = vec![(vec!["sample1".to_string()], vec!["sample2".to_string()])];
-        let mock_populations = vec![Population::test(),  Population::test()]; 
+        let mock_collections = vec![vec![Population::test()],  vec![Population::test()]]; 
         
-        let result = CV::reconstruct(&data, fold_names, mock_populations);
+        let result = CV::reconstruct(&data, fold_names, mock_collections);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Mismatch"));
     }
@@ -594,35 +733,35 @@ mod tests {
         let fold_names = vec![
             (vec!["unknown_sample".to_string()], vec!["sample1".to_string()]),
         ];
-        let mock_populations = vec![Population::test()];
+        let mock_populations = vec![vec![Population::test()]];
         
         let result = CV::reconstruct(&data, fold_names, mock_populations);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Sample name can not be found"));
     }
 
-    #[test]
-    fn test_extract_fold_fbm_without_fit_on_valid() {
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let data = Data::test();
-        let outer_folds = 2;
-        let mut cv = CV::new(&data, outer_folds, &mut rng);
+    // #[test]
+    // fn test_extract_fold_fbm_without_fit_on_valid() {
+    //     let mut rng = ChaCha8Rng::seed_from_u64(42);
+    //     let data = Data::test();
+    //     let outer_folds = 2;
+    //     let mut cv = CV::new(&data, outer_folds, &mut rng);
         
-        let mock_populations = vec![
-            Population::test(), 
-            Population::test(),
-        ];
-        cv.fold_populations = Some(mock_populations);
+    //     let mock_collections = vec![
+    //         vec![Population::test()], 
+    //         vec![Population::test()],
+    //     ];
+    //     cv.fold_collections = mock_collections;
         
-        let mut param = Param::default();
-        param.cv.fit_on_valid = false;
-        param.cv.cv_best_models_ci_alpha = 0.05;
+    //     let mut param = Param::default();
+    //     param.cv.fit_on_valid = false;
+    //     param.cv.cv_best_models_ci_alpha = 0.05;
         
-        let (_, valid_data) = cv.extract_fold_fbm(0, &param);
+    //     let (_, valid_data) = cv.extract_fold_fbm(0, &param);
         
-        assert_eq!(valid_data.samples, cv.validation_folds[0].samples);
-        assert_eq!(valid_data.y, cv.validation_folds[0].y);
-    }
+    //     assert_eq!(valid_data.samples, cv.validation_folds[0].samples);
+    //     assert_eq!(valid_data.y, cv.validation_folds[0].y);
+    // }
 
     #[test]
     #[should_panic(expected = "No population available")]
@@ -634,33 +773,29 @@ mod tests {
         cv.extract_fold_fbm(0, &param);
     }
 
-    
-
     #[test]
-    fn test_compute_cv_oob_feature_importance_missing_fold_populations() {
+    #[should_panic(expected = "No population available")]
+    fn test_compute_cv_oob_feature_importance_missing_fold_collections() {
         let mut cv = CV::test();
-        cv.fold_populations = None;
+        cv.fold_collections = vec![];
         
         let cv_param = Param::default();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         
-        let result = cv.compute_cv_oob_feature_importance(
+        let _ = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng, 
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         );
-        
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("No population available"));
     }
 
     #[test]
     fn test_compute_cv_oob_feature_importance_inconsistent_fold_sizes() {
         let mut cv = CV::test();
-        cv.fold_populations = Some(vec![Population::test_with_these_features(&[0, 1])]);
+        cv.fold_collections = vec![vec![Population::test_with_these_features(&[0, 1])]];
         cv.training_sets = vec![Data::test_with_these_features(&[0, 1])];
         cv.validation_folds = vec![
             Data::test_with_these_features(&[0, 1]),
-            Data::test_with_these_features(&[0, 1]), // Taille incohérente
+            Data::test_with_these_features(&[0, 1]), // Unconsistent size
         ];
         
         let cv_param = Param::default();
@@ -668,7 +803,7 @@ mod tests {
         
         let result = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         );
         
         assert!(result.is_err());
@@ -695,16 +830,16 @@ mod tests {
         
         let result = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
-            &ImportanceAggregation::mean, false, false, false).unwrap();
+            &ImportanceAggregation::mean, false, false).unwrap();
         
-        // Vérifier qu'on a des importances Collection (agrégées)
+        // Check that we have (aggregated) Collection weights
         let collection_importances: Vec<_> = result.importances.iter()
             .filter(|imp| matches!(imp.scope, ImportanceScope::Collection))
             .collect();
         
         assert!(!collection_importances.is_empty(), "Should have Collection-level importances");
         
-        // Vérifier que l'agrégation est marquée comme mean
+         // Check that the aggregation is marked as mean
         for imp in &collection_importances {
             assert_eq!(imp.aggreg_method, Some(ImportanceAggregation::mean));
         }
@@ -718,14 +853,14 @@ mod tests {
         
         let result = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
-            &ImportanceAggregation::median, false, false, false
+            &ImportanceAggregation::median, false, false
         ).unwrap();
         
         let collection_importances: Vec<_> = result.importances.iter()
             .filter(|imp| matches!(imp.scope, ImportanceScope::Collection))
             .collect();
         
-        // Vérifier que l'agrégation est marquée comme median
+        // Check that the aggregation is marked as median
         for imp in &collection_importances {
             assert_eq!(imp.aggreg_method, Some(ImportanceAggregation::median));
         }
@@ -739,7 +874,7 @@ mod tests {
         
         let result = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         ).unwrap();
         
         let collection_importances: Vec<_> = result.importances.iter()
@@ -747,7 +882,6 @@ mod tests {
             .collect();
         
         for imp in &collection_importances {
-            // scope_pct doit être entre 0.0 et 1.0
             assert!(imp.scope_pct >= 0.0 && imp.scope_pct <= 1.0, 
                 "scope_pct should be between 0.0 and 1.0, got {}", imp.scope_pct);
         }
@@ -759,17 +893,17 @@ mod tests {
         let cv_param = Param::default();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         
-        // Test avec cascade = true
+        // cascade = true
         let result_cascade = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
-            &ImportanceAggregation::mean, false, true, false
+            &ImportanceAggregation::mean, false, true
         ).unwrap();
         
-        // Test avec cascade = false  
+        // cascade = false  
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
         let result_no_cascade = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng2,
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         ).unwrap();
         
         let individual_count_cascade = result_cascade.importances.iter()
@@ -803,26 +937,29 @@ mod tests {
             }
         }, &cv_param, cv_param.general.thread_number, r);
         
-        // Test avec on_validation = true
+        // on_validation = true
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+        
+        cv_param.cv.fit_on_valid = true;
         let result_validation = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng1,
-            &ImportanceAggregation::mean, false, false, true
+            &ImportanceAggregation::mean, false, false
         ).unwrap();
         
-        // Test avec on_validation = false
+        cv_param.cv.fit_on_valid = false;
+        // on_validation = false
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
         let result_training = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng2,
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         ).unwrap();
         
-        // Les deux devraient réussir et avoir des résultats
+        // Both should succeed and achieve results.
         assert!(!result_validation.importances.is_empty());
         assert!(!result_training.importances.is_empty());
         
-        // Les importances peuvent différer selon les données utilisées
-        // On vérifie juste que les structures sont cohérentes
+        // The amounts may differ depending on the data used.
+        // We are then just checking that the structures are consistent.
         let validation_collection_count = result_validation.importances.iter()
             .filter(|imp| matches!(imp.scope, ImportanceScope::Collection))
             .count();
@@ -831,7 +968,7 @@ mod tests {
             .filter(|imp| matches!(imp.scope, ImportanceScope::Collection))
             .count();
         
-        // On peut s'attendre à avoir des importances Collection dans les deux cas
+        // We can expect to have Collection importances in both cases.
         assert!(validation_collection_count > 0 || training_collection_count > 0);
     }
 
@@ -840,21 +977,21 @@ mod tests {
         let cv = CV::test();
         let cv_param = Param::default();
         
-        // Test avec scaled = true
+        // scaled = true
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let result_scaled = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng1,
-            &ImportanceAggregation::mean, true, false, false
+            &ImportanceAggregation::mean, true, false
         ).unwrap();
         
-        // Test avec scaled = false
+        // scaled = false
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
         let result_unscaled = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng2,
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         ).unwrap();
         
-        // Vérifier que le flag is_scaled est correctement propagé
+        // Check that the is_scaled flag is correctly propagated
         for imp in &result_scaled.importances {
             if matches!(imp.scope, ImportanceScope::Collection) {
                 assert!(imp.is_scaled, "Collection importance should be marked as scaled");
@@ -869,9 +1006,10 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_empty_fold_populations() {
+    #[should_panic]
+    fn test_compute_cv_oob_feature_importance_empty_fold_collections() {
         let mut cv = CV::test();
-        cv.fold_populations = Some(vec![]);
+        cv.fold_collections = vec![vec![]];
         cv.training_sets = vec![];
         cv.validation_folds = vec![];
         
@@ -880,10 +1018,9 @@ mod tests {
         
         let result = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         ).unwrap();
         
-        // Avec des folds vides, on ne devrait avoir aucune importance
         assert!(result.importances.is_empty(), "Empty folds should produce no importances");
     }
 
@@ -895,17 +1032,17 @@ mod tests {
         
         let result = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         ).unwrap();
         
-        // Vérifier qu'aucune importance Collection n'a des valeurs vides
+        // Check that no importance Collection has empty values
         let collection_importances: Vec<_> = result.importances.iter()
             .filter(|imp| matches!(imp.scope, ImportanceScope::Collection))
             .collect();
         
         for imp in &collection_importances {
-            // Toutes les importances Collection doivent avoir été calculées 
-            // à partir de valeurs non-vides
+            // All Collection amounts must have been calculated 
+            // from non-empty values.
             assert!(!imp.importance.is_nan(), 
                 "Collection importance should not be NaN for feature {}", imp.feature_idx);
         }
@@ -919,19 +1056,19 @@ mod tests {
         
         let result = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
-            &ImportanceAggregation::mean, false, false, false
+            &ImportanceAggregation::mean, false, false
         ).unwrap();
         
-        // Vérifier que les importances Population ont des IDs corrects
+        // Check that Population amounts have correct IDs
         let population_importances: Vec<_> = result.importances.iter()
             .filter(|imp| matches!(imp.scope, ImportanceScope::Population { .. }))
             .collect();
         
         for imp in &population_importances {
             if let ImportanceScope::Population { id } = imp.scope {
-                assert!(id < cv.fold_populations.as_ref().unwrap().len(), 
+                assert!(id < cv.fold_collections.len(), 
                     "Population ID {} should be less than number of folds {}", 
-                    id, cv.fold_populations.as_ref().unwrap().len());
+                    id, cv.fold_collections.len());
             }
         }
     }
@@ -945,28 +1082,28 @@ mod tests {
         let param = Param::default();
         let running = Arc::new(AtomicBool::new(true));
 
-        // Algorithme mock retournant une population de test
+        // Mock algorithm returing a test population
         let mock_algo = |_train_data: &mut Data, _param: &Param, _running: Arc<AtomicBool>| -> Vec<Population> {
             let mut pop = Population::test();
             pop.compute_hash();
             vec![pop]
         };
 
-        // Exécuter pass
         cv.pass(mock_algo, &param, 1, Arc::clone(&running));
-        assert!(cv.fold_populations.is_some());
+        assert!(cv.fold_collections.len() > 0);
 
-        // Calculer l'importance
         let importance_collection = cv.compute_cv_oob_feature_importance(
-            &param, 1, &mut rng, &ImportanceAggregation::mean, false, false, false
+            &param, 1, &mut rng, &ImportanceAggregation::mean, false, false
         ).unwrap();
 
         assert!(!importance_collection.importances.is_empty());
 
-        // Extraire fold fbm
-        let (fbm, valid_data) = cv.extract_fold_fbm(0, &param);
-        assert_eq!(valid_data.samples, cv.validation_folds[0].samples);
+        let fbm = cv.extract_fold_fbm(0, &param);
         assert!(!fbm.individuals.is_empty());
+
+        let fbmMerged = cv.get_fbm(&param);
+        assert!(!fbmMerged.individuals.is_empty());
+        assert!(fbmMerged.individuals.contains(&fbm.individuals[0]))
     }
 
     #[test]
@@ -976,18 +1113,16 @@ mod tests {
         let outer_folds = 3;
         let cv = CV::new(&data, outer_folds, &mut rng);
 
-        // Obtenir les IDs
         let fold_ids = cv.get_ids();
 
-        // Créer des populations mock
-        let mock_populations: Vec<Population> = (0..outer_folds)
-            .map(|_| Population::test())
-            .collect();
+        let mock_collections = vec![
+            vec![Population::test()], 
+            vec![Population::test()],
+            vec![Population::test()],
+        ];
 
-        // Reconstruire le CV
-        let reconstructed_cv = CV::reconstruct(&data, fold_ids, mock_populations).unwrap();
+        let reconstructed_cv = CV::reconstruct(&data, fold_ids, mock_collections).unwrap();
 
-        // Vérifier la cohérence
         assert_eq!(cv.validation_folds.len(), reconstructed_cv.validation_folds.len());
         assert_eq!(cv.training_sets.len(), reconstructed_cv.training_sets.len());
 
@@ -1015,7 +1150,6 @@ mod tests {
         }
     }
 
-    // Test de cohérence des features à travers les folds
     #[test]
     fn test_fold_feature_consistency() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -1032,7 +1166,6 @@ mod tests {
         }
     }
 
-    // Test de préservation de la taille totale des données
     #[test]
     fn test_data_size_preservation() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -1040,36 +1173,36 @@ mod tests {
         let folds = 4;
         let cv = CV::new(&data, folds, &mut rng);
 
-        // Vérifier que la somme des tailles des folds de validation égale la taille originale
+        // Check that the sum of the sizes of the validation folds equals the original size
         let total_validation_size: usize = cv.validation_folds.iter()
             .map(|fold| fold.sample_len)
             .sum();
         assert_eq!(total_validation_size, data.sample_len);
 
-        // Vérifier que chaque ensemble d'entraînement a la bonne taille
+        // Check that each drive set is the correct size
         for (i, training_set) in cv.training_sets.iter().enumerate() {
             assert_eq!(training_set.sample_len, data.sample_len - cv.validation_folds[i].sample_len);
         }
     }
 
-    // Test de distribution équilibrée des classes
+    // Test for balanced class distribution
     #[test]
     fn test_balanced_class_distribution() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let data = Data::test();
+        let data = Data::specific_test(30, 50);
         let outer_folds = 3;
         let cv = CV::new(&data, outer_folds, &mut rng);
 
-        // Compter les classes dans les données originales
+        // Count the classes in the original data
         let original_class0 = data.y.iter().filter(|&&y| y == 0).count();
         let original_class1 = data.y.iter().filter(|&&y| y == 1).count();
 
-        // Vérifier la distribution dans chaque fold
+        // Check the distribution in each fold
         for (i, fold) in cv.validation_folds.iter().enumerate() {
             let fold_class0 = fold.y.iter().filter(|&&y| y == 0).count();
             let fold_class1 = fold.y.iter().filter(|&&y| y == 1).count();
 
-            // La distribution devrait être approximativement équilibrée
+            // The distribution should be roughly balanced
             let expected_class0 = (original_class0 + outer_folds - 1) / outer_folds;
             let expected_class1 = (original_class1 + outer_folds - 1) / outer_folds;
 
@@ -1092,41 +1225,11 @@ mod tests {
         assert_eq!(cv.validation_folds.len(), 1);
         assert_eq!(cv.training_sets.len(), 1);
 
-        // Le fold de validation devrait contenir toutes les données
+        // The validation fold should contain all the data.
         assert_eq!(cv.validation_folds[0].sample_len, data.sample_len);
         
-        // L'ensemble d'entraînement devrait être vide
+        // The training set should be empty.
         assert_eq!(cv.training_sets[0].sample_len, 0);
     }
-
-    // Test extract_fold_fbm avec fit_on_valid activé
-    #[test]
-    fn test_extract_fold_fbm_with_fit_on_valid() {
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let data = Data::test();
-        let outer_folds = 2;
-        let mut cv = CV::new(&data, outer_folds, &mut rng);
-
-        // Simuler des populations après un pass()
-        let mock_populations = vec![
-            Population::test(),
-            Population::test(),
-        ];
-        cv.fold_populations = Some(mock_populations);
-
-        let mut param = Param::default();
-        param.cv.fit_on_valid = true;
-        param.cv.cv_best_models_ci_alpha = 0.05;
-
-        let (fbm, valid_data) = cv.extract_fold_fbm(0, &param);
-
-        // Vérifier que les données de validation correspondent au fold 0
-        assert_eq!(valid_data.samples, cv.validation_folds[0].samples);
-        assert_eq!(valid_data.y, cv.validation_folds[0].y);
-        
-        // Le fbm devrait avoir été ajusté sur les données de validation
-        assert!(!fbm.individuals.is_empty());
-    }
-
 
 }

@@ -425,15 +425,15 @@ impl Data {
         
         let mut class_0_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 0).collect();
         let mut class_1_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 1).collect();
-        if param.data.features_maximal_number_per_class != 0 && class_0_features.len() < param.data.features_maximal_number_per_class {
+        if param.data.feature_maximal_number_per_class != 0 && class_0_features.len() < param.data.feature_maximal_number_per_class {
             warn!("Class {:?} has only {} significant features based on required threshold ! All features kept for this class.", self.classes[0], class_0_features.len());
-        } else if  param.data.features_maximal_number_per_class != 0 && class_0_features.len() >=  param.data.features_maximal_number_per_class {
-            class_0_features.truncate(param.data.features_maximal_number_per_class);
+        } else if  param.data.feature_maximal_number_per_class != 0 && class_0_features.len() >=  param.data.feature_maximal_number_per_class {
+            class_0_features.truncate(param.data.feature_maximal_number_per_class);
         } 
-        if param.data.features_maximal_number_per_class != 0 && class_1_features.len() < param.data.features_maximal_number_per_class {
+        if param.data.feature_maximal_number_per_class != 0 && class_1_features.len() < param.data.feature_maximal_number_per_class {
             warn!("Class {:?} has only {} significant features based on required threshold ! All features kept for this class.", self.classes[1], class_1_features.len());
-        } else if  param.data.features_maximal_number_per_class != 0 && class_1_features.len() >=  param.data.features_maximal_number_per_class {
-            class_1_features.truncate(param.data.features_maximal_number_per_class);
+        } else if  param.data.feature_maximal_number_per_class != 0 && class_1_features.len() >=  param.data.feature_maximal_number_per_class {
+            class_1_features.truncate(param.data.feature_maximal_number_per_class);
         }
 
         (class_0_features, class_1_features)
@@ -947,7 +947,7 @@ mod tests {
         let mut data = Data::new();
         let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv");
         let mut param = param::get("param.yaml".to_string()).unwrap();
-        param.data.features_maximal_number_per_class = 0;
+        param.data.feature_maximal_number_per_class = 0;
 
         // Test with Bayesian Fisher
         param.data.feature_selection_method = "bayesian_fisher".to_string();
@@ -958,14 +958,14 @@ mod tests {
         assert_eq!(data.feature_selection.len(), 316, "The bayesian method should identify 316 significant features for feature_minimal_log_abs_bayes_factor=2");
         
         // Test reduced number
-        param.data.features_maximal_number_per_class = 1;
+        param.data.feature_maximal_number_per_class = 1;
         data.select_features(&param);
         assert_eq!(data.feature_selection.len(), 2, "Incorrect number of selected features : select only one feature per class should lead to 2 selected features");
         assert_eq!(data.feature_selection, vec![473, 1313], "Incorrect selected features : the result differs from the past and from the original script result.");
 
         // Test with Studentt
         param.data.feature_selection_method = "studentt".to_string();
-        param.data.features_maximal_number_per_class = 0;
+        param.data.feature_maximal_number_per_class = 0;
         param.data.feature_maximal_pvalue = 0.05;
         param.data.feature_minimal_feature_value = 0.0001;
         param.data.feature_minimal_prevalence_pct = 0.0;
@@ -975,7 +975,7 @@ mod tests {
 
         // Test with Wilcoxon
         param.data.feature_selection_method = "wilcoxon".to_string();
-        param.data.features_maximal_number_per_class = 0;
+        param.data.feature_maximal_number_per_class = 0;
         param.data.feature_maximal_pvalue = 0.05;
         param.data.feature_minimal_feature_value = 0.0001;
         param.data.feature_minimal_prevalence_pct = 0.0;
