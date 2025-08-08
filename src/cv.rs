@@ -233,7 +233,7 @@ impl CV {
             let scope_pct = fold_count as f64 / self.fold_collections.len() as f64;
             
             let collection_importance = Importance {
-                importance_type: ImportanceType::OOB,
+                importance_type: ImportanceType::MDA,
                 feature_idx,
                 scope: ImportanceScope::Collection,
                 aggreg_method: Some(aggregation_method.clone()),

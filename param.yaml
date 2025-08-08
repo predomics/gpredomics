@@ -11,13 +11,13 @@ general:
   fit: auc                                    # possible values are auc,specificity,sensitivity (classification), see README.md for details
   k_penalty: 0.0001                           # this penalty is deduced from fit function multiplied by k, the number of variables used in the model
   fr_penalty: 0.0                             # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
-  nb_best_model_to_test: 30                   # nb of models to test in the last generation (default to 10, 0 means all models)
+  n_model_to_display: 30                      # n models to display in the last generation (default to 10, 0 means all models)
   #log_base: ""                               # uncomment to print log and results in log_file_name
-  log_level: debug                            # possible values are trace, debug, info, warning or error 
+  log_level: info                             # possible values are trace, debug, info, warning or error 
   display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
   display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
-  keep_trace: false                           # keep this setting to false when using gpredomics as a binary
-  #save_exp: exp.mp                           # uncomment to save experiment in save_exp, which can be reloaded with --load save_exp. Extention should be .json, .mp/.msgpack or .bin
+  keep_trace: false                            # keep this setting to false when using gpredomics as a binary
+  #save_exp: exp.mp                           # uncomment to save experiment in timestamp-save_exp, which can be reloaded with --load timestamp-save_exp. Extention should be .json, .mp/.msgpack or .bin
 
 data:
   X: "samples/Qin2014/Xtrain.tsv"             # the features of the train data set 
@@ -37,7 +37,7 @@ data:
     - "unknown"
 
 cv:
-  inner_folds: 10                             # number of folds used to penalize overfit (fit = fit on folds - sd(fit on folds) * overfit_penalty) if overfit_penalty > 0
+  inner_folds: 5                              # number of folds used to penalize overfit (fit = fit on k-1 - delta with last fold * overfit_penalty) if overfit_penalty > 0
   overfit_penalty: 0                          # this penalty is deduced from fit function
   outer_folds: 5                              # number of folds used for cross-validation (launch algorithm on each k-1 folds then merge Families of Best Models).
   fit_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
@@ -45,7 +45,7 @@ cv:
 
 importance:
   compute_importance: false                   # should importance be computed ?  
-  n_permutations_oob: 500                     # number of permutations per feature for OOB importance.
+  n_permutations_oob: 100                     # number of permutations per feature for OOB importance.
   scaled_importance: true                     # scale importance by feature prevalence inside folds.
   importance_aggregation: mean                # aggregation method for importances: "mean" or "median".   
 
@@ -55,7 +55,9 @@ voting:
   min_perf: 0.5                               # required sensitivity AND specificity to be judge ; >=0.5 avoid "single-choice oriented" judges 
   min_diversity: 10                           # required diversity between judges
   method: Majority                            # Majority: class 1 if > threshold, else class 0 (if = no classification) VS Consensus: non-classification (rejection) if the threshold is not reached
-  method_threshold: 0.5                       # typically 0.5 for majority (for equal distribution | if set to 0, optimisation via Youden's maximum) and typically 1 for consensus, classifing samples on which all judges agree
+  method_threshold: 0.5                       # typically 0.5 for majority (for equal distribution | if set to 0, optimisation via Youden's maximum) and typically 1 for consensus, classifing samples on which all experts agree
+  threshold_windows_pct: 5                    # majority only: if provided, samples with votes within threshold±threshold_windows_pct% (absolute) are not classified (ex: 10% -> votes in the intervals [40% ; 60%] are unclassified)
+  complete_display: false                     # if true, display complete results
 
 ga:
   population_size: 5000                       # the target number of models per generation (NB the real number may be below because of clone removal) 
@@ -66,14 +68,14 @@ ga:
   kmax: 200                                   # the maximum number of variables used in the initial population (setting to 0 will remove any maximum) 
   select_elite_pct: 2                         # the % of best models of previous generation retained: the lower the figure the more elitist you are
   select_niche_pct: 20                        # (optional default to 0) the % of best models of previous generation retained but split per language / data type (enable to maintain competition between language/data types)
-  select_random_pct: 2                        # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
+  select_random_pct: 10                       # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
   mutated_children_pct: 80                    # the % of children submitted to mutation
   mutated_features_pct: 20                    # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
   mutation_non_null_chance_pct: 20            # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
-  forced_diversity_pct: 5                     # if >0, population is filtered every mean_population_k according to this value
-  random_samples: 0                           # if >0, each generation is only fitted on n random samples reducing overfitting
-  max_age_randomized_samples: 30000           # if random_samples>0, the number of epoch during a same randomized dataset is kept 
-  n_epochs_before_global: 20                  # if random_samples>0, the population is fit on all data every n epochs
+  forced_diversity_pct: 0                     # if >0%, population is filtered every forced_diversity_epochs according to this value. A feature is considered different if it is present WITH SUCH A SIGN in individual A but not in B.
+  forced_diversity_epochs : 10                # if forced_diversity_pct > 0%, the epoch gap between two diversity filters
+  random_sampling_pct: 0                      # if >0%, each generation is only fitted on a % of random samples reducing overfitting
+  random_sampling_epochs: 0                   # if random_samples>0, the number of epoch during a same randomized dataset is kept 
 
 beam:
   method: combinatorial                       # combinatorial: generate all combinations (k out of features_to_keep). incremental: increment each extendable_models of each 1 feature from features_to_keep.

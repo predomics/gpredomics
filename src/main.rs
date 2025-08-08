@@ -1,9 +1,8 @@
-use log::{info, error, warn};
+use log::{info, error};
 use gpredomics::{param, run_ga, run_beam, run_mcmc};
-use gpredomics::experiment::Court;
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
-use gpredomics::experiment::{Experiment, ExperimentMetadata, WeightingMethod};
+use gpredomics::experiment::Experiment;
 use clap::Parser;
 use std::env;
 
@@ -155,39 +154,14 @@ fn main() {
 
     // Voting
     if param.voting.vote {
-        let mut court;
-        let mut voting_pop;
-        if param.voting.use_fbm {
-            voting_pop = exp.final_population.clone().unwrap().select_best_population(0.05);
-        } else {
-            voting_pop = exp.final_population.clone().unwrap();
-        }
-        voting_pop.compute_all_metrics(&exp.train_data, &exp.parameters.general.fit);
-        if exp.parameters.voting.specialized {
-            voting_pop.compute_all_metrics(&exp.train_data, &exp.parameters.general.fit);
-            court = Court::new(&voting_pop, &exp.parameters.voting.min_perf, &exp.parameters.voting.min_diversity, &exp.parameters.voting.method, &exp.parameters.voting.method_threshold,
-                &WeightingMethod::Specialized {sensitivity_threshold: exp.parameters.voting.specialized_pos_threshold, specificity_threshold: exp.parameters.voting.specialized_neg_threshold},
-            );
-        } else {
-            court = Court::new(&voting_pop, &exp.parameters.voting.min_perf, &exp.parameters.voting.min_diversity, &exp.parameters.voting.method, &exp.parameters.voting.method_threshold, 
-                &WeightingMethod::Uniform,
-            );
-        }
-        if court.judges.individuals.len() > 1 {
-            court.evaluate(&exp.train_data);
-            court.display(&exp.train_data, exp.test_data.as_ref(), &exp.parameters.clone());
-            exp.others = Some(ExperimentMetadata::Court { court: court })
-        } else {
-            warn!("An informative vote is requiring more than one judge!")
-        }
-        
+        exp.compute_voting();
     } else {
         info!("Voting stage ignored (disabled in parameters)");
     }
-    
+
     if param.general.save_exp != "".to_string() {
         info!("Saving experiment...");
-        exp.save_auto(&param.general.save_exp).expect("Error while exporting experiment");
+        exp.save_auto(format!("{}_{}", timestamp, &param.general.save_exp)).expect("Error while exporting experiment");
     }
 
     logger.flush();

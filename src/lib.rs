@@ -21,7 +21,6 @@ use rand_chacha::ChaCha8Rng;
 use chrono::Local;
 use rand::prelude::*;
 use param::Param;
-use std::collections::{HashSet, HashMap};
 
 use log::{debug, info, warn, error};
 
@@ -203,7 +202,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         info!("\x1b[1;93mDisplaying Family of best models across folds\x1b[0m");
     } else {
         collections = vec![ga::ga(&mut data, &mut None, &param, running)];
-        final_population = collections[0][collections.len()-1].clone();
+        final_population = collections[0][collections[0].len()-1].clone();
     }
 
     // Loading test data
@@ -225,7 +224,6 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         id: format!("{}_ga_{}", param.general.save_exp.split('.').next().unwrap(), timestamp).to_string(),
         gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
         timestamp: timestamp,
-        algorithm: param.general.algo.clone(),
 
         train_data: data,
         test_data: Some(test_data),
@@ -242,6 +240,100 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     }
 
 }
+
+// pub fn run_mixed(param: &Param, running: Arc<AtomicBool>) -> Experiment {
+//     let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+//     let start = std::time::Instant::now();
+
+//     info!("Genetic algorithm\n-----------------------------------------------------");
+
+//     let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+//     let mut run_param = param.clone();
+    
+//     // Load train data
+//     let mut data = Data::new();
+//     let _ = data.load_data(&run_param.data.X.to_string(), &run_param.data.y.to_string());
+//     data.set_classes(run_param.data.classes.clone());
+//     if run_param.data.inverse_classes { data.inverse_classes(); }
+//     info!("\x1b[2;97m{:?}\x1b[0m", data);  
+
+//     let collections: Vec<Vec<Population>> ;
+//     let mut final_population: Population;
+//     let mut cv_folds_ids: Option<Vec<(Vec<std::string::String>, Vec<std::string::String>)>> = None;
+
+//     // Computing Experiment
+//     if param.general.cv {
+//         let mut folds = CV::new(&data, run_param.cv.outer_folds, &mut rng);
+//         cv_folds_ids = Some(folds.get_ids());
+
+//         run_param.general.gpu = false;
+//         if run_param.general.thread_number >= param.cv.outer_folds {
+//             run_param.general.thread_number = param.general.thread_number/param.cv.outer_folds; 
+//             info!("\x1b[1;93mCross-validation parallelization using {} threads per fold\x1b[0m", run_param.general.thread_number);
+//         } else {
+//             run_param.general.thread_number = 1; 
+//         }
+
+//         folds.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
+//             ga::ga(d, &mut None, p, r)  
+//         }, &run_param, run_param.general.thread_number, running);
+
+//         final_population = folds.clone().get_fbm(&param);
+//         ga::fit_fn(&mut final_population, &data, &mut None, &None, &None, &run_param);
+//         final_population = final_population.sort();
+
+//         collections = folds.fold_collections;
+
+//         info!("\x1b[1;93mDisplaying Family of best models across folds\x1b[0m");
+//     } else {
+//         paramTinyModels = param.clone()
+//         paramHugeModels = param.clone()
+//         paramTinyModels.general.k_penalty = 0.005
+//         paramHugeModels.general.k_penalty = 0.0001
+
+//         tinyPop = ga::ga(&mut data, &mut None, &paramTinyModels, running)
+//         pop = tinyPop.individuals.extend(ga::ga(&mut data, &mut None, &paramHugeModels, running).individuals)
+//         ga::fit_fn(&mut pop, &data, &mut None, &None, &None, &run_param);
+
+//         collections = vec![];
+//         final_population = collections[0][collections.len()-1].clone();
+//     }
+
+//     // Loading test data
+//     let test_data = if !param.data.Xtest.is_empty() {
+//         debug!("Loading test data...");
+//         let mut td = Data::new();
+//         let _ = td.load_data(&param.data.Xtest, &param.data.ytest);
+//         td.set_classes(param.data.classes.clone());
+//         if param.data.inverse_classes { td.inverse_classes(); }
+//         td
+//     } else {
+//         Data::new()
+//     };
+
+//     info!("{}", final_population.display(&data, Some(&test_data), param));
+
+//     let exec_time = start.elapsed().as_secs_f64();
+//     Experiment {
+//         id: format!("{}_ga_{}", param.general.save_exp.split('.').next().unwrap(), timestamp).to_string(),
+//         gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
+//         timestamp: timestamp,
+
+//         train_data: data,
+//         test_data: Some(test_data),
+
+//         final_population: Some(final_population),
+//         collections: collections,
+        
+//         importance_collection: None,
+//         execution_time: exec_time,
+//         parameters: param.clone(),
+
+//         cv_folds_ids: cv_folds_ids,
+//         others: None
+//     }
+
+//}
 
 pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     let timestamp =  Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
@@ -314,7 +406,6 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         id: format!("{}_beam_{}", param.general.save_exp.split('.').next().unwrap(), timestamp).to_string(),
         gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
         timestamp: timestamp,
-        algorithm: param.general.algo.clone(),
 
         train_data: data,
         test_data: Some(test_data),
@@ -418,7 +509,6 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         id: format!("{}_mcmc_{}_{}", param.general.save_exp.split('.').next().unwrap(), param.general.algo, timestamp).to_string(),
         gpredomics_version: env!("CARGO_PKG_VERSION").to_string(),
         timestamp: timestamp,
-        algorithm: param.general.algo.clone(),
 
         train_data: data,
         test_data: Some(test_data),
