@@ -145,7 +145,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
                 // Something is broke here and can lead to infinite loop like that (same language and data type repeated:)
                 // generated for Ternary Raw...
                 // Some still born are present 83 (with healthy 0) 
-                if target_size>0 { warn!("Some still born are present {} (with healthy {})",target_size,sub_pop.individuals.len());
+                if target_size>0 { debug!("Some still born are present {} (with healthy {})",target_size,sub_pop.individuals.len());
                     if target_size==param.ga.population_size { 
                         error!("Params only create inviable individuals!");
                         panic!("Params only create inviable individuals!") } 
@@ -164,20 +164,20 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         info!("Learning on {:?}-folds.", folds_nb);
         cv = Some(CV::new(&data, folds_nb, &mut rng));
 
-        if param.ga.random_samples > 0 {
+        if param.ga.random_sampling_pct > 0.0 {
             warn!("Randomized sampling is not compatible with inner cross-validation and will then be deactivated. Note that you c")
         }
     }
 
-    if param.ga.random_samples > 0 || param.cv.overfit_penalty > 0.0 {
+    if param.ga.random_sampling_pct > 0.0 || param.cv.overfit_penalty > 0.0 {
         warn!("Randomized samples and overfit penalty are not compatible yet with GPU. CPU will then be used.");
     }
 
-    if param.ga.random_samples > 0 && param.cv.overfit_penalty > 0.0 {
-        panic!("Randomized samples and overfit penalty cannot be used together. If you want to resample the folds of the cross-validation used to penalise overfitting, you can use the parameter max_age_randomized_samples.");
+    if param.ga.random_sampling_pct > 0.0 && param.cv.overfit_penalty > 0.0 {
+        panic!("Randomized samples and overfit penalty cannot be used together. If you want to resample the folds of the cross-validation used to penalise overfitting, you can use the parameter random_sampling_epochs.");
     }
 
-    let gpu_assay = if param.general.gpu && param.ga.random_samples == 0 && param.cv.overfit_penalty == 0.0 {
+    let gpu_assay = if param.general.gpu && param.ga.random_sampling_pct == 0.0 && param.cv.overfit_penalty == 0.0 {
         let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
         let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
         let assay = if gpu_max_nb_models < param.ga.population_size as usize {
@@ -195,12 +195,12 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         None
     };
 
-    let mut evaluation_data = if param.ga.random_samples > 0 {
-        data.subset(data.random_subset(param.ga.random_samples, &mut rng))
+    let mut evaluation_data = if param.ga.random_sampling_pct > 0.0 {
+        let random_samples = (data.sample_len as f64 * (param.ga.random_sampling_pct/100.0)) as usize;
+        data.subset(data.random_subset(random_samples, &mut rng))
     } else {
         data.clone()
     };
-
 
     if let Some(ref cv) = cv {
         debug!("Fitting population on folds...");
@@ -211,20 +211,28 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         fit_fn(&mut pop, &evaluation_data, &mut None, &gpu_assay, &None, param);
     }
 
-    let mut div_epoch = 0;
+    info!("Legend:    [≠ diversity filter]    [↺ resampling]    [\x1b[1m\x1b[31m█\x1b[0m: {}]    [\x1b[1m\x1b[33m█\x1b[0m: penalized fit]",
+        match param.general.fit {
+            FitFunction::sensitivity => {"sensitivity"},
+            FitFunction::specificity => {"specificity"},
+            _ => {"AUC"}
+        });
+
+    info!("{}", "─".repeat(120));
 
     loop {
         epoch += 1;
         debug!("Starting epoch {}", epoch);
         
         let mut current_data = &Data::new();
-        if param.ga.random_samples > 0 {
-            if epoch % param.ga.max_age_randomized_samples == 0 {
-                debug!("Re-sampling...");
-                evaluation_data = data.subset(data.random_subset(param.ga.random_samples, &mut rng))
+        if param.ga.random_sampling_pct > 0.0 {
+            if epoch % param.ga.random_sampling_epochs == 0 {
+                let random_samples = (data.sample_len as f64 * (param.ga.random_sampling_pct/100.0)) as usize;
+                debug!("Re-sampling {} samples...", random_samples);
+                evaluation_data = data.subset(data.random_subset(random_samples, &mut rng))
                 }
 
-            let use_full_dataset = epoch % param.ga.n_epochs_before_global == 0;
+            let use_full_dataset = param.ga.n_epochs_before_global > 0 && epoch % param.ga.n_epochs_before_global == 0;
             current_data = if use_full_dataset {
                 debug!("Using full dataset for evaluation at epoch {}", epoch);
                 &data
@@ -232,17 +240,18 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
                 &evaluation_data
             };
             fit_fn(&mut pop, current_data, &mut None, &gpu_assay, &None, param);
-        } else if param.cv.overfit_penalty > 0.0 && param.ga.max_age_randomized_samples > 0 && epoch % param.ga.max_age_randomized_samples == 0 { 
-            let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 3 };
-            let gpu_assays_per_fold: Vec<Option<GpuAssay>> = vec![None; param.cv.inner_folds];
-            debug!("Re-sampling folds...");
-            cv = Some(CV::new(&data, folds_nb, &mut rng));
-            if let Some(ref cv) = cv {
-                pop.fit_on_folds(cv, &param, &gpu_assays_per_fold); 
-                if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
-            }
+        } 
+        // else if param.cv.overfit_penalty > 0.0 && param.ga.random_sampling_epochs > 0 && epoch % param.ga.random_sampling_epochs == 0 { 
+        //     let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 3 };
+        //     let gpu_assays_per_fold: Vec<Option<GpuAssay>> = vec![None; param.cv.inner_folds];
+        //     debug!("Re-sampling folds...");
+        //     cv = Some(CV::new(&data, folds_nb, &mut rng));
+        //     if let Some(ref cv) = cv {
+        //         pop.fit_on_folds(cv, &param, &gpu_assays_per_fold); 
+        //         if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
+        //     }
 
-        }
+        // }
         
         // we create a new generation
         let mut new_pop = Population::new();
@@ -255,6 +264,8 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         if clone_number>0 { debug!("Some clones were removed : {}.", clone_number) } ;
         
         pop = pop.sort(); 
+
+        // Display information about the generation
         let best_model = &pop.individuals[0];
         let mean_k = pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64;
         debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
@@ -269,7 +280,30 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
             &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
             &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/param.ga.population_size as f64,
             mean_k
-        );
+         );
+
+        let scale = 50;
+        let best_model_pos = match param.general.fit {
+            FitFunction::sensitivity => { ((best_model.sensitivity - 0.5) / 0.5 * scale as f64) as usize},
+            FitFunction::specificity => { ((best_model.specificity - 0.5) / 0.5 * scale as f64) as usize},
+            _ => {((best_model.auc - 0.5) / 0.5 * scale as f64) as usize}};
+
+        let best_fit_pos = ((best_model.fit - 0.5) / 0.5 * scale as f64) as usize;
+        let max_pos = best_model_pos.max(best_fit_pos);
+        let mut bar = vec!["█"; scale]; // White
+        for i in (max_pos + 1)..scale { bar[i] = "\x1b[0m▒\x1b[0m"}; // Gray
+        if best_model_pos < scale {  bar[best_model_pos] = "\x1b[1m\x1b[31m█\x1b[0m"} // Red
+        if best_fit_pos < scale {bar[best_fit_pos] = "\x1b[1m\x1b[33m█\x1b[0m"} // Orange
+        let output: String = bar.concat();
+        let mut special_epoch = "".to_string();
+        if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
+            special_epoch = format!("{}≠", special_epoch);
+        };
+        if param.ga.random_sampling_pct > 0.0 && epoch % param.ga.random_sampling_epochs == 0 {
+            special_epoch = format!("{}↺", special_epoch);
+        };
+
+        info!("#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0.5\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, epoch-best_model.epoch);
 
         let mut need_to_break= false;
         if epoch>=param.ga.min_epochs {
@@ -299,8 +333,8 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         // Creating new generation
         new_pop.add(select_parents(&pop, param, &mut rng));
 
-        if param.ga.forced_diversity_pct != 0.0 && epoch % mean_k as usize == 0 && epoch < div_epoch + 10 {
-            div_epoch = epoch;
+        // Filter before cross-over to improve diversity 
+        if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
             let n = new_pop.individuals.len();
             new_pop = new_pop.filter_by_signed_jaccard_dissimilarity(param.ga.forced_diversity_pct, param.ga.select_niche_pct == 0.0);
             if new_pop.individuals.len() > 1 {
@@ -310,17 +344,13 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
             }
         }
 
-        // if epoch > 20 {
-        //     debug!("Parents filtered for efficiency: {} parents removed", remove_inefficient(&mut new_pop) as usize);
-        // }
-
         let mut children_to_create = param.ga.population_size as usize-new_pop.individuals.len();
         let mut children=Population::new();
         while children_to_create > 0 {
             let mut some_children = cross_over(&new_pop,data.feature_len, children_to_create, &mut rng);
             mutate(&mut some_children, param, &data.feature_selection, &mut rng);
             children_to_create = remove_stillborn(&mut some_children) as usize;
-            if children_to_create > 0 { warn!("Some stillborn are presents: {}", children_to_create) }
+            if children_to_create > 0 { debug!("Some stillborn are presents: {}", children_to_create) }
 
             children.add(some_children);
         }
@@ -330,7 +360,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
             children.fit_on_folds(cv, &param,  &vec![None; param.cv.inner_folds]);
         }  else {
             debug!("Fitting population...");
-            if param.ga.random_samples > 0 {
+            if param.ga.random_sampling_pct > 0.0 {
                 fit_fn(&mut children, current_data, &mut None, &gpu_assay, &None, param);
             } else {
                 fit_fn(&mut children, data, &mut None, &gpu_assay, &None, param);
@@ -352,10 +382,12 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
 
     }
 
-    if param.ga.random_samples > 0 || param.cv.overfit_penalty > 0.0 {
-        if let Some(mut last_population) = populations.last_mut() {
-            fit_fn(&mut last_population, &data, &mut None, &gpu_assay, &None, param);
-            *last_population = last_population.clone().sort();
+    if param.ga.random_sampling_pct > 0.0 {
+        if let Some(last_population) = populations.last_mut() {
+            warn!("Random sampling: keeping last fit but computing metrics on all data...");
+            last_population.compute_all_metrics(&data, &param.general.fit);
+            //fit_fn(&mut last_population, &data, &mut None, &gpu_assay, &None, param);
+            //*last_population = last_population.clone().sort();
         }
     }
 
