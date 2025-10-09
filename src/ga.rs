@@ -4,12 +4,11 @@ use crate::individual::{self, RATIO_LANG, TERNARY_LANG};
 use crate::individual::Individual;
 use crate::param::{Param, FitFunction};
 use crate::gpu::GpuAssay;
-use crate::utils::{compute_roc_and_metrics_from_value, compute_auc_from_value, compute_mcc_and_metrics_from_value};
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use rand::seq::index::sample;
 use rand::prelude::*;
-use rand_chacha::ChaCha8Rng;
+use rand_chacha::{ChaCha8Rng, ChaChaRng};
 use log::{debug,info,warn,error};
 use std::cmp::min;
 use std::collections::HashMap;
@@ -21,92 +20,6 @@ use crate::cv::CV;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
-pub fn fit_fn(pop: &mut Population, data: &Data, _test_data: &mut Option<Data>, gpu_assay: &Option<GpuAssay>, _test_assay: &Option<GpuAssay>, param: &Param) {
-    if let Some(assay)=gpu_assay {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(param.general.thread_number)
-            .build()
-            .unwrap();
-        let scores:Vec<f64> = assay.compute_scores(&pop.individuals, param.general.data_type_epsilon as f32)
-            .into_iter().map(|x| {x as f64}).collect();
-        match param.general.fit {
-            FitFunction::auc => {
-                pool.install(|| {
-                    pop.individuals
-                        .par_iter_mut()
-                        .enumerate()
-                        .for_each(|(n,i)| {
-                            if param.general.keep_trace {
-                                (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, None);
-                            } else {
-                                i.auc = compute_auc_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);}
-                            i.fit = i.auc - i.k as f64 * param.general.k_penalty;
-                        });
-                });
-            },
-            FitFunction::sensitivity => {
-                pool.install(|| {
-                    pop.individuals
-                        .par_iter_mut()
-                        .enumerate()
-                        .for_each(|(n,i)| {
-                            let objective;
-                            if param.general.keep_trace {
-                                (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![param.general.fr_penalty, 1.0]));
-                            } else {
-                                objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, param.general.fr_penalty, 1.0)
-                            }
-                            i.fit = objective - i.k as f64 * param.general.k_penalty;
-                        });
-                });
-            },
-            FitFunction::specificity => {
-                pool.install(|| {
-                    pop.individuals
-                        .par_iter_mut()
-                        .enumerate()
-                        .for_each(|(n,i)| {
-                            let objective;
-                            if param.general.keep_trace {
-                                (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = compute_roc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y, Some(&vec![1.0, param.general.fr_penalty]));
-                            } else {
-                                objective = i.maximize_objective_with_scores(&scores[n*data.sample_len..(n+1)*data.sample_len], &data, 1.0, param.general.fr_penalty)
-                            }
-                            i.fit =  objective - i.k as f64 * param.general.k_penalty;
-                        });
-                });
-            },
-            FitFunction::mcc => {
-                pool.install(|| {
-                    pop.individuals
-                        .par_iter_mut()
-                        .enumerate()
-                        .for_each(|(n,i)| {
-                            (i.fit, i.threshold, i.accuracy, i.sensitivity, i.specificity) = compute_mcc_and_metrics_from_value(&scores[n*data.sample_len..(n+1)*data.sample_len], &data.y);
-                            if i.sensitivity < 0.5 { i.fit = i.fit - (1.0 - i.sensitivity) * param.general.fr_penalty } 
-                            if i.specificity < 0.5 { i.fit = i.fit - (1.0 - i.specificity) * param.general.fr_penalty } 
-                            i.fit = i.fit - i.k as f64 * param.general.k_penalty;
-                        })})}}
-    } else {
-        match param.general.fit {
-            FitFunction::auc => {
-                pop.auc_fit(data, param.general.k_penalty, param.general.thread_number, param.general.keep_trace);
-            },
-            FitFunction::sensitivity => {
-                pop.objective_fit(data, param.general.fr_penalty,1.0,param.general.k_penalty,
-                    param.general.thread_number, param.general.keep_trace);
-            },
-            FitFunction::specificity => {
-                pop.objective_fit(data, 1.0,param.general.fr_penalty,param.general.k_penalty,
-                    param.general.thread_number, param.general.keep_trace);
-            },
-            FitFunction::mcc => {
-                pop.mcc_fit(data, param.general.k_penalty, param.general.fr_penalty,param.general.thread_number);
-            },
-        } 
-    }
-}
 
 pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {   
     let time = Instant::now();
@@ -138,7 +51,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
                     *language,
                     *data_type,
                     param.general.data_type_epsilon,
-                    data, &mut rng);
+                    data, param.experimental.threshold_ci, &mut rng);
                 debug!("generated for {} {}...",sub_pop.individuals[0].get_language(),sub_pop.individuals[0].get_data_type());
             
                 target_size = remove_stillborn(&mut sub_pop);
@@ -208,7 +121,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
     } else {
         debug!("Fitting population...");
-        fit_fn(&mut pop, &evaluation_data, &mut None, &gpu_assay, &None, param);
+        pop.fit(&evaluation_data, &mut None, &gpu_assay, &None, param);
     }
 
     info!("Legend:    [≠ diversity filter]    [↺ resampling]    [\x1b[1m\x1b[31m█\x1b[0m: {}]    [\x1b[1m\x1b[33m█\x1b[0m: penalized fit]",
@@ -239,7 +152,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
             } else {
                 &evaluation_data
             };
-            fit_fn(&mut pop, current_data, &mut None, &gpu_assay, &None, param);
+            pop.fit(current_data, &mut None, &gpu_assay, &None, param);
         } 
         // else if param.cv.overfit_penalty > 0.0 && param.ga.random_sampling_epochs > 0 && epoch % param.ga.random_sampling_epochs == 0 { 
         //     let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 3 };
@@ -361,9 +274,9 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         }  else {
             debug!("Fitting population...");
             if param.ga.random_sampling_pct > 0.0 {
-                fit_fn(&mut children, current_data, &mut None, &gpu_assay, &None, param);
+                children.fit(current_data, &mut None, &gpu_assay, &None, param);
             } else {
-                fit_fn(&mut children, data, &mut None, &gpu_assay, &None, param);
+                children.fit(data, &mut None, &gpu_assay, &None, param);
             }       
         }
         
@@ -386,7 +299,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         if let Some(last_population) = populations.last_mut() {
             warn!("Random sampling: keeping last fit but computing metrics on all data...");
             last_population.compute_all_metrics(&data, &param.general.fit);
-            //fit_fn(&mut last_population, &data, &mut None, &gpu_assay, &None, param);
+            //fit(&mut last_population, &data, &mut None, &gpu_assay, &None, param);
             //*last_population = last_population.clone().sort();
         }
     }
@@ -734,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fit_fn_no_overfit_penalty() {
+    fn test_fit_no_overfit_penalty() {
         let mut pop = create_test_population();
         let mut data=  create_test_data_disc();
         let mut param = param::get("param.yaml".to_string()).unwrap();
@@ -752,18 +665,18 @@ mod tests {
             param.general.fit = fit_method.clone();
             // gpu = false
             param.general.keep_trace = true;
-            fit_fn(&mut pop, &mut data, &mut None, &None, &mut None, &param);
+            fit(&mut pop, &mut data, &mut None, &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             param.general.keep_trace = false;
-            fit_fn(&mut pop, &mut data, &mut None, &None, &mut None, &param);
+            fit(&mut pop, &mut data, &mut None, &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             // gpu = true
             let gpu_assay = Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, pop.individuals.len() as usize, &param.gpu));
             param.general.keep_trace = true;
-            fit_fn(&mut pop, &mut data, &mut None, &gpu_assay, &mut None, &param);
+            fit(&mut pop, &mut data, &mut None, &gpu_assay, &mut None, &param);
             populations.push(pop.individuals.clone());
             param.general.keep_trace = false;
-            fit_fn(&mut pop, &mut data, &mut None, &gpu_assay, &mut None, &param);
+            fit(&mut pop, &mut data, &mut None, &gpu_assay, &mut None, &param);
             populations.push(pop.individuals.clone());
             
             for p in 1..populations.len() {
@@ -780,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fit_fn_overfit_penalty() {
+    fn test_fit_overfit_penalty() {
         let mut pop = create_test_population();
         
         let mut data=  create_test_data_disc();
@@ -801,19 +714,19 @@ mod tests {
             param.general.fit = fit_method.clone();
             // gpu = false
             param.general.keep_trace = true;
-            fit_fn(&mut pop, &mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
+            fit(&mut pop, &mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             param.general.keep_trace = false;
-            fit_fn(&mut pop, &mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
+            fit(&mut pop, &mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             // gpu = true
             let gpu_assay = Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, pop.individuals.len() as usize, &param.gpu));
             let test_assay = Some(GpuAssay::new(&test_data.X, &test_data.feature_selection, test_data.sample_len, pop.individuals.len() as usize, &param.gpu));
             param.general.keep_trace = true;
-            fit_fn(&mut pop, &mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
+            fit(&mut pop, &mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
             populations.push(pop.individuals.clone());
             param.general.keep_trace = false;
-            fit_fn(&mut pop, &mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
+            fit(&mut pop, &mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
             populations.push(pop.individuals.clone());
             
             for p in 1..populations.len() {

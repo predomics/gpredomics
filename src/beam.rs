@@ -1,7 +1,7 @@
 // BE CAREFUL : the adaptation of the Predomics beam algorithm for Gpredomics is still under development
 use crate::cv::CV;
-use crate::ga;
 use crate::gpu::GpuAssay;
+use crate::individual::ThresholdCI;
 use crate::individual::BINARY_LANG;
 use crate::individual::RATIO_LANG;
 use crate::individual::TERNARY_LANG;
@@ -184,6 +184,7 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
         sensitivity: 0.0,
         accuracy: 0.0,
         threshold: 0.0,
+        threshold_ci: if param.experimental.threshold_ci { Some(ThresholdCI { lower: 0.0, upper: 0.0, rejection_rate: 0.0 }) } else { None },
         k: features.len(),
         epoch: 0,
         language: language,
@@ -281,7 +282,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
         if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
     }  else {
         debug!("Fitting population...");
-        ga::fit_fn(&mut pop, data, &mut None, &gpu_assay, &test_assay, param);
+        pop.fit(data, &mut None, &gpu_assay, &test_assay, param);
     }
 
     pop = pop.sort();
@@ -442,7 +443,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
                 if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
             }  else {
                 debug!("Fitting population...");
-                ga::fit_fn(&mut pop, data, &mut None, &gpu_assay, &test_assay, param);
+                pop.fit(data, &mut None, &gpu_assay, &test_assay, param);
             }
 
             debug!("Sorting population...");

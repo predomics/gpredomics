@@ -95,3 +95,9 @@ gpu:
   memory_policy: Strict                       # [Strict: panic if below limits are not available | Adaptive: adjusts below limits if not available | Performance: uses all the available GPU memory regardless of below limits
   max_total_memory_mb: 256                    # limit in mb defining the maximum amount of GPU memory used by all buffers
   max_buffer_size_mb: 128                     # limit in mb defining the maximum amount of GPU memory used by one buffer
+
+experimental:
+  threshold_ci: false                         # if true, each Individual has a rejection rate around its threshold based on bootstraps
+  threshold_ci_penalty: 0.5                   # penalize ga evolution according to rejection_rate*penalty
+  threshold_ci_alpha: 0.05                    # alpha to construct the CI around the threshold       
+  threshold_ci_n_bootstrap: 2000              # number of boostrap 

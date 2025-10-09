@@ -264,7 +264,7 @@ impl Experiment {
                 .expect("CV reconstruction failed.");
             let mut fbm = cv.get_fbm(&self.parameters);
 
-            ga::fit_fn(&mut fbm, &self.train_data, &mut None, &None, &None, &self.parameters);
+            fbm.fit(&self.train_data, &mut None, &None, &None, &self.parameters);
             fbm = fbm.sort();
 
             fbm.compute_hash();

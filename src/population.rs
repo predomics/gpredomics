@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use crate::param::{FitFunction};
 use crate::experiment::ImportanceAggregation;
-use crate::utils::{conf_inter_binomial, compute_roc_and_metrics_from_value, compute_auc_from_value, compute_metrics_from_classes};
+use crate::utils::{conf_inter_binomial, compute_roc_and_metrics_from_value, compute_auc_from_value, compute_metrics_from_classes, compute_mcc_and_metrics_from_value, compute_threshold_and_metrics_with_bootstrap};
 use crate::cv::CV;
 use crate::data::Data;
 use crate::individual::Individual;
@@ -16,9 +16,9 @@ use std::collections::{HashMap, HashSet};
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use crate::utils::{mean_and_std, median, mad};
 use crate::gpu::GpuAssay;
-use crate::ga;
 use log::{warn};
 use crate::utils;
+use rand::SeedableRng;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Population {
@@ -105,7 +105,7 @@ impl Population {
 
                     for individual in &self.individuals {
                         let test_auc = individual.compute_new_auc(data_to_test);
-                        let (test_acc, test_sens, test_spec) = individual.compute_metrics(data_to_test);
+                        let (test_acc, test_sens, test_spec, test_rej) = individual.compute_metrics(data_to_test);
                         
                         test_aucs.push(test_auc);
                         test_accuracies.push(test_acc);
@@ -139,16 +139,16 @@ impl Population {
                         FitFunction::sensitivity =>  {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![param.general.fr_penalty, 1.0]));},
                         FitFunction::specificity => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, Some(&vec![1.0, param.general.fr_penalty]));},
                         FitFunction::auc => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, None);},
-                        FitFunction::mcc => {(_, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_mcc_and_metrics(data);}
+                        FitFunction::ExperimentalMcc => {(_, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity) = self.individuals[i].compute_mcc_and_metrics(data);}
                     }
                 }
                 if param.general.display_colorful == true && param.general.log_base == "" {
-                    str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
+                    str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful, param.experimental.threshold_ci_alpha));
                 } else if param.general.display_colorful == false && param.general.log_base == "" {
-                    str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful));
+                    str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful, param.experimental.threshold_ci_alpha));
                 } else {
                     // avoid ASCII symbols and newlines in log file
-                    str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, false));
+                    str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, false, param.experimental.threshold_ci_alpha));
                 }
             }
         return str
@@ -186,120 +186,86 @@ impl Population {
         clone_number
     }
     
-
-    pub fn auc_fit(&mut self, data: &Data, k_penalty: f64, thread_number: usize, compute_metrics: bool) {
-        // Create a custom thread pool with 4 threads
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(thread_number)
-            .build()
-            .unwrap();
-
-        // Use the custom thread pool for parallel processing
+    pub fn fit(&mut self, data: &Data, _test_data: &mut Option<Data>, gpu_assay: &Option<GpuAssay>, _test_assay: &Option<GpuAssay>, param: &Param) {
+        let pool = ThreadPoolBuilder::new().num_threads(param.general.thread_number).build().unwrap();
+        let mut all_scores: Vec<f64> = vec![]; 
+        if let Some(assay) = gpu_assay {
+            all_scores = assay.compute_scores(&self.individuals, param.general.data_type_epsilon as f32).into_iter().map(|x| {x as f64}).collect();
+        } 
         pool.install(|| {
             self.individuals
-                .par_iter_mut()
-                .for_each(|i| {
-                    if compute_metrics {
-                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = i.compute_roc_and_metrics(&data, None);
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(n,i)| {
+                let scores: Vec<f64>;
+                if let Some(assay) = gpu_assay {
+                    scores = all_scores[n*data.sample_len..(n+1)*data.sample_len].to_vec();
+                } else {
+                    scores = i.evaluate(data)
+                }
+                match param.general.fit {
+                    FitFunction::auc => {
+                            if param.general.keep_trace {
+                                if let Some(ref mut threshold_ci) = i.threshold_ci {
+                                    (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, None, compute_roc_and_metrics_from_value, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, &mut ChaCha8Rng::seed_from_u64(i.hash));
+                                } else {
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = compute_roc_and_metrics_from_value(&scores, &data.y, None);
+                                }
+                            } else {
+                                i.auc = compute_auc_from_value(&scores, &data.y);
+                            }
+                            
+                            i.fit = i.auc - i.k as f64 * param.general.k_penalty;
+                            if let Some(ref mut threshold_ci) = i.threshold_ci {
+                                i.fit = i.fit - param.experimental.threshold_ci_penalty*threshold_ci.rejection_rate;
+                            }
+                },
+            FitFunction::sensitivity => {
+                            let objective;
+                            if param.general.keep_trace {
+                                if let Some(ref mut threshold_ci) = i.threshold_ci {
+                                    (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, objective, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, Some(&vec![param.general.fr_penalty, 1.0]), compute_roc_and_metrics_from_value, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, &mut ChaCha8Rng::seed_from_u64(i.hash));
+                                } else {
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = compute_roc_and_metrics_from_value(&scores, &data.y, Some(&vec![param.general.fr_penalty, 1.0]));
+                                }
+                            } else {
+                                objective = i.maximize_objective_with_scores(&scores, &data, param.general.fr_penalty, 1.0)
+                            }
+                            i.fit = objective - i.k as f64 * param.general.k_penalty;
+                            if let Some(ref mut threshold_ci) = i.threshold_ci {
+                                i.fit = i.fit - param.experimental.threshold_ci_penalty*threshold_ci.rejection_rate;
+                            }
+            },
+            FitFunction::specificity => {
+                            let objective;
+                            if param.general.keep_trace {
+                                if let Some(ref mut threshold_ci) = i.threshold_ci {
+                                    (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, objective, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, Some(&vec![1.0, param.general.fr_penalty]), compute_roc_and_metrics_from_value, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, &mut ChaCha8Rng::seed_from_u64(i.hash));
+                                } else {
+                                    (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = compute_roc_and_metrics_from_value(&scores, &data.y, Some(&vec![1.0, param.general.fr_penalty]));
+                                }
+                            } else {
+                                objective = i.maximize_objective_with_scores(&scores, &data, 1.0, param.general.fr_penalty)
+                            }
+                            i.fit =  objective - i.k as f64 * param.general.k_penalty;
+                            if let Some(ref mut threshold_ci) = i.threshold_ci {
+                                i.fit = i.fit - param.experimental.threshold_ci_penalty*threshold_ci.rejection_rate;
+                            }
+            },
+            FitFunction::ExperimentalMcc => {
+                if let Some(ref mut threshold_ci) = i.threshold_ci {
+                        (i.fit, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, None, compute_mcc_and_metrics_from_value, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, &mut ChaCha8Rng::seed_from_u64(i.hash));
                     } else {
-                        i.auc = i.compute_auc(data);
+                        (i.fit, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = compute_mcc_and_metrics_from_value(&scores, &data.y, None);
                     }
-                    i.fit = i.auc - i.k as f64 * k_penalty;
-                });
-        });
-    }
-
-    pub fn mcc_fit(&mut self, data: &Data, k_penalty: f64, fr_penalty: f64, thread_number: usize) {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(thread_number)
-            .build()
-            .unwrap();
-
-        pool.install(|| {
-            self.individuals
-                .par_iter_mut()
-                .for_each(|i| {
-                    (i.fit, i.threshold, i.accuracy, i.sensitivity, i.specificity) = i.compute_mcc_and_metrics(&data);
-                    if i.sensitivity < 0.5 { i.fit = i.fit - (1.0 - i.sensitivity) * fr_penalty } 
-                    if i.specificity < 0.5 { i.fit = i.fit - (1.0 - i.specificity) * fr_penalty } 
-                    i.fit = i.fit - i.k as f64 * k_penalty;
-                });
-        });
-    }
-    
-    pub fn auc_nooverfit_fit(& mut self, data: &Data, k_penalty: f64, test_data: &Data, overfit_penalty: f64,
-            thread_number: usize, compute_metrics: bool) {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(thread_number)
-            .build()
-            .unwrap();
-
-        // Use the custom thread pool for parallel processing
-        pool.install(|| {
-            self.individuals
-                .par_iter_mut()
-                .for_each(|i| {
-                    let test_auc = i.compute_new_auc(test_data);
-                    if compute_metrics {
-                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = i.compute_roc_and_metrics(&data, None);
-                    } else {
-                        i.auc = i.compute_auc(data);
-                    }
-                    i.fit = i.auc - i.k as f64 * k_penalty - (i.auc-test_auc).abs() * overfit_penalty;
-                });
-        });
-    }
-
-    // Do we need to write it directly in FitFunction as another fit method? or factorise others?
-    pub fn objective_fit(&mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64, k_penalty: f64,
-                            thread_number: usize, compute_metrics: bool) 
-    {
-            // Create a custom thread pool with 4 threads
-            let pool = ThreadPoolBuilder::new()
-                .num_threads(thread_number)
-                .build()
-                .unwrap();
-    
-            // Use the custom thread pool for parallel processing
-            pool.install(|| {
-                self.individuals
-                    .par_iter_mut()
-                    .for_each(|i| {
-                        let objective;
-                        if compute_metrics {
-                            (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics(&data, Some(&vec![fpr_penalty, fnr_penalty]));
-                        } else {
-                            objective = i.maximize_objective(data, fpr_penalty, fnr_penalty)
-                        }
-                        i.fit = objective - i.k as f64 * k_penalty;        
-                    });
-            });
-    }
-
-    pub fn objective_nooverfit_fit(& mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64, 
-                                    k_penalty: f64, test_data: &Data, overfit_penalty: f64, thread_number: usize,
-                                    compute_metrics: bool) {
-        // Create a custom thread pool with 4 threads
-        let pool = ThreadPoolBuilder::new()
-        .num_threads(thread_number)
-        .build()
-        .unwrap();
-
-        // Use the custom thread pool for parallel processing
-        pool.install(|| {
-            self.individuals
-                .par_iter_mut()
-                .for_each(|i| {
-                    let objective;
-                    let test_objective = i.maximize_objective(test_data, fpr_penalty, fnr_penalty);
-                    if compute_metrics {
-                        (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, objective) = i.compute_roc_and_metrics(&data, Some(&vec![fpr_penalty, fnr_penalty]));
-                    } else {
-                        objective = i.maximize_objective(data, fpr_penalty, fnr_penalty)
-                    }
-                    i.fit = objective - i.k as f64 * k_penalty - (objective-test_objective).abs() * overfit_penalty;
-                });
-        });
+                if i.sensitivity < 0.5 { i.fit = i.fit - (1.0 - i.sensitivity) * param.general.fr_penalty } 
+                if i.specificity < 0.5 { i.fit = i.fit - (1.0 - i.specificity) * param.general.fr_penalty } 
+                i.fit = i.fit - i.k as f64 * param.general.k_penalty;
+                if let Some(ref mut threshold_ci) = i.threshold_ci {
+                    i.fit = i.fit - param.experimental.threshold_ci_penalty*threshold_ci.rejection_rate;
+                }
+            }
+        }})})
     }
 
     pub fn sort(mut self) -> Self {
@@ -318,12 +284,12 @@ impl Population {
             
             // Validation fold
             let mut fold_data = fold.clone();
-            ga::fit_fn(self, &mut fold_data, &mut None, fold_gpu_assay, &None, param);
+            self.fit(&mut fold_data, &mut None, fold_gpu_assay, &None, param);
             let validation_fits: Vec<f64> = self.individuals.iter().map(|ind| ind.fit).collect();
             
             // Training set
             let mut train_data = cv.training_sets[fold_idx].clone();
-            ga::fit_fn(self, &mut train_data, &mut None, fold_gpu_assay, &None, param);
+            self.fit( &mut train_data, &mut None, fold_gpu_assay, &None, param);
             let training_fits: Vec<f64> = self.individuals.iter().map(|ind| ind.fit).collect();
             
             // Penalized scores
@@ -382,7 +348,7 @@ impl Population {
     }
 
     /// populate the population with a set of random individuals
-    pub fn generate(&mut self, population_size: u32, kmin:usize, kmax:usize, language: u8, data_type: u8, epsilon: f64, data: &Data, rng: &mut ChaCha8Rng) {
+    pub fn generate(&mut self, population_size: u32, kmin:usize, kmax:usize, language: u8, data_type: u8, epsilon: f64, data: &Data, threshold_ci: bool, rng: &mut ChaCha8Rng) {
         for _ in 0..population_size {
             self.individuals.push(Individual::random_select_k(kmin,
                                     kmax,
@@ -391,6 +357,7 @@ impl Population {
                                     language,
                                     data_type,
                                     epsilon,
+                                    threshold_ci,
                                 rng))
         }
     }
@@ -424,7 +391,7 @@ impl Population {
 
     pub fn compute_all_metrics(&mut self, data: &Data, method: &FitFunction) {
         match method {
-            FitFunction::mcc => {
+            FitFunction::ExperimentalMcc => {
                 self.individuals
                     .par_iter_mut()
                     .for_each(|ind| {
