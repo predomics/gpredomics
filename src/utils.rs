@@ -5,6 +5,12 @@ use rand::seq::SliceRandom;
 use statrs::distribution::{Normal, ContinuousCDF};
 use crate::data::Data;
 use crate::experiment::ImportanceAggregation;
+use crate::individual::ThresholdCI;
+use log::warn;
+    use rand::SeedableRng;
+    use rand::RngCore;
+    use rayon::iter::IntoParallelRefIterator;
+    use rayon::iter::ParallelIterator;
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -146,7 +152,7 @@ pub fn compute_metrics_from_classes(predicted: &Vec<u8>, y: &Vec<u8>, ) -> (f64,
                 (1, 0) => fp += 1,
                 (0, 0) => tn += 1,
                 (0, 1) => fn_count += 1,
-                _ => {} //warn!("A predicted vs real class of {:?} should not exist", other),
+                _ => {} //warn!("A predicted vs real class of 2 should not exist"),
             }
         }
 
@@ -168,6 +174,34 @@ pub fn compute_metrics_from_classes(predicted: &Vec<u8>, y: &Vec<u8>, ) -> (f64,
 
         (accuracy, sensitivity, specificity)
     }
+
+    
+/// a function that compute accuracy, precision, sensitivity and rejection_rate
+/// return (accuracy, sensitivity, specificity, rejection_rate)
+pub fn compute_metrics_from_value(value: &[f64], y: &Vec<u8>, threshold: f64, threshold_ci:Option<[f64; 2]>) -> (f64, f64, f64, f64) {
+    let classes = value.iter().map(|&v| {
+            if let Some(threshold_bounds) = &threshold_ci {
+                if v > threshold_bounds[1] {
+                    1
+                } else if v < threshold_bounds[0] {
+                    0
+                } else {
+                    2  
+                }  
+            } else {
+                if v >= threshold { 1 } else { 0 }
+            }
+        }).collect();
+
+    let (acc, sens, spec) = compute_metrics_from_classes(&classes, y);
+
+    let mut rejection_rate = 0.0;
+    if threshold_ci.is_some() {
+        rejection_rate = classes.iter().filter(|&&c| c == 2).count() as f64 / classes.len() as f64;
+    }
+    
+    (acc, sens, spec, rejection_rate)
+}
 
 pub fn compute_roc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
     let mut best_objective: f64 = f64::MIN;
@@ -252,7 +286,75 @@ pub fn compute_roc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties:
     (auc, best_threshold, best_acc, best_sens, best_spec, best_objective)
 }
 
-pub fn compute_mcc_and_metrics_from_value(value: &[f64], y: &Vec<u8>) -> (f64, f64, f64, f64, f64) {
+pub fn compute_threshold_and_metrics_with_bootstrap<F>(value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>, threshold_fn: F, n_bootstrap: usize, alpha: f64, rng: &mut ChaCha8Rng) 
+    -> (f64, [f64;3], f64, f64, f64, f64, f64) where F: Fn(&[f64], &Vec<u8>, Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) + Sync {
+    let (auc, center_threshold, _, _, _, obj) = compute_roc_and_metrics_from_value(value, y, penalties);
+    
+    let seeds: Vec<u64> = (0..n_bootstrap)
+        .map(|_| rng.next_u64())
+        .collect();
+
+    let pos_indices: Vec<usize> = y.iter()
+                .enumerate()
+                .filter(|(_, &label)| label == 1)
+                .map(|(i, _)| i)
+                .collect();
+
+    let neg_indices: Vec<usize> = y.iter()
+        .enumerate()
+        .filter(|(_, &label)| label == 0)
+        .map(|(i, _)| i)
+        .collect();
+        
+    let mut thresholds: Vec<f64> = seeds
+        .par_iter()
+        .map(|&seed| {
+            let mut local_rng = ChaCha8Rng::seed_from_u64(seed);
+
+            let bootstrap_pos: Vec<usize> = (0..pos_indices.len())
+                .map(|_| pos_indices[local_rng.gen_range(0..pos_indices.len())])
+                .collect();
+
+            let bootstrap_neg: Vec<usize> = (0..neg_indices.len())
+                .map(|_| neg_indices[local_rng.gen_range(0..neg_indices.len())])
+                .collect();
+
+            let mut bootstrap_indices = bootstrap_pos;
+            bootstrap_indices.extend(bootstrap_neg);
+            
+            let bootstrap_values: Vec<f64> = bootstrap_indices
+                .iter()
+                .map(|&i| value[i])
+                .collect();
+            let bootstrap_y: Vec<u8> = bootstrap_indices
+                .iter()
+                .map(|&i| y[i])
+                .collect();
+            
+            let (_, threshold, _, _, _, _) = 
+                threshold_fn(
+                    &bootstrap_values,
+                    &bootstrap_y,
+                    penalties
+                );
+            threshold
+        })
+        .collect();
+    
+    thresholds.sort_unstable_by(|a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    
+    let lower_idx = ((alpha / 2.0) * (n_bootstrap - 1) as f64).ceil() as usize;
+    let upper_idx = ((1.0 - alpha / 2.0) * (n_bootstrap - 1) as f64).floor() as usize;
+
+    let (acc, se, sp, rej) = compute_metrics_from_value(value, y, center_threshold, Some([thresholds[lower_idx], thresholds[upper_idx]]));
+    
+    (auc, [thresholds[lower_idx], center_threshold, thresholds[upper_idx]], acc, se, sp, obj, rej)
+    
+}
+
+pub fn compute_mcc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
     let mut best_mcc: f64 = f64::MIN;
 
     let mut data: Vec<_> = value.iter()
@@ -267,7 +369,7 @@ pub fn compute_mcc_and_metrics_from_value(value: &[f64], y: &Vec<u8>) -> (f64, f
     let total_neg = data.len() - total_pos;
 
     if total_pos == 0 || total_neg == 0 {
-        return (0.0, f64::NAN, 0.0, 0.0, 0.0);
+        return (0.0, f64::NAN, 0.0, 0.0, 0.0, 0.0);
     }
 
     let (mut tn, mut fn_count) = (0, 0);
@@ -309,9 +411,8 @@ pub fn compute_mcc_and_metrics_from_value(value: &[f64], y: &Vec<u8>) -> (f64, f
         }
     }
 
-    (best_mcc, best_threshold, best_acc, best_sens, best_spec)
+    (best_mcc, best_threshold, best_acc, best_sens, best_spec, 0.0)
 }
-
 
 pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
     let mut n = 0.0;

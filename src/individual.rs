@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 use crate::bayesian_mcmc::Betas;
-use crate::utils::{generate_random_vector,shuffle_row};
+use crate::utils::{compute_metrics_from_value, generate_random_vector, shuffle_row};
 use crate::data::Data;
 use rand::seq::SliceRandom; // Provides the `choose_multiple` method
 use std::collections::{HashMap,BTreeMap,HashSet, VecDeque};
@@ -11,12 +11,19 @@ use std::cmp::min;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use crate::Population;
-use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value, compute_metrics_from_classes, compute_mcc_and_metrics_from_value};
+use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value, compute_mcc_and_metrics_from_value};
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use rand::SeedableRng;
-use log::{debug};
+use log::{debug, warn};
 use statrs::function::logistic::logistic;
 use crate::utils::serde_json_hashmap_numeric;
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct ThresholdCI {
+    pub upper: f64,
+    pub lower:  f64,
+    pub rejection_rate: f64,
+}
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Individual {
@@ -36,6 +43,7 @@ pub struct Individual {
     pub epsilon: f64,
     pub parents: Option<Vec<u64>>,
     pub betas: Option<Betas>,
+    pub threshold_ci: Option<ThresholdCI>,
 }
 
 pub const MCMC_GENERIC_LANG :u8 = 101;
@@ -116,11 +124,12 @@ impl Individual {
             hash: 0,
             epsilon: DEFAULT_MINIMUM,
             parents: None,
-            betas: None
+            betas: None,
+            threshold_ci: None
         }
     }
 
-    pub fn display(&self, data: &Data, data_to_test: Option<&Data>, algo: &String, level: usize, beautiful: bool) -> String {
+    pub fn display(&self, data: &Data, data_to_test: Option<&Data>, algo: &String, level: usize, beautiful: bool, ci_alpha: f64) -> String {
         let algo_str;
         if algo == "ga" {
             algo_str = format!(" [gen:{}] ", self.epoch);
@@ -132,10 +141,10 @@ impl Individual {
             algo_str = format!(" [unknwon] ")
         }
 
-        let metrics;
+        let mut metrics;
         match data_to_test {
             Some(test_data) => { 
-                let (acc_test, se_test, sp_test) = self.compute_metrics(test_data);
+                let (acc_test, se_test, sp_test, rej_test) = self.compute_metrics(test_data);
                 if beautiful == true {
                     metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
                                   self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
@@ -145,6 +154,9 @@ impl Individual {
                                   self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
                                   self.sensitivity, se_test, self.specificity, sp_test)
                 }
+                if let Some(ref threshold_ci) = self.threshold_ci {
+                    metrics = format!("{} | rejection rate {:.3}/{:.3}", metrics, threshold_ci.rejection_rate, rej_test)
+                }   
             },
     
             None => {
@@ -155,6 +167,9 @@ impl Individual {
                     metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
                     self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity)
                 }
+                if let Some(ref threshold_ci) = self.threshold_ci {
+                    metrics = format!("{} | rejection rate {:3}", metrics, threshold_ci.rejection_rate)
+                }       
             }
                 
         }
@@ -228,7 +243,7 @@ impl Individual {
             negative_str.push(format!("{:2e}", self.epsilon));
         }
 
-        let threshold;
+        let mut threshold;
         let positive_str_joined;
         let negative_str_joined;
         if self.data_type == LOG_TYPE && self.language != RATIO_LANG {
@@ -243,28 +258,36 @@ impl Individual {
             negative_str_joined = format!("({})", negative_str.join(" + "));
         }
 
+        let second_line_first_part; 
+        let second_line_second_part; 
+        
+        if let Some(ref threshold_ci) = self.threshold_ci {
+            threshold = format!("Class {} < \x1b[2m[Abstention zone - {:2}% CI: {:.3}, {:.3}, {:.3}]\x1b[0m < Class {}:", data.classes[0], (1.0-ci_alpha)*100.0, threshold_ci.lower,  self.threshold, threshold_ci.upper, data.classes[1]); 
+            second_line_first_part = threshold;
+            second_line_second_part = "".to_string()
+        } else {
+            threshold = format!("≥ {}", threshold);
+            second_line_first_part = format!("Class {}:", data.classes[1]);
+            second_line_second_part = threshold;
+        }
+
         if positive_str.len() == 0 {
             positive_str.push("0".to_string());
         }
         if negative_str.len() == 0 {
             negative_str.push("0".to_string());
         }
-        let predicted_class;
-        if beautiful == true {
-            predicted_class = format!("{}", data.classes[1]);
-        } else {
-            predicted_class = format!("{}", data.classes[1]);
-        }
+
     
         let formatted_string;
         if self.language == BINARY_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {}: {} ≥ {}", metrics, predicted_class, positive_str_joined, threshold)
+            formatted_string = format!("{}\n{} {} {}", metrics, second_line_first_part, positive_str_joined, second_line_second_part)
         } else if (self.language == TERNARY_LANG || self.language == POW2_LANG) && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {}: {} - {} ≥ {}", metrics, predicted_class, positive_str_joined, negative_str_joined, threshold)
+            formatted_string = format!("{}\n{} {} - {} {}", metrics, second_line_first_part, positive_str_joined, negative_str_joined, second_line_second_part)
         } else if self.language == RATIO_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\nClass {}: {} / {} ≥ {}", metrics, predicted_class, positive_str_joined, negative_str_joined, threshold)
+            formatted_string = format!("{}\n{} {} / {} {}", metrics, second_line_first_part, positive_str_joined, negative_str_joined, second_line_second_part)
         } else {
-            formatted_string = format!("{}\nClass {}: {:?} ≥ {}", metrics, predicted_class, self, threshold);
+            formatted_string = format!("{}\n{} {:?} {}", metrics, second_line_first_part, self, second_line_second_part);
         };
     
         formatted_string
@@ -284,6 +307,7 @@ impl Individual {
     /// the "main" parent is the one that gives its language and data_type (the "other" parent contributes only in genes)
     pub fn child(main_parent: &Individual) -> Individual {
         let mut i=Individual::new();
+        if main_parent.threshold_ci.is_some() { i.threshold_ci = Some(ThresholdCI { upper: 0.0, lower: 0.0, rejection_rate: 0.0 }) }
         i.language = main_parent.language;
         i.data_type = main_parent.data_type;
         i.epsilon = main_parent.epsilon;
@@ -292,13 +316,38 @@ impl Individual {
 
     pub fn evaluate_class_and_score(&self, d: &Data) -> (Vec<u8>, Vec<f64>) {
         let value = self.evaluate(d);
-        let class = value.iter().map(|&v| if v>=self.threshold {1} else {0}).collect();
+        let class = value.iter().map(|&v| {
+            if let Some(ref threshold_ci) = self.threshold_ci {
+                if v > threshold_ci.upper {
+                    1
+                } else if v < threshold_ci.lower {
+                    0
+                } else {
+                    2  
+                }
+            } else {
+                if v >= self.threshold { 1 } else { 0 }
+            }
+        }).collect();
+
         (class, value)
     }
 
     pub fn evaluate_class(&self, d: &Data) -> Vec<u8> {
         let value = self.evaluate(d);
-        value.iter().map(|&v| if v>=self.threshold {1} else {0}).collect()
+        value.iter().map(|&v| {
+            if let Some(ref threshold_ci) = self.threshold_ci {
+                if v > threshold_ci.upper {
+                    1
+                } else if v < threshold_ci.lower {
+                    0
+                } else {
+                    2  
+                }
+            } else {
+                if v >= self.threshold { 1 } else { 0 }
+            }
+        }).collect()
     }
 
     pub fn evaluate(&self, d: &Data) -> Vec<f64> {
@@ -455,7 +504,6 @@ impl Individual {
         score
     }
 
-
     /// Compute AUC based on the target vector y
     pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
@@ -490,7 +538,7 @@ impl Individual {
     pub fn compute_mcc_and_metrics(&mut self, d: &Data) -> (f64, f64, f64, f64, f64) {
         let scores: Vec<_> = self.evaluate(d);
         let mcc;
-        (mcc, self.threshold, self.accuracy, self.sensitivity, self.specificity) = compute_mcc_and_metrics_from_value(&scores, &d.y);
+        (mcc, self.threshold, self.accuracy, self.sensitivity, self.specificity, _) = compute_mcc_and_metrics_from_value(&scores, &d.y, None);
         (mcc, self.threshold, self.accuracy, self.sensitivity, self.specificity)        
     }
 
@@ -552,7 +600,7 @@ impl Individual {
 
     /// randomly generated individual amoung the selected features
     pub fn random_select_k(kmin: usize, kmax:usize, feature_selection: &Vec<usize>, feature_class: &HashMap<usize,u8>, 
-                            language: u8, data_type: u8, epsilon: f64, rng: &mut ChaCha8Rng) -> Individual {
+                            language: u8, data_type: u8, epsilon: f64, threshold_ci: bool, rng: &mut ChaCha8Rng) -> Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
     
@@ -581,7 +629,8 @@ impl Individual {
         
         let mut i = Individual::new();
         i.features = features;
-        if language==RATIO_LANG { i.threshold = 1.0}
+        if language==RATIO_LANG { i.threshold = 1.0 }
+        if threshold_ci {i.threshold_ci = Some(ThresholdCI { upper: 0.0, lower: 0.0, rejection_rate: 0.0 }) }
         i.k = k;
         i.language = language;
         i.data_type = data_type;
@@ -592,14 +641,13 @@ impl Individual {
     
     /// a function that compute accuracy,precision and sensitivity
     /// return (accuracy, sensitivity, specificity)
-    pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64) {
+    pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
         let value = self.evaluate(d);
-         let predicted: Vec<u8> = value
-            .iter()
-            .map(|&p| if p >= self.threshold { 1 } else { 0 })
-            .collect();
-
-        compute_metrics_from_classes(&predicted, &d.y)
+        if let Some(ref threshold_ci) = self.threshold_ci {
+            compute_metrics_from_value(&value, &d.y, self.threshold, Some([threshold_ci.lower, threshold_ci.upper]))
+        } else {
+            compute_metrics_from_value(&value, &d.y, self.threshold, None)
+        }
     }
 
     /// a function that compute accuracy,precision and sensitivity, fixing the threshold using Youden index 

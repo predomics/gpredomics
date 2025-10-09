@@ -194,7 +194,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         }, &run_param, run_param.general.thread_number, running);
 
         final_population = folds.clone().get_fbm(&param);
-        ga::fit_fn(&mut final_population, &data, &mut None, &None, &None, &run_param);
+        final_population.fit(&data, &mut None, &None, &None, &run_param);
         final_population = final_population.sort();
 
         collections = folds.fold_collections;
@@ -279,7 +279,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
 //         }, &run_param, run_param.general.thread_number, running);
 
 //         final_population = folds.clone().get_fbm(&param);
-//         ga::fit_fn(&mut final_population, &data, &mut None, &None, &None, &run_param);
+//         ga::fit(&mut final_population, &data, &mut None, &None, &None, &run_param);
 //         final_population = final_population.sort();
 
 //         collections = folds.fold_collections;
@@ -293,7 +293,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
 
 //         tinyPop = ga::ga(&mut data, &mut None, &paramTinyModels, running)
 //         pop = tinyPop.individuals.extend(ga::ga(&mut data, &mut None, &paramHugeModels, running).individuals)
-//         ga::fit_fn(&mut pop, &data, &mut None, &None, &None, &run_param);
+//         ga::fit(&mut pop, &data, &mut None, &None, &None, &run_param);
 
 //         collections = vec![];
 //         final_population = collections[0][collections.len()-1].clone();
@@ -373,7 +373,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         }, &run_param, run_param.general.thread_number, running);
 
         final_population = folds.clone().get_fbm(&param);
-        ga::fit_fn(&mut final_population, &data, &mut None, &None, &None, &run_param);
+        final_population.fit(&data, &mut None, &None, &None, &run_param);
         final_population = final_population.sort();
 
         collections = folds.fold_collections;

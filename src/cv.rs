@@ -9,7 +9,6 @@ use log::info;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
-use crate::ga::fit_fn;
 use crate::beam;
 use crate::utils::{mean_and_std, median, mad};
 
@@ -280,7 +279,7 @@ impl CV {
         
         // Fit on valid if required and sort
         if param.cv.fit_on_valid {
-            fit_fn(&mut pop, &self.validation_folds[fold_idx], &mut None, &None, &None, param);
+            pop.fit(&self.validation_folds[fold_idx], &mut None, &None, &None, param);
             pop = pop.sort();
         }
         

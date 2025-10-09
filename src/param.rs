@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use crate::experiment::VotingMethod;
 use crate::experiment::ImportanceAggregation;
-
+use log::{warn,error};
 
 #[derive(Debug,Serialize,Deserialize,Clone, PartialEq)]
 #[allow(non_camel_case_types)]
@@ -12,7 +12,7 @@ pub enum FitFunction {
     auc,
     specificity,
     sensitivity,  
-    mcc
+    ExperimentalMcc
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -44,6 +44,8 @@ pub struct Param {
     pub importance: Importance,
     #[serde(default)]
     pub gpu: GPU,
+    #[serde(default)]
+    pub experimental: Experimental,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -249,6 +251,18 @@ pub struct Importance {
     pub importance_aggregation: ImportanceAggregation,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Experimental {
+    #[serde(default = "false_default")] 
+    pub threshold_ci: bool,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_alpha: f64,
+    #[serde(default = "uzero_default")] 
+    pub threshold_ci_n_bootstrap: usize
+}
+
 // Default section definitions
 
 impl Default for General {
@@ -299,6 +313,12 @@ impl Default for MCMC {
     }
 }
 
+impl Default for Experimental {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
 impl Default for GPU {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap_or_else(|_| {
@@ -329,6 +349,27 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     let param_reader = BufReader::new(param_file_reader);
     
     let config:Param = serde_yaml::from_reader(param_reader)?;
+
+    if config.experimental.threshold_ci  {
+        if !config.general.keep_trace {
+            panic!("Experimental thresholdCI currently requires keep_trace==true")
+        }
+
+        if config.experimental.threshold_ci_alpha <= 0.0 || config.experimental.threshold_ci_alpha >= 1.0 {
+            panic!("Configuration error: invalid experimental_threshold_ci_alpha value. Must be in range (0, 1).");
+        }
+
+
+        // Sanity check to prevent bad practices
+        let B_min = 40.0/config.experimental.threshold_ci_alpha; //(Efron, 1987)
+        let B_opt = 100.0/config.experimental.threshold_ci_alpha;
+        if (config.experimental.threshold_ci_n_bootstrap as f64) < B_min {
+            error!("Bootstrap sample size B={} is BELOW theoretical minimum B_min={}. Confidence interval quantiles may be undefined or severely biased.", config.experimental.threshold_ci_n_bootstrap, B_min);
+            panic!("Bootstrap sample size B={} is BELOW theoretical minimum B_min={}. Confidence interval quantiles may be undefined or severely biased.", config.experimental.threshold_ci_n_bootstrap, B_min);
+        } else if (config.experimental.threshold_ci_n_bootstrap as f64) < B_opt {
+            warn!("Bootstrap sample size B={} is ABOVE minimum but BELOW optimal threshold B={}. Expect moderate instability and potential under-coverage.", config.experimental.threshold_ci_n_bootstrap, B_opt);
+        }   
+    }
 
     Ok(config)
 }

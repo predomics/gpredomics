@@ -66,6 +66,8 @@ fn main() {
             .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e))
     };
 
+    let param = param::get("param.yaml".to_string()).unwrap();
+
     if let Some(experiment_path) = args.load {
         match Experiment::load_auto(&experiment_path) {
             Ok(mut experiment) => {
