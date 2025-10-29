@@ -4,11 +4,11 @@ general:
   algo: ga                                    # ga for genetic algorithm, beam for beam algorithm and mcmc for MCMC-based algorithm
   cv: false                                   # should cross-validation be enabled?
   thread_number: 8                            # the number of thread used in feature selection and fit computation
-  gpu: true                                   # should Gpredomics use GPU ? (ga and beam only)
+  gpu: false                                   # should Gpredomics use GPU ? (ga and beam only)
   language: bin,ter,pow2,ratio                # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
   data_type: raw,log,prev                     # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
   epsilon: 1e-5                               # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
-  fit: auc                                    # possible values are auc,specificity,sensitivity (classification), see README.md for details
+  fit: auc                                    # possible values are auc,specificity,sensitivity,mcc,f1_score,g_means (classification), see README.md for details
   k_penalty: 0.0001                           # this penalty is deduced from fit function multiplied by k, the number of variables used in the model
   fr_penalty: 0.0                             # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
   n_model_to_display: 30                      # n models to display in the last generation (default to 10, 0 means all models)
@@ -40,6 +40,7 @@ cv:
   inner_folds: 5                              # number of folds used to penalize overfit if overfit_penalty > 0
   overfit_penalty: 0                          # this penalty is deduced from fit function (fit = fit on k-1 - abs(delta with last fold) * overfit_penalty)
   outer_folds: 5                              # number of folds used for cross-validation (launch algorithm on each k-1 folds then merge Families of Best Models).
+  resampling_inner_folds_epochs: 0            # to avoid learning about inner folds, resplit it every x periods.
   fit_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
   cv_best_models_ci_alpha: 0.05               # alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
 
@@ -100,4 +101,5 @@ experimental:
   threshold_ci: false                         # if true, each Individual has a rejection rate around its threshold based on bootstraps
   threshold_ci_penalty: 0.5                   # penalize ga evolution according to rejection_rate*penalty
   threshold_ci_alpha: 0.05                    # alpha to construct the CI around the threshold       
-  threshold_ci_n_bootstrap: 2000              # number of boostrap 
+  threshold_ci_n_bootstrap: 1000              # number of boostrap 
+  bias_penalty: 0                             # penalize models with specificity/sensitivity < 0.5 by doing fit - (1.0 - bad_metrics) * bias_penalty  

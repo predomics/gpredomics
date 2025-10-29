@@ -5,12 +5,16 @@ use rand::seq::SliceRandom;
 use statrs::distribution::{Normal, ContinuousCDF};
 use crate::data::Data;
 use crate::experiment::ImportanceAggregation;
-use crate::individual::ThresholdCI;
-use log::warn;
-    use rand::SeedableRng;
-    use rand::RngCore;
-    use rayon::iter::IntoParallelRefIterator;
-    use rayon::iter::ParallelIterator;
+use crate::individual::AdditionalMetrics;
+use crate::param::FitFunction;
+use rand::SeedableRng;
+use rand::RngCore;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
+use crate::Population;
+use crate::Param;
+use log::{debug,info};
+
 
 /// a macro to declare simple Vec<String>
 #[macro_export]
@@ -137,7 +141,7 @@ pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
     u / (n1 as f64 * n0 as f64)
 }
 
-pub fn compute_metrics_from_classes(predicted: &Vec<u8>, y: &Vec<u8>, ) -> (f64, f64, f64) {
+pub fn compute_metrics_from_classes(predicted: &Vec<u8>, y: &Vec<u8>, others_to_compute: [bool; 5]) -> (f64, f64, f64, AdditionalMetrics) {
         let mut tp = 0;
         let mut fn_count = 0;
         let mut tn = 0;
@@ -172,13 +176,30 @@ pub fn compute_metrics_from_classes(predicted: &Vec<u8>, y: &Vec<u8>, ) -> (f64,
             0.0
         };
 
-        (accuracy, sensitivity, specificity)
+        let mut additional = AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None};
+        if others_to_compute[0] {
+            additional.mcc = Some(mcc(tp, fp, tn, fn_count));
+        }
+        if others_to_compute[1] {
+            additional.f1_score = Some(f1_score(tp, fp, fn_count));
+        }
+        if others_to_compute[2] {
+            additional.npv = Some(npv(tn, fn_count));
+        }
+        if others_to_compute[3] {
+            additional.ppv = Some(ppv(tp, fp));
+        }
+        if others_to_compute[4] {
+            additional.g_means = Some(g_means(sensitivity, specificity));
+        }
+
+        (accuracy, sensitivity, specificity, additional)
     }
 
     
 /// a function that compute accuracy, precision, sensitivity and rejection_rate
 /// return (accuracy, sensitivity, specificity, rejection_rate)
-pub fn compute_metrics_from_value(value: &[f64], y: &Vec<u8>, threshold: f64, threshold_ci:Option<[f64; 2]>) -> (f64, f64, f64, f64) {
+pub fn compute_metrics_from_value(value: &[f64], y: &Vec<u8>, threshold: f64, threshold_ci:Option<[f64; 2]>, others_to_compute: [bool; 5]) -> (f64, f64, f64, f64, AdditionalMetrics) {
     let classes = value.iter().map(|&v| {
             if let Some(threshold_bounds) = &threshold_ci {
                 if v > threshold_bounds[1] {
@@ -193,48 +214,54 @@ pub fn compute_metrics_from_value(value: &[f64], y: &Vec<u8>, threshold: f64, th
             }
         }).collect();
 
-    let (acc, sens, spec) = compute_metrics_from_classes(&classes, y);
+    let (acc, sens, spec, additional) = compute_metrics_from_classes(&classes, y, others_to_compute);
 
     let mut rejection_rate = 0.0;
     if threshold_ci.is_some() {
         rejection_rate = classes.iter().filter(|&&c| c == 2).count() as f64 / classes.len() as f64;
     }
     
-    (acc, sens, spec, rejection_rate)
+    (acc, sens, spec, rejection_rate, additional)
 }
 
-pub fn compute_roc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
-    let mut best_objective: f64 = f64::MIN;
-
-    let mut data: Vec<_> = value.iter()
+pub fn compute_roc_and_metrics_from_value(scores: &[f64], y: &[u8], fit_function: &FitFunction, penalties: Option<[f64; 2]>) -> (f64, f64, f64, f64, f64, f64) {
+    let mut data: Vec<_> = scores
+        .iter()
         .zip(y.iter())
-        .filter(|(_, &y)| y == 0 || y == 1)
-        .map(|(&v, &y)| (v, y))
+        .filter(|(_, &label)| label == 0 || label == 1)
+        .map(|(&score, &label)| (score, label))
         .collect();
 
     data.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    let total_pos = data.iter().filter(|(_, y)| *y == 1).count();
+    let total_pos = data.iter().filter(|(_, label)| *label == 1).count();
     let total_neg = data.len() - total_pos;
 
     if total_pos == 0 || total_neg == 0 {
         return (0.5, f64::NAN, 0.0, 0.0, 0.0, f64::MIN);
     }
 
-    let (mut auc, mut tn, mut fn_count) = (0.0, 0, 0);
+    let mut auc = 0.0;
+    let mut tn = 0;
+    let mut fn_count = 0;
+    
+    let mut best_objective = f64::MIN;
     let mut best_threshold = f64::NEG_INFINITY;
-    let (mut best_acc, mut best_sens, mut best_spec) = (0.0, 0.0, 0.0);
+    let mut best_acc = 0.0;
+    let mut best_sens = 0.0;
+    let mut best_spec = 0.0;
 
     let mut i = 0;
     while i < data.len() {
         let current_score = data[i].0;
-        let (mut current_tn, mut current_fn) = (0, 0);
+        let mut current_tn = 0;
+        let mut current_fn = 0;
 
         while i < data.len() && (data[i].0 - current_score).abs() < f64::EPSILON {
             match data[i].1 {
                 0 => current_tn += 1,
                 1 => current_fn += 1,
-                _ => unreachable!()
+                _ => unreachable!(),
             }
             i += 1;
         }
@@ -247,48 +274,161 @@ pub fn compute_roc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties:
         fn_count += current_fn;
 
         let tp = total_pos - fn_count;
+        let fp = total_neg - tn;
 
-        // Include scores equal to the threshold as positive
-        let sensitivity = (tp + current_fn) as f64 / total_pos as f64;
-        let specificity = (tn - current_tn) as f64 / total_neg as f64;
-        let accuracy = (tp + current_fn + tn - current_tn) as f64 / (total_pos + total_neg) as f64;
+        let sensitivity = tp as f64 / total_pos as f64;
+        let specificity = tn as f64 / total_neg as f64;
+        let accuracy = (tp + tn) as f64 / (total_pos + total_neg) as f64;
 
-        if let Some(p) = penalties {
-            if p.len() >= 2 {
-                let objective = (p[0] * specificity + p[1] * sensitivity)/(p[0] + p[1]);
-                if objective > best_objective || (objective == best_objective && current_score < best_threshold) {
-                    best_objective = objective;
-                    best_threshold = current_score;
-                    best_acc = accuracy;
-                    best_sens = sensitivity;
-                    best_spec = specificity;
-                }
-            }
-        } else {
-            // Objective is Youden Maxima
-            let objective = sensitivity + specificity - 1.0;
-            if objective > best_objective || (objective == best_objective && current_score < best_threshold) {
-                best_objective = objective;
-                best_threshold = current_score;
-                best_acc = accuracy;
-                best_sens = sensitivity;
-                best_spec = specificity;
-            }
+        let objective = match fit_function {
+            FitFunction::auc => { youden_index(sensitivity, specificity) }
+            FitFunction::mcc => mcc(tp, fp, tn, fn_count),
+            FitFunction::sensitivity => { apply_threshold_balance(sensitivity, specificity, penalties) }
+            FitFunction::specificity => { apply_threshold_balance(sensitivity, specificity, penalties) }
+            FitFunction::f1_score => f1_score(tp, fp, fn_count),
+            FitFunction::npv => npv(tn, fn_count),
+            FitFunction::ppv => ppv(tp, fp),
+            FitFunction::g_means => g_means(sensitivity, specificity),
+        };
+
+        if objective > best_objective {
+            best_objective = objective;
+            best_threshold = current_score;
+            best_acc = accuracy;
+            best_sens = sensitivity;
+            best_spec = specificity;
         }
     }
 
-    let auc = if total_pos * total_neg > 0 {
-        auc / (total_pos * total_neg) as f64
-    } else {
-        0.5
-    };
+    let auc = auc / (total_pos * total_neg) as f64;
 
     (auc, best_threshold, best_acc, best_sens, best_spec, best_objective)
 }
 
-pub fn compute_threshold_and_metrics_with_bootstrap<F>(value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>, threshold_fn: F, n_bootstrap: usize, alpha: f64, rng: &mut ChaCha8Rng) 
-    -> (f64, [f64;3], f64, f64, f64, f64, f64) where F: Fn(&[f64], &Vec<u8>, Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) + Sync {
-    let (auc, center_threshold, _, _, _, obj) = compute_roc_and_metrics_from_value(value, y, penalties);
+#[inline]
+fn mcc(tp: usize, fp: usize, tn: usize, fn_count: usize) -> f64 {
+    let numerator = (tp as f64 * tn as f64) - (fp as f64 * fn_count as f64);
+    let denominator = ((tp + fp) as f64 * (tp + fn_count) as f64 *
+                      (tn + fp) as f64 * (tn + fn_count) as f64).sqrt();
+    if denominator == 0.0 { 0.0 } else { numerator / denominator }
+}
+
+#[inline]
+fn f1_score(tp: usize, fp: usize, fn_count: usize) -> f64 {
+    let precision = if tp + fp > 0 { tp as f64 / (tp + fp) as f64 } else { 0.0 };
+    let recall = if tp + fn_count > 0 { tp as f64 / (tp + fn_count) as f64 } else { 0.0 };
+    if precision + recall > 0.0 {
+        2.0 * (precision * recall) / (precision + recall)
+    } else {
+        0.0
+    }
+}
+
+#[inline]
+fn npv(tn: usize, fn_count: usize) -> f64 {
+    if tn + fn_count > 0 {
+        tn as f64 / (tn + fn_count) as f64
+    } else {
+        0.0
+    }
+}
+
+#[inline]
+fn ppv(tp: usize, fp: usize) -> f64 {
+    if tp + fp > 0 {
+        tp as f64 / (tp + fp) as f64
+    } else {
+        0.0
+    }
+}
+
+#[inline]
+fn g_means(sensitivity: f64, specificity: f64) -> f64 {
+    (sensitivity * specificity).sqrt()
+}
+
+#[inline]
+fn youden_index(sensitivity: f64, specificity: f64) -> f64 {
+    sensitivity + specificity - 1.0
+}
+
+#[inline]
+fn apply_threshold_balance(sensitivity: f64, specificity: f64, penalties: Option<[f64; 2]>) -> f64 {
+    if let Some(p) = penalties {
+        if p.len() >= 2 {
+            (p[0] * specificity + p[1] * sensitivity) / (p[0] + p[1])
+        } else {
+            sensitivity + specificity - 1.0
+        }
+    } else {
+        sensitivity + specificity - 1.0
+    }
+}
+
+pub fn display_epoch_legend(param: &Param) {
+    info!("Legend:    [≠ diversity filter]    [↺ resampling]    [\x1b[1m\x1b[31m█\x1b[0m: {}]    [\x1b[1m\x1b[33m█\x1b[0m: penalized fit]",
+        match param.general.fit {
+            FitFunction::sensitivity => {"sensitivity"},
+            FitFunction::specificity => {"specificity"},
+            FitFunction::ppv => {"PPV"},
+            FitFunction::npv => {"NPV"},
+            FitFunction::mcc => {"MCC"},
+            FitFunction::g_means => {"G_means"},
+            FitFunction::f1_score => {"F1-score"},
+            _ => {"AUC"}
+        });
+
+    info!("{}", "─".repeat(120));
+    }
+
+pub fn display_epoch(pop: &Population, param: &Param, epoch: usize) {
+    let best_model = &pop.individuals[0];
+    let mean_k = pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64;
+        debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
+            best_model.auc,
+            best_model.get_language(),
+            best_model.get_data_type(),
+            best_model.fit, 
+            best_model.k, 
+            best_model.epoch,
+            best_model.specificity,
+            best_model.sensitivity,
+            &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
+            &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/param.ga.population_size as f64,
+            mean_k
+            );
+
+    let scale = 50;
+    let best_model_pos = match param.general.fit {
+        FitFunction::sensitivity => { (best_model.sensitivity * scale as f64) as usize},
+        FitFunction::specificity => { (best_model.specificity * scale as f64) as usize},
+        _ => {(best_model.auc * scale as f64) as usize}};
+
+    let best_fit_pos = (best_model.fit * scale as f64) as usize;
+    let max_pos = best_model_pos.max(best_fit_pos);
+    let mut bar = vec!["█"; scale]; // White
+    for i in (max_pos + 1)..scale { bar[i] = "\x1b[0m▒\x1b[0m"}; // Gray
+    if best_model_pos < scale {  bar[best_model_pos] = "\x1b[1m\x1b[31m█\x1b[0m"} // Red
+    if best_fit_pos < scale {bar[best_fit_pos] = "\x1b[1m\x1b[33m█\x1b[0m"} // Orange
+    let output: String = bar.concat();
+    let mut special_epoch = "".to_string();
+    
+    if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
+        special_epoch = format!("{}≠", special_epoch);
+    };
+    if param.ga.random_sampling_pct > 0.0 && epoch % param.ga.random_sampling_epochs == 0 || 
+        param.cv.overfit_penalty > 0.0 && param.cv.resampling_inner_folds_epochs > 0 && epoch % param.cv.resampling_inner_folds_epochs == 0 {
+        special_epoch = format!("{}↺", special_epoch);
+    };
+
+    info!("#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, epoch-best_model.epoch);
+
+}
+
+
+pub fn compute_threshold_and_metrics_with_bootstrap(value: &[f64], y: &Vec<u8>, fit_function: &FitFunction, penalties: Option<[f64; 2]>, n_bootstrap: usize, alpha: f64, rng: &mut ChaCha8Rng) 
+    -> (f64, [f64;3], f64, f64, f64, f64, f64) {
+    let (auc, center_threshold, _, _, _, obj) = compute_roc_and_metrics_from_value(value, y, fit_function, penalties);
     
     let seeds: Vec<u64> = (0..n_bootstrap)
         .map(|_| rng.next_u64())
@@ -332,9 +472,10 @@ pub fn compute_threshold_and_metrics_with_bootstrap<F>(value: &[f64], y: &Vec<u8
                 .collect();
             
             let (_, threshold, _, _, _, _) = 
-                threshold_fn(
+                compute_roc_and_metrics_from_value(
                     &bootstrap_values,
                     &bootstrap_y,
+                    fit_function,
                     penalties
                 );
             threshold
@@ -348,70 +489,10 @@ pub fn compute_threshold_and_metrics_with_bootstrap<F>(value: &[f64], y: &Vec<u8
     let lower_idx = ((alpha / 2.0) * (n_bootstrap - 1) as f64).ceil() as usize;
     let upper_idx = ((1.0 - alpha / 2.0) * (n_bootstrap - 1) as f64).floor() as usize;
 
-    let (acc, se, sp, rej) = compute_metrics_from_value(value, y, center_threshold, Some([thresholds[lower_idx], thresholds[upper_idx]]));
+    let (acc, se, sp, rej, _) = compute_metrics_from_value(value, y, center_threshold, Some([thresholds[lower_idx], thresholds[upper_idx]]), [false ; 5]);
     
     (auc, [thresholds[lower_idx], center_threshold, thresholds[upper_idx]], acc, se, sp, obj, rej)
     
-}
-
-pub fn compute_mcc_and_metrics_from_value(value: &[f64], y: &Vec<u8>, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
-    let mut best_mcc: f64 = f64::MIN;
-
-    let mut data: Vec<_> = value.iter()
-        .zip(y.iter())
-        .filter(|(_, &y)| y == 0 || y == 1)
-        .map(|(&v, &y)| (v, y))
-        .collect();
-
-    data.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let total_pos = data.iter().filter(|(_, y)| *y == 1).count();
-    let total_neg = data.len() - total_pos;
-
-    if total_pos == 0 || total_neg == 0 {
-        return (0.0, f64::NAN, 0.0, 0.0, 0.0, 0.0);
-    }
-
-    let (mut tn, mut fn_count) = (0, 0);
-    let mut best_threshold = f64::NEG_INFINITY;
-    let (mut best_acc, mut best_sens, mut best_spec) = (0.0, 0.0, 0.0);
-
-    let mut i = 0;
-    while i < data.len() {
-        let current_score = data[i].0;
-        let (mut current_tn, mut current_fn) = (0, 0);
-
-        while i < data.len() && (data[i].0 - current_score).abs() < f64::EPSILON {
-            match data[i].1 {
-                0 => current_tn += 1,
-                1 => current_fn += 1,
-                _ => unreachable!()
-            }
-            i += 1;
-        }
-
-        tn += current_tn;
-        fn_count += current_fn;
-
-        let tp = total_pos - fn_count;
-        let fp = total_neg - tn;
-        
-        let numerator = (tp as f64 * tn as f64) - (fp as f64 * fn_count as f64);
-        let denominator = ((tp + fp) as f64 * (tp + fn_count) as f64 * 
-                          (tn + fp) as f64 * (tn + fn_count) as f64).sqrt();
-        
-        let mcc = if denominator == 0.0 { 0.0 } else { numerator / denominator };
-
-        if mcc > best_mcc || (mcc == best_mcc && current_score < best_threshold) {
-            best_mcc = mcc;
-            best_threshold = current_score;
-            best_acc = (tp + tn) as f64 / (total_pos + total_neg) as f64;
-            best_sens = tp as f64 / total_pos as f64;
-            best_spec = tn as f64 / total_neg as f64;
-        }
-    }
-
-    (best_mcc, best_threshold, best_acc, best_sens, best_spec, 0.0)
 }
 
 pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
@@ -1101,7 +1182,7 @@ mod tests {
     fn test_compute_metrics_from_classes_perfect_predictions() {
         let predicted = vec![0, 1, 0, 1];
         let y = vec![0, 1, 0, 1];
-        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        let (accuracy, sensitivity, specificity, _) = compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(accuracy, 1.0, "Perfect predictions should yield 100% accuracy");
         assert_eq!(sensitivity, 1.0, "Perfect predictions should yield 100% sensitivity");
         assert_eq!(specificity, 1.0, "Perfect predictions should yield 100% specificity");
@@ -1111,7 +1192,7 @@ mod tests {
     fn test_compute_metrics_from_classes_all_wrong_predictions() {
         let predicted = vec![1, 0, 1, 0];
         let y = vec![0, 1, 0, 1];
-        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        let (accuracy, sensitivity, specificity, _) = compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(accuracy, 0.0, "All wrong predictions should yield 0% accuracy");
         assert_eq!(sensitivity, 0.0, "All wrong predictions should yield 0% sensitivity");
         assert_eq!(specificity, 0.0, "All wrong predictions should yield 0% specificity");
@@ -1121,7 +1202,7 @@ mod tests {
     fn test_compute_metrics_from_classes_mixed_predictions() {
         let predicted = vec![0, 1, 0, 0];
         let y = vec![0, 1, 1, 0];
-        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        let (accuracy, sensitivity, specificity, _) = compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(accuracy, 0.75, "Mixed predictions should yield expected accuracy");
         assert_eq!(sensitivity, 0.5, "Mixed predictions should yield expected sensitivity");
         assert_eq!(specificity, 1.0, "Mixed predictions should yield expected specificity");
@@ -1131,7 +1212,7 @@ mod tests {
     fn test_compute_metrics_from_classes_class_2_ignored() {
         let predicted = vec![0, 1, 0, 1];
         let y = vec![0, 1, 2, 1];
-        let (accuracy, _, _) = compute_metrics_from_classes(&predicted, &y);
+        let (accuracy, _, _, _) = compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(accuracy, 1.0, "Class 2 should be ignored in calculations");
     }
 
@@ -1139,7 +1220,7 @@ mod tests {
     fn test_compute_metrics_from_classes_empty_vectors() {
         let predicted = vec![];
         let y = vec![];
-        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        let (accuracy, sensitivity, specificity, _) = compute_metrics_from_classes(&predicted, &y,[false; 5]);
         assert_eq!(accuracy, 0.0, "Empty vectors should yield 0 metrics");
         assert_eq!(sensitivity, 0.0, "Empty vectors should yield 0 metrics");
         assert_eq!(specificity, 0.0, "Empty vectors should yield 0 metrics");
@@ -1149,7 +1230,7 @@ mod tests {
     fn test_compute_metrics_extreme_imbalance() {
         let predicted = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
         let y = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-        let (accuracy, sensitivity, specificity) = compute_metrics_from_classes(&predicted, &y);
+        let (accuracy, sensitivity, specificity, _) = compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(accuracy, 1.0, "Perfect predictions should yield 100% accuracy even with imbalance");
         assert_eq!(sensitivity, 1.0, "Perfect predictions should yield 100% sensitivity");
         assert_eq!(specificity, 1.0, "Perfect predictions should yield 100% specificity");
@@ -1160,7 +1241,7 @@ mod tests {
         let value = vec![0.1, 0.4, 0.6, 0.9];
         let y = vec![0, 0, 1, 1];
         let (auc, threshold, accuracy, sensitivity, specificity, _) = 
-            compute_roc_and_metrics_from_value(&value, &y, None);
+            compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         assert!(auc >= 0.0 && auc <= 1.0, "AUC should be between 0 and 1");
         assert!(accuracy >= 0.0 && accuracy <= 1.0, "Accuracy should be between 0 and 1");
         assert!(sensitivity >= 0.0 && sensitivity <= 1.0, "Sensitivity should be between 0 and 1");
@@ -1172,9 +1253,9 @@ mod tests {
     fn test_compute_roc_and_metrics_from_value_with_penalties() {
         let value = vec![0.1, 0.4, 0.6, 0.9];
         let y = vec![0, 0, 1, 1];
-        let penalties = Some(vec![2.0, 1.0]);
+        let penalties = Some([2.0, 1.0]);
         let (_, _, _, _, _, objective) = 
-            compute_roc_and_metrics_from_value(&value, &y, penalties.as_deref());
+            compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, penalties);
         assert!(objective >= 0.0, "Objective should be non-negative");
     }
 
@@ -1183,7 +1264,7 @@ mod tests {
         let value = vec![0.1, 0.4, 0.6, 0.9];
         let y = vec![0, 0, 1, 1];
         let (_, _, _, sensitivity, specificity, objective) = 
-            compute_roc_and_metrics_from_value(&value, &y, None);
+            compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         let expected_youden = sensitivity + specificity - 1.0;
         assert!((objective - expected_youden).abs() < 1e-10, "Without penalties, objective should be Youden index");
     }
@@ -1193,58 +1274,11 @@ mod tests {
         let value = vec![0.1, 0.2, 0.3, 0.4];
         let y = vec![0, 0, 0, 0];
         let (auc, threshold, _, _, _, _) = 
-            compute_roc_and_metrics_from_value(&value, &y, None);
+            compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         assert_eq!(auc, 0.5, "Single class should yield AUC = 0.5");
         assert!(threshold.is_nan(), "Single class should yield NaN threshold");
     }
-
-    #[test]
-    fn test_compute_mcc_and_metrics_from_value_perfect_classification() {
-        let value = vec![0.1, 0.2, 0.8, 0.9];
-        let y = vec![0, 0, 1, 1];
-        let (mcc, _, accuracy, sensitivity, specificity) = 
-            compute_mcc_and_metrics_from_value(&value, &y);
-        assert_eq!(mcc, 1.0, "Perfect classification should yield MCC = 1.0");
-        assert_eq!(accuracy, 1.0, "Perfect classification should yield accuracy = 1.0");
-        assert_eq!(sensitivity, 1.0, "Perfect classification should yield sensitivity = 1.0");
-        assert_eq!(specificity, 1.0, "Perfect classification should yield specificity = 1.0");
-    }
-
-    #[test]
-    fn test_compute_mcc_and_metrics_from_value_random_classification() {
-        let value = vec![0.5, 0.5, 0.5, 0.5];
-        let y = vec![0, 1, 0, 1];
-        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
-        assert!(mcc.abs() < 0.1, "Random classification should yield MCC ≈ 0");
-    }
-
-    #[test]
-    fn test_compute_mcc_and_metrics_from_value_single_class_only() {
-        let value = vec![0.1, 0.2, 0.3, 0.4];
-        let y = vec![0, 0, 0, 0];
-        let (mcc, threshold, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
-        assert_eq!(mcc, 0.0, "Single class should yield MCC = 0.0");
-        assert!(threshold.is_nan(), "Single class should yield NaN threshold");
-    }
-
-    #[test]
-    fn test_compute_mcc_zero_division_case() {
-        let value = vec![0.5, 0.5, 0.5, 0.5];
-        let y = vec![1, 1, 1, 1];
-        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
-        assert_eq!(mcc, 0.0, "MCC with single class should be 0.0");
-    }
-
-    #[test]
-    fn test_compute_mcc_and_metrics_from_value_empty_input() {
-        let value = vec![];
-        let y = vec![];
-        let (mcc, threshold, _, _, _) = 
-            compute_mcc_and_metrics_from_value(&value, &y);
-        assert_eq!(mcc, 0.0, "Empty input should yield MCC = 0.0");
-        assert!(threshold.is_nan(), "Empty input should yield NaN threshold");
-    }
-
+    
     #[test]
     fn test_mean_and_std_normal_values() {
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -1634,7 +1668,6 @@ mod tests {
 
     #[test]
     fn test_roundtrip_serialization_tuple_usize_f64() {
-        use crate::utils::serde_json_hashmap_numeric::{serialize_tuple_usize, deserialize_tuple_usize};
         
         let mut original_map = HashMap::new();
         original_map.insert((0, 1), 1.5_f64);
@@ -1686,7 +1719,7 @@ mod tests {
         let y = vec![0, 0, 1, 1];
         
         let auc1 = compute_auc_from_value(&value, &y);
-        let (auc2, _, _, _, _, _) = compute_roc_and_metrics_from_value(&value, &y, None);
+        let (auc2, _, _, _, _, _) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         
         assert!((auc1 - auc2).abs() < 1e-10, "AUC should be consistent between functions");
     }
@@ -1696,7 +1729,7 @@ mod tests {
         let n = 5000;
         let value: Vec<f64> = (0..n).map(|i| (i as f64 / n as f64) + 0.001 * (i % 10) as f64).collect();
         let y: Vec<u8> = (0..n).map(|i| if i < n/2 { 0 } else { 1 }).collect();
-        let (auc, _, _, _, _, _) = compute_roc_and_metrics_from_value(&value, &y, None);
+        let (auc, _, _, _, _, _) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         assert!(auc > 0.9, "Large dataset with clear separation should yield high AUC");
     }
 
@@ -1783,7 +1816,7 @@ mod tests {
         // With optimal threshold at 0.5: TP=2, TN=2, FP=0, FN=0
         // MCC = (2*2 - 0*0) / sqrt((2+0)*(2+0)*(2+0)*(2+0)) = 4/4 = 1.0
         
-        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        let (_, _, _, _, _, mcc) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::mcc, None);
         assert!((mcc - 1.0).abs() < 1e-10, "MCC should be 1.0 for perfect classification");
     }
 
@@ -1796,7 +1829,7 @@ mod tests {
         // With optimal threshold at 0.5: TP=1, TN=1, FP=1, FN=1
         // MCC = (1*1 - 1*1) / sqrt((1+1)*(1+1)*(1+1)*(1+1)) = 0/4 = 0.0
         
-        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        let (_, _, _, _, _, mcc) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::mcc, None);
         assert!(mcc.abs() < 1e-10, "MCC should be ~0.0 for random-like classification but is {}", mcc);
     }
 
@@ -1809,7 +1842,7 @@ mod tests {
         // With optimal threshold at ~0.75: TP=1, TN=3, FP=0, FN=0
         // MCC = (1*3 - 0*0) / sqrt((1+0)*(1+0)*(3+0)*(3+0)) = 3/sqrt(9) = 3/3 = 1.0
         
-        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        let (_, _, _, _, _, mcc) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::mcc, None);
         assert!((mcc - 1.0).abs() < 1e-10, "MCC should be 1.0 for perfect imbalanced classification");
     }
 
@@ -1822,7 +1855,7 @@ mod tests {
         // With optimal threshold at 0.5: TP=2, TN=2, FP=0, FN=0
         // MCC = (2*2 - 0*0) / sqrt((2+0)*(2+0)*(2+0)*(2+0)) = 4/4 = 1.0
         
-        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        let (_, _, _, _, _, mcc) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::mcc, None);
         assert!((mcc - 1.0).abs() < 1e-10, "MCC should be 1.0");
     }
 
@@ -1836,7 +1869,7 @@ mod tests {
         // Threshold 0.5: TP=1, TN=1, FP=1, FN=1 → MCC = 0
         // Threshold 0.3: TP=2, TN=1, FP=1, FN=0 → MCC = (2*1-1*0)/sqrt(3*2*2*1) = 2/sqrt(12) ≈ 0.577
         
-        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        let (_, _, _, _, _, mcc) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::mcc, None);
         assert!(mcc > 0.5 && mcc < 0.6, "MCC should be approximately 0.577");
     }
 
@@ -1847,7 +1880,7 @@ mod tests {
         let y = vec![0, 0, 1, 1];
         
         let auc = compute_auc_from_value(&value, &y);
-        let (mcc, _, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        let (_, _, _, _, _, mcc) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::mcc, None);
         
         // Expected values calculated manually
         assert!((auc - 1.0).abs() < 1e-10, "AUC should be 1.0");
@@ -1885,7 +1918,7 @@ mod tests {
         // MCC = (1*1 - 1*1) / sqrt((1+1)*(1+1)*(1+1)*(1+1)) = 0/4 = 0.0
         // But algorithm will find optimal threshold
         
-        let (mcc, threshold, _, _, _) = compute_mcc_and_metrics_from_value(&value, &y);
+        let (_, threshold, _, _, _, mcc) = compute_roc_and_metrics_from_value(&value, &y, &FitFunction::mcc, None);
         
         // The optimal threshold should give better than random performance
         assert!(mcc >= 0.0, "MCC should be non-negative for this case");
@@ -1908,5 +1941,235 @@ mod tests {
         let auc = compute_auc_from_value(&value, &y);
         assert!((auc - 0.5).abs() < 1e-10, "AUC should be 0.5 for this tie scenario");
     }
+
+    #[test]
+    fn test_bootstrap_ci_with_balanced_dataset() {
+        let value = vec![0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9];
+        let y = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let (auc, [lower, center, upper], _, _, _, _, rej) = 
+            compute_threshold_and_metrics_with_bootstrap(
+                &value, &y, 
+                &FitFunction::auc, 
+                None, 
+                1000,  // n_bootstrap
+                0.05,  // alpha (95% CI)
+                &mut rng
+            );
+        
+        assert!(auc > 0.0 && auc <= 1.0, "AUC should be in [0,1]");
+        assert!(lower <= center && center <= upper, "CI should be ordered: lower < center < upper");
+        assert!(lower > 0.0, "Lower threshold should be positive");
+        assert!(upper < 1.0, "Upper threshold should be < 1.0");
+        assert!(rej > 0.0, "Rejection rate should be > 0 with CI");
+        
+        let ci_width = upper - lower;
+        assert!(ci_width > 0.0 && ci_width < 0.5, 
+            "CI width should be reasonable, got {}", ci_width);
+    }
+
+    #[test]
+    fn test_bootstrap_ci_reproducibility() {
+        let value = vec![0.1, 0.3, 0.7, 0.9];
+        let y = vec![0, 0, 1, 1];
+        
+        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
+        
+        let (_, [l1, c1, u1], _, _, _, _, _) = 
+            compute_threshold_and_metrics_with_bootstrap(
+                &value, &y, &FitFunction::auc, None, 100, 0.05, &mut rng1
+            );
+        
+        let (_, [l2, c2, u2], _, _, _, _, _) = 
+            compute_threshold_and_metrics_with_bootstrap(
+                &value, &y, &FitFunction::auc, None, 100, 0.05, &mut rng2
+            );
+        
+        assert!((l1 - l2).abs() < 1e-10, "Same seed should give same lower CI");
+        assert!((c1 - c2).abs() < 1e-10, "Same seed should give same center");
+        assert!((u1 - u2).abs() < 1e-10, "Same seed should give same upper CI");
+    }
+
+    #[test]
+    fn test_bootstrap_ci_with_imbalanced_dataset() {
+        // Highly unbalanced dataset (10% positive)
+        let value = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
+        let y = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let (_, [lower, _center, upper], _, _, _, _, rej) = 
+            compute_threshold_and_metrics_with_bootstrap(
+                &value, &y, &FitFunction::auc, None, 500, 0.05, &mut rng
+            );
+        
+        // With imbalance, the CI should be wider
+        let ci_width = upper - lower;
+        assert!(ci_width > 0.1, 
+            "CI should be wider with imbalanced data, got width {}", ci_width);
+        
+        // Rejection rate should reflect uncertainty
+        assert!(rej > 0.0, "Should have some rejection with CI");
+    }
+
+    #[test]
+    fn test_bootstrap_ci_alpha_parameter() {
+        let value = vec![0.1, 0.3, 0.5, 0.7, 0.9, 0.3, 0.1, 0.2, 0.2, 0.1, 0.5, 0.2, 0.9, 0.2];
+        let y = vec![0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0];
+        
+        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
+        
+        // 95% CI (alpha=0.05)
+        let (_, [l1, _, u1], _, _, _, _, _) = 
+            compute_threshold_and_metrics_with_bootstrap(
+                &value, &y, &FitFunction::auc, None, 2000, 0.01, &mut rng1
+            );
+        
+        // 90% CI (alpha=0.10)
+        let (_, [l2, _, u2], _, _, _, _, _) = 
+            compute_threshold_and_metrics_with_bootstrap(
+                &value, &y, &FitFunction::auc, None, 2000, 0.90, &mut rng2
+            );
+        
+        let width_99 = u1 - l1;
+        let width_90 = u2 - l2;
+        
+        // 95% CI should be wider than 90% CI
+        assert!(width_99 > width_90, 
+            "99% CI ({:.3}) should be wider than 90% CI ({:.3})", 
+            width_99, width_90);
+    }
+
+    #[test]
+    fn test_compute_metrics_with_additional_perfect_classification() {
+        let predicted = vec![0, 1, 0, 1];
+        let y = vec![0, 1, 0, 1];
+        
+        let (acc, sens, spec, additional) = 
+            compute_metrics_from_classes(&predicted, &y, [true; 5]);
+        
+        assert_eq!(acc, 1.0);
+        assert_eq!(sens, 1.0);
+        assert_eq!(spec, 1.0);
+        
+        assert_eq!(additional.mcc, Some(1.0), "MCC should be 1.0 for perfect");
+        assert_eq!(additional.f1_score, Some(1.0), "F1 should be 1.0 for perfect");
+        assert_eq!(additional.npv, Some(1.0), "NPV should be 1.0 for perfect");
+        assert_eq!(additional.ppv, Some(1.0), "PPV should be 1.0 for perfect");
+        assert_eq!(additional.g_means, Some(1.0), "G-means should be 1.0 for perfect");
+    }
+
+    #[test]
+    fn test_compute_metrics_with_additional_random_classification() {
+        let predicted = vec![0, 1, 0, 1];
+        let y = vec![1, 0, 1, 0]; 
+        
+        let (acc, sens, spec, additional) = 
+            compute_metrics_from_classes(&predicted, &y, [true; 5]);
+        
+        assert_eq!(acc, 0.0, "Accuracy should be 0.0");
+        assert_eq!(sens, 0.0, "Sensitivity should be 0.0");
+        assert_eq!(spec, 0.0, "Specificity should be 0.0");
+        
+        // MCC should be -1.0 for perfectly inverse classification
+        assert_eq!(additional.mcc, Some(-1.0), "MCC should be -1.0");
+        assert_eq!(additional.f1_score, Some(0.0), "F1 should be 0.0");
+        assert_eq!(additional.g_means, Some(0.0), "G-means should be 0.0");
+    }
+
+    #[test]
+    fn test_compute_metrics_with_additional_imbalanced() {
+        let predicted = vec![0, 0, 0, 0, 0, 0, 1, 1, 0, 1];
+        let y =         vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 1];
+        
+        let (_, _, _, additional) = 
+            compute_metrics_from_classes(&predicted, &y, [true; 5]);
+        
+        // TP=1, FP=2, TN=6, FN=1
+        // PPV = TP/(TP+FP) = 1/3 = 0.333
+        // NPV = TN/(TN+FN) = 6/7 = 0.857
+        
+        assert!(additional.ppv.is_some());
+        assert!((additional.ppv.unwrap() - (1.0/3.0)).abs() < 1e-10, 
+            "PPV should be 1/3");
+        
+        assert!(additional.npv.is_some());
+        assert!((additional.npv.unwrap() - (6.0/7.0)).abs() < 1e-10, 
+            "NPV should be 6/7");
+    }
+
+    #[test]
+    fn test_compute_metrics_selective_additional() {
+        let predicted = vec![0, 1, 0, 1];
+        let y = vec![0, 1, 0, 1];
+        
+        let (_, _, _, additional) = 
+            compute_metrics_from_classes(&predicted, &y, [true, true, false, false, false]);
+        
+        assert!(additional.mcc.is_some(), "MCC should be computed");
+        assert!(additional.f1_score.is_some(), "F1 should be computed");
+        assert!(additional.npv.is_none(), "NPV should NOT be computed");
+        assert!(additional.ppv.is_none(), "PPV should NOT be computed");
+        assert!(additional.g_means.is_none(), "G-means should NOT be computed");
+    }
+
+    #[test]
+    fn test_compute_metrics_with_abstentions_and_additional() {
+        let predicted = vec![0, 1, 2, 1, 0, 2];
+        let y =         vec![0, 1, 0, 1, 1, 1];
+        
+        let (acc, sens, spec, additional) = 
+            compute_metrics_from_classes(&predicted, &y, [true; 5]);
+        
+        // Class 2 should be ignored
+        // Effective samples: [0,0], [1,1], [1,1], [0,1]
+        // TP=2, TN=1, FP=0, FN=1
+        
+        assert_eq!(acc, 0.75, "Accuracy should be 3/4");
+        assert_eq!(sens, 2.0/3.0, "Sensitivity should be 2/3");
+        assert_eq!(spec, 1.0, "Specificity should be 1.0");
+        
+        assert!(additional.mcc.is_some());
+        let mcc = additional.mcc.unwrap();
+        assert!(mcc > 0.0 && mcc < 1.0, "MCC should be positive and < 1.0");
+    }
+
+    #[test]
+    fn test_mcc_edge_case_zero_denominator() {
+        // Case where MCC denominator = 0
+        // All predicted positive, but true class mixed
+        let predicted = vec![1, 1, 1, 1];
+        let y = vec![1, 1, 1, 1];  
+        
+        let (_, _, _, additional) = 
+            compute_metrics_from_classes(&predicted, &y, [true, false, false, false, false]);
+        
+        // TN=0, FP=0 → denominator = 0 → MCC should be 0.0 (convention)
+        assert_eq!(additional.mcc, Some(0.0), 
+            "MCC should be 0.0 when denominator is zero");
+    }
+
+    #[test]
+    fn test_gmeans_calculation() {
+        let predicted = vec![0, 0, 1, 1];
+        let y = vec![0, 1, 0, 1];
+        
+        let (_, sens, spec, additional) = 
+            compute_metrics_from_classes(&predicted, &y, [false, false, false, false, true]);
+        
+        // Sensitivity = 0.5, Specificity = 0.5
+        // G-means = sqrt(0.5 * 0.5) = sqrt(0.25) = 0.5
+        
+        let gmeans = additional.g_means.unwrap();
+        assert!((gmeans - 0.5).abs() < 1e-10, 
+            "G-means should be 0.5, got {}", gmeans);
+        
+        let expected_gmeans = (sens * spec).sqrt();
+        assert!((gmeans - expected_gmeans).abs() < 1e-10, 
+            "G-means should match sqrt(sens * spec)");
+    }
+
 
 }

@@ -11,18 +11,28 @@ use std::cmp::min;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use crate::Population;
-use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value, compute_mcc_and_metrics_from_value};
+use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value};
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use rand::SeedableRng;
-use log::{debug, warn};
+use log::{debug};
 use statrs::function::logistic::logistic;
 use crate::utils::serde_json_hashmap_numeric;
+use crate::param::FitFunction;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct ThresholdCI {
     pub upper: f64,
     pub lower:  f64,
     pub rejection_rate: f64,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct AdditionalMetrics {
+    pub mcc: Option<f64>,
+    pub f1_score: Option<f64>,
+    pub npv: Option<f64>,
+    pub ppv: Option<f64>,
+    pub g_means: Option<f64>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -42,6 +52,7 @@ pub struct Individual {
     pub hash: u64,
     pub epsilon: f64,
     pub parents: Option<Vec<u64>>,
+    pub metrics: AdditionalMetrics,
     pub betas: Option<Betas>,
     pub threshold_ci: Option<ThresholdCI>,
 }
@@ -125,8 +136,9 @@ impl Individual {
             epsilon: DEFAULT_MINIMUM,
             parents: None,
             betas: None,
-            threshold_ci: None
-        }
+            threshold_ci: None,
+            metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}
+        } 
     }
 
     pub fn display(&self, data: &Data, data_to_test: Option<&Data>, algo: &String, level: usize, beautiful: bool, ci_alpha: f64) -> String {
@@ -144,7 +156,7 @@ impl Individual {
         let mut metrics;
         match data_to_test {
             Some(test_data) => { 
-                let (acc_test, se_test, sp_test, rej_test) = self.compute_metrics(test_data);
+                let (acc_test, se_test, sp_test, rej_test, additional) = self.compute_metrics(test_data);
                 if beautiful == true {
                     metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
                                   self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
@@ -157,6 +169,21 @@ impl Individual {
                 if let Some(ref threshold_ci) = self.threshold_ci {
                     metrics = format!("{} | rejection rate {:.3}/{:.3}", metrics, threshold_ci.rejection_rate, rej_test)
                 }   
+                if self.metrics.mcc.is_some() {
+                    metrics = format!("{} | MCC {:.3}/{:.3} ", metrics, self.metrics.mcc.unwrap(), additional.mcc.unwrap());
+                }
+                if self.metrics.f1_score.is_some() {
+                    metrics = format!("{} | F1-score {:.3}/{:.3} ", metrics, self.metrics.f1_score.unwrap(), additional.f1_score.unwrap());
+                }
+                if self.metrics.npv.is_some() {
+                    metrics = format!("{} | NPV {:.3}/{:.3} ", metrics, self.metrics.npv.unwrap(), additional.npv.unwrap());
+                }
+                if self.metrics.ppv.is_some() {
+                    metrics = format!("{} | PPV {:.3}/{:.3} ", metrics, self.metrics.ppv.unwrap(), additional.ppv.unwrap());
+                }
+                if self.metrics.g_means.is_some() {
+                    metrics = format!("{} | G-means {:.3}/{:.3} ", metrics, self.metrics.g_means.unwrap(), additional.g_means.unwrap());
+                }
             },
     
             None => {
@@ -169,9 +196,24 @@ impl Individual {
                 }
                 if let Some(ref threshold_ci) = self.threshold_ci {
                     metrics = format!("{} | rejection rate {:3}", metrics, threshold_ci.rejection_rate)
-                }       
+                }  
+                if self.metrics.mcc.is_some() {
+                    metrics = format!("{} | MCC {:.3} ", metrics, self.metrics.mcc.unwrap());
+                }
+                if self.metrics.f1_score.is_some() {
+                    metrics = format!("{} |  {:.3} ", metrics, self.metrics.f1_score.unwrap());
+                }
+                if self.metrics.npv.is_some() {
+                    metrics = format!("{} | NPV {:.3} ", metrics, self.metrics.npv.unwrap());
+                }
+                if self.metrics.ppv.is_some() {
+                    metrics = format!("{} | PPV {:.3} ", metrics, self.metrics.ppv.unwrap());
+                }
+                if self.metrics.g_means.is_some() {
+                    metrics = format!("{} | G-means {:.3} ", metrics, self.metrics.g_means.unwrap());
+                }   
             }
-                
+
         }
         
         // Sort features by index
@@ -528,18 +570,11 @@ impl Individual {
     // For GpredomicsR, compute metrics and AUC using the same data to be quicker
     // Same results as compute_auc and compute_threshold_and_metrics (different threshold but same metrics)
     // If the fit is not computed on AUC but on objective, metrics are calculated on this objective
-    pub fn compute_roc_and_metrics(&mut self, d: &Data, penalties: Option<&[f64]>) -> (f64, f64, f64, f64, f64, f64) {
+    pub fn compute_roc_and_metrics(&mut self, d: &Data, fit_function: &FitFunction ,penalties: Option<[f64; 2]>) -> (f64, f64, f64, f64, f64, f64) {
         let objective;
         let scores: Vec<_> = self.evaluate(d);
-        (self.auc, self.threshold, self.accuracy, self.sensitivity, self.specificity, objective) = compute_roc_and_metrics_from_value(&scores, &d.y, penalties);
+        (self.auc, self.threshold, self.accuracy, self.sensitivity, self.specificity, objective) = compute_roc_and_metrics_from_value(&scores, &d.y, fit_function, penalties);
         (self.auc, self.threshold, self.accuracy, self.sensitivity, self.specificity, objective)        
-    }
-
-    pub fn compute_mcc_and_metrics(&mut self, d: &Data) -> (f64, f64, f64, f64, f64) {
-        let scores: Vec<_> = self.evaluate(d);
-        let mcc;
-        (mcc, self.threshold, self.accuracy, self.sensitivity, self.specificity, _) = compute_mcc_and_metrics_from_value(&scores, &d.y, None);
-        (mcc, self.threshold, self.accuracy, self.sensitivity, self.specificity)        
     }
 
     /// Calculate the confusion matrix at a given threshold
@@ -641,12 +676,15 @@ impl Individual {
     
     /// a function that compute accuracy,precision and sensitivity
     /// return (accuracy, sensitivity, specificity)
-    pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
+    pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64, f64, AdditionalMetrics) {
         let value = self.evaluate(d);
+        let others_to_compute: [bool; 5] = [self.metrics.mcc.is_some(), self.metrics.f1_score.is_some(),
+                                                self.metrics.npv.is_some(), self.metrics.ppv.is_some(),
+                                                self.metrics.g_means.is_some()];
         if let Some(ref threshold_ci) = self.threshold_ci {
-            compute_metrics_from_value(&value, &d.y, self.threshold, Some([threshold_ci.lower, threshold_ci.upper]))
+            compute_metrics_from_value(&value, &d.y, self.threshold, Some([threshold_ci.lower, threshold_ci.upper]), others_to_compute)
         } else {
-            compute_metrics_from_value(&value, &d.y, self.threshold, None)
+            compute_metrics_from_value(&value, &d.y, self.threshold, None, others_to_compute)
         }
     }
 
@@ -1052,13 +1090,15 @@ mod tests {
         pub fn test() -> Individual {
             Individual  {features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(), auc: 0.4, fit: 0.8, 
             specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 42.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-            epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
+            epsilon: f64::MIN_POSITIVE, parents: None, betas: None, threshold_ci: None,
+            metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}}
         }
 
         pub fn test2() -> Individual {
             Individual  {features: vec![(0, 1), (1, -1)].into_iter().collect(), auc: 0.4, fit: 0.8, 
             specificity: 0.15, sensitivity:0.16, accuracy: 0.23, threshold: 0.0, k: 42, epoch:42,  language: 0, data_type: 0, hash: 0, 
-            epsilon: f64::MIN_POSITIVE, parents: None, betas: None}
+            epsilon: f64::MIN_POSITIVE, parents: None, betas: None, threshold_ci: None,
+            metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}}
         }
 
         pub fn test_with_these_given_features(features_vec: Vec<(usize, i8)>) -> Individual {
@@ -1078,6 +1118,8 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
+                threshold_ci: None,
+                metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}
             }
         }
 
@@ -1098,6 +1140,8 @@ mod tests {
                 epsilon: 0.0,
                 parents: None,
                 betas: None,
+                threshold_ci: None,
+                metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}
             }
         }
 
@@ -1118,6 +1162,8 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
+                threshold_ci: None,
+                metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}
             }
         }
 
@@ -1143,6 +1189,8 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
+                threshold_ci: None,
+                metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}
             }
         }
 
@@ -1430,7 +1478,7 @@ mod tests {
         ind.threshold = 0.75;
         let data = Data::test2();
         assert_eq!(0.7380952380952381, ind.compute_auc(&data), "bad calculation for AUC with compute_auc : this could be a ties issue");
-        assert_eq!(0.7380952380952381, ind.compute_roc_and_metrics(&data, None).0, "bad calculation for AUC with compute_roc_and_metrics : this could be a ties issue");
+        assert_eq!(0.7380952380952381, ind.compute_roc_and_metrics(&data, &FitFunction::auc, None).0, "bad calculation for AUC with compute_roc_and_metrics : this could be a ties issue");
         assert_eq!(ind.compute_auc(&data), ind.compute_auc_from_features(&data.X, data.sample_len, &data.y),
         "Individual.compute_auc_from_features(&data.X, &data.sample_len, &data.y) should return the same result as Individual.compute_auc(&data)");
         assert_eq!(ind.compute_auc(&data), compute_auc_from_value(&ind.evaluate(&data), &data.y),
@@ -1524,10 +1572,10 @@ mod tests {
 
         // warning : random_select_k never select kmax features
         let mut rng = ChaCha8Rng::seed_from_u64(42); // Seed for reproducibility
-        let ind_bin = Individual::random_select_k(2, 3, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
-        let ind_ter = Individual::random_select_k(2, 3, &features, &feature_class, TERNARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
-        let ind_ratio = Individual::random_select_k(2, 3, &features, &feature_class, RATIO_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
-        let ind_pow2 = Individual::random_select_k(2, 3, &features, &feature_class, POW2_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+        let ind_bin = Individual::random_select_k(2, 3, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, false, &mut rng);
+        let ind_ter = Individual::random_select_k(2, 3, &features, &feature_class, TERNARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, false, &mut rng);
+        let ind_ratio = Individual::random_select_k(2, 3, &features, &feature_class, RATIO_LANG, RAW_TYPE, DEFAULT_MINIMUM, false, &mut rng);
+        let ind_pow2 = Individual::random_select_k(2, 3, &features, &feature_class, POW2_LANG, RAW_TYPE, DEFAULT_MINIMUM, false, &mut rng);
         
         assert!(ind_bin.features.iter().all(|(key, value)| feature_class.get(key) == Some(&(*value as u8))), "selected k features should be part of input feature_class");
         assert_eq!(ind_bin.language, BINARY_LANG, "input language should be respected");
@@ -1540,7 +1588,7 @@ mod tests {
         assert_eq!(ind_ratio.threshold, 1.0, "new individual created with random_select_k() with a RATIO_LANG should have a threshold of 1.0");
 
         
-        let ind = Individual::random_select_k(0, 3, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+        let ind = Individual::random_select_k(0, 3, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, false, &mut rng);
         assert_eq!(ind.features, expected_features, 
         "the selected features are not the same as selected in the past, indicating a reproducibility problem.");
         // kmin=1 & kmax=1 should return 1 feature and not panic 
@@ -1576,7 +1624,7 @@ mod tests {
         ind.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 2];
-        assert_eq!((0.5555555555555556_f64, 0.6666666666666666_f64, 0.5_f64), ind.compute_metrics(&data),
+        assert_eq!((0.5555555555555556_f64, 0.6666666666666666_f64, 0.5_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}), ind.compute_metrics(&data),
         "class 2 should be omitted in calculation")
     }
 
@@ -1586,7 +1634,7 @@ mod tests {
         ind.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1];
-        assert_eq!((0.5_f64, 0.6666666666666666_f64, 0.42857142857142855_f64), ind.compute_metrics(&data),
+        assert_eq!((0.5_f64, 0.6666666666666666_f64, 0.42857142857142855_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}), ind.compute_metrics(&data),
         "when ind.sample_len < data.sample_len (or y.len() if it does not match), only the ind.sample_len values should be used to calculate its metrics");
     }
 
@@ -1596,7 +1644,7 @@ mod tests {
         ind.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 1];
-        assert_eq!((0.25_f64, 0.3333333333333333_f64, 0.0_f64), ind.compute_metrics(&data),
+        assert_eq!((0.25_f64, 0.3333333333333333_f64, 0.0_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}), ind.compute_metrics(&data),
         "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
     }
 
@@ -1614,7 +1662,7 @@ mod tests {
         assert_eq!(0.8571428571428571_f64, results.3, "bad calculation for specificity");
 
         let scores: Vec<_> = ind.evaluate(&data);
-        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= compute_roc_and_metrics_from_value(&scores, &data.y, None);
+        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= compute_roc_and_metrics_from_value(&scores, &data.y, &FitFunction::auc, None);
         assert_eq!(accuracy, ind.compute_threshold_and_metrics(&data).1, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(sensitivity, ind.compute_threshold_and_metrics(&data).2, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(specificity, ind.compute_threshold_and_metrics(&data).3, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
@@ -1629,7 +1677,7 @@ mod tests {
         assert_eq!((0.79_f64, 0.7777777777777778_f64, 0.6666666666666666_f64, 0.8333333333333334_f64), ind.compute_threshold_and_metrics(&data), "class 2 should be omitted in calculation");
         
         let scores: Vec<_> = ind.evaluate(&data);
-        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= compute_roc_and_metrics_from_value(&scores, &data.y, None);
+        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= compute_roc_and_metrics_from_value(&scores, &data.y, &FitFunction::auc, None);
         assert_eq!(accuracy, ind.compute_threshold_and_metrics(&data).1, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(sensitivity, ind.compute_threshold_and_metrics(&data).2, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(specificity, ind.compute_threshold_and_metrics(&data).3, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
@@ -1654,7 +1702,7 @@ mod tests {
         assert_eq!((0.89_f64, 0.5_f64, 0.3333333333333333_f64, 1.0_f64), ind.compute_threshold_and_metrics(&data),
         "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
         
-        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= ind.compute_roc_and_metrics(&data, None);
+        let (_, _, accuracy, sensitivity, specificity, _): (f64, f64, f64, f64, f64, f64)= ind.compute_roc_and_metrics(&data, &FitFunction::auc, None);
         assert_eq!(accuracy, ind.compute_threshold_and_metrics(&data).1, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(sensitivity, ind.compute_threshold_and_metrics(&data).2, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
         assert_eq!(specificity, ind.compute_threshold_and_metrics(&data).3, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
@@ -1916,6 +1964,8 @@ mod tests {
             epsilon: DEFAULT_MINIMUM,
             parents: None,
             betas: None,
+            threshold_ci: None,
+            metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}
         };
         
         let data = Data::specific_test(40, 5);
@@ -2234,10 +2284,10 @@ mod tests {
                             " * msp_0083 * msp_0088 * msp_0093 * msp_0125 * msp_0131 * msp_0306 * msp_0325 * msp_0441 * msp_0471 * msp_0473c * msp_0481 * msp_0502", 
                             " * msp_0527 * msp_0551 * msp_0596 * msp_0619 * msp_0654 * msp_0676 * msp_0841 * msp_0872) ≥ 19.398124045367666 (+ -184.20680743952366)");
 
-        (individual.auc, individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity, _) = individual.compute_roc_and_metrics(&data, None);
+        (individual.auc, individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity, _) = individual.compute_roc_and_metrics(&data, &FitFunction::auc, None);
 
         // except the threshold (small variation between launch ~0.000000000001)
-        assert_eq!(right_string.split("≥ 19").collect::<Vec<_>>()[0], individual.display(&data, Some(&data_test), &"ga".to_string(), 2, false).split("≥ 19").collect::<Vec<_>>()[0]);
+        assert_eq!(right_string.split("≥ 19").collect::<Vec<_>>()[0], individual.display(&data, Some(&data_test), &"ga".to_string(), 2, false, 0.0).split("≥ 19").collect::<Vec<_>>()[0]);
 
         assert_eq!(individual.compute_auc(&data), 0.961572606214331, "Wrong auc calculated");
         assert_eq!(individual.compute_new_auc(&data_test), 0.8952380952380953, "Wrong test auc calculated");

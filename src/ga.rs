@@ -2,21 +2,20 @@ use crate::population::Population;
 use crate::data::Data;
 use crate::individual::{self, RATIO_LANG, TERNARY_LANG};
 use crate::individual::Individual;
-use crate::param::{Param, FitFunction};
+use crate::param::{Param};
 use crate::gpu::GpuAssay;
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use rand::seq::index::sample;
 use rand::prelude::*;
-use rand_chacha::{ChaCha8Rng, ChaChaRng};
+use rand_chacha::{ChaCha8Rng};
 use log::{debug,info,warn,error};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::mem;
 use std::time::Instant;
-use rayon::ThreadPoolBuilder;
-use rayon::prelude::*;
 use crate::cv::CV;
+use crate::utils::{display_epoch,display_epoch_legend};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -55,9 +54,6 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
                 debug!("generated for {} {}...",sub_pop.individuals[0].get_language(),sub_pop.individuals[0].get_data_type());
             
                 target_size = remove_stillborn(&mut sub_pop);
-                // Something is broke here and can lead to infinite loop like that (same language and data type repeated:)
-                // generated for Ternary Raw...
-                // Some still born are present 83 (with healthy 0) 
                 if target_size>0 { debug!("Some still born are present {} (with healthy {})",target_size,sub_pop.individuals.len());
                     if target_size==param.ga.population_size { 
                         error!("Params only create inviable individuals!");
@@ -124,14 +120,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         pop.fit(&evaluation_data, &mut None, &gpu_assay, &None, param);
     }
 
-    info!("Legend:    [≠ diversity filter]    [↺ resampling]    [\x1b[1m\x1b[31m█\x1b[0m: {}]    [\x1b[1m\x1b[33m█\x1b[0m: penalized fit]",
-        match param.general.fit {
-            FitFunction::sensitivity => {"sensitivity"},
-            FitFunction::specificity => {"specificity"},
-            _ => {"AUC"}
-        });
-
-    info!("{}", "─".repeat(120));
+    display_epoch_legend(param);
 
     loop {
         epoch += 1;
@@ -153,18 +142,17 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
                 &evaluation_data
             };
             pop.fit(current_data, &mut None, &gpu_assay, &None, param);
-        } 
-        // else if param.cv.overfit_penalty > 0.0 && param.ga.random_sampling_epochs > 0 && epoch % param.ga.random_sampling_epochs == 0 { 
-        //     let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 3 };
-        //     let gpu_assays_per_fold: Vec<Option<GpuAssay>> = vec![None; param.cv.inner_folds];
-        //     debug!("Re-sampling folds...");
-        //     cv = Some(CV::new(&data, folds_nb, &mut rng));
-        //     if let Some(ref cv) = cv {
-        //         pop.fit_on_folds(cv, &param, &gpu_assays_per_fold); 
-        //         if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
-        //     }
+        } else if param.cv.overfit_penalty > 0.0 && param.cv.resampling_inner_folds_epochs > 0 && param.cv.resampling_inner_folds_epochs % epoch == 0 { 
+            let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 3 };
+            let gpu_assays_per_fold: Vec<Option<GpuAssay>> = vec![None; param.cv.inner_folds];
+            debug!("Re-sampling folds...");
+            cv = Some(CV::new(&data, folds_nb, &mut rng));
+            if let Some(ref cv) = cv {
+                pop.fit_on_folds(cv, &param, &gpu_assays_per_fold); 
+                if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
+            }
 
-        // }
+        }
         
         // we create a new generation
         let mut new_pop = Population::new();
@@ -177,47 +165,10 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         if clone_number>0 { debug!("Some clones were removed : {}.", clone_number) } ;
         
         pop = pop.sort(); 
-
-        // Display information about the generation
+        
         let best_model = &pop.individuals[0];
-        let mean_k = pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64;
-        debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
-            best_model.auc,
-            best_model.get_language(),
-            best_model.get_data_type(),
-            best_model.fit, 
-            best_model.k, 
-            best_model.epoch,
-            best_model.specificity,
-            best_model.sensitivity,
-            &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
-            &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/param.ga.population_size as f64,
-            mean_k
-         );
-
-        let scale = 50;
-        let best_model_pos = match param.general.fit {
-            FitFunction::sensitivity => { (best_model.sensitivity * scale as f64) as usize},
-            FitFunction::specificity => { (best_model.specificity * scale as f64) as usize},
-            _ => {(best_model.auc * scale as f64) as usize}};
-
-        let best_fit_pos = (best_model.fit * scale as f64) as usize;
-        let max_pos = best_model_pos.max(best_fit_pos);
-        let mut bar = vec!["█"; scale]; // White
-        for i in (max_pos + 1)..scale { bar[i] = "\x1b[0m▒\x1b[0m"}; // Gray
-        if best_model_pos < scale {  bar[best_model_pos] = "\x1b[1m\x1b[31m█\x1b[0m"} // Red
-        if best_fit_pos < scale {bar[best_fit_pos] = "\x1b[1m\x1b[33m█\x1b[0m"} // Orange
-        let output: String = bar.concat();
-        let mut special_epoch = "".to_string();
-        if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
-            special_epoch = format!("{}≠", special_epoch);
-        };
-        if param.ga.random_sampling_pct > 0.0 && epoch % param.ga.random_sampling_epochs == 0 {
-            special_epoch = format!("{}↺", special_epoch);
-        };
-
-        info!("#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, epoch-best_model.epoch);
-
+        display_epoch(&pop, param, epoch);
+        
         let mut need_to_break= false;
         if epoch>=param.ga.min_epochs {
             if epoch-best_model.epoch+1>param.ga.max_age_best_model {
@@ -260,7 +211,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
         let mut children_to_create = param.ga.population_size as usize-new_pop.individuals.len();
         let mut children=Population::new();
         while children_to_create > 0 {
-            let mut some_children = cross_over(&new_pop,data.feature_len, children_to_create, &mut rng);
+            let mut some_children = cross_over(&new_pop, children_to_create, &mut rng);
             mutate(&mut some_children, param, &data.feature_selection, &mut rng);
             children_to_create = remove_stillborn(&mut some_children) as usize;
             if children_to_create > 0 { debug!("Some stillborn are presents: {}", children_to_create) }
@@ -297,10 +248,10 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
 
     if param.ga.random_sampling_pct > 0.0 {
         if let Some(last_population) = populations.last_mut() {
-            warn!("Random sampling: keeping last fit but computing metrics on all data...");
+            warn!("Random sampling: models optimized on samples ({}%),  metrics shown on full dataset. \n\
+            NOTE: Fit values reflect sample-based optimization, not full dataset performance.", (param.ga.random_sampling_pct * 100.0) as u8);
             last_population.compute_all_metrics(&data, &param.general.fit);
-            //fit(&mut last_population, &data, &mut None, &gpu_assay, &None, param);
-            //*last_population = last_population.clone().sort();
+            //(&mut *last_population).fit(&data, &mut None, &gpu_assay, &None, param);
         }
     }
 
@@ -310,7 +261,6 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
     populations
     
 }
-
 
 /// pick params.ga_select_elite_pct% of the best individuals and params.ga_select_random_pct%  
 fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Population {
@@ -361,58 +311,47 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
 
 
 /// create children from parents
-pub fn cross_over(parents: &Population, feature_len: usize, children_number: usize, rng: &mut ChaCha8Rng) -> Population {
-    let mut children=Population::new();
-
+pub fn cross_over(parents: &Population, children_number: usize, rng: &mut ChaCha8Rng) -> Population {
+    let mut children = Population::new();
+    
     for _i in 0..children_number {
-        let [p1,p2] = parents.individuals.choose_multiple(rng, 2)
-                        .collect::<Vec<&Individual>>()
-                        .try_into()
-                        .expect("Vec must have exactly 2 elements");
-        let main_parent = *vec![p1,p2].choose(rng).unwrap();
-        let mut child=Individual::child(main_parent);    
-        let x=rng.gen_range(1..feature_len-1);
-        if individual::needs_conversion(p1.language, child.language) {
-            for (i,val) in p1.features.iter() {
-                if i<&x {
-                    child.features.insert(*i, individual::gene_convert_from_to(p1.language,
-                                                     child.language, 
-                                                     *val));
-                }
-            }
-        }
-        else {
-            for (i,val) in p1.features.iter() {
-                if i<&x {
-                    child.features.insert(*i, *val);
-                }
-            }
-        }
-        if individual::needs_conversion(p2.language, child.language) {
-            for (i,val) in p2.features.iter() {
-                if i>=&x {
-                    child.features.insert(*i, individual::gene_convert_from_to(p1.language,
-                        child.language, 
-                        *val));
-                }
-            }
-        }
-        else {
-            for (i,val) in p2.features.iter() {
-                if i>=&x {
-                    child.features.insert(*i, *val);
-                }
-            }
-        }
+        let [p1, p2] = parents.individuals.choose_multiple(rng, 2)
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("Vec must have exactly 2 elements");
+        
+        let main_parent = *[p1, p2].choose(rng).unwrap();
+        let mut child = Individual::child(main_parent);
+        
+        let mut all_features: Vec<usize> = p1.features.keys()
+            .chain(p2.features.keys())
+            .copied()
+            .collect();
+        all_features.sort_unstable();
+        all_features.dedup();
 
+        for &feature in &all_features {
+            let (parent, parent_lang) = if rng.gen_bool(0.5) {
+                (p1, p1.language)
+            } else {
+                (p2, p2.language)
+            };
+            
+            if let Some(&val) = parent.features.get(&feature) {
+                let converted_val = if individual::needs_conversion(parent_lang, child.language) {
+                    individual::gene_convert_from_to(parent_lang, child.language, val)
+                } else {
+                    val
+                };
+                child.features.insert(feature, converted_val);
+            }
+        }
+        
         child.count_k();
-
-        child.parents = Some(vec!(p1.hash, p2.hash));
+        child.parents = Some(vec![p1.hash, p2.hash]);
         children.individuals.push(child);
     }
-
     children
-
 }
 
 /// change a sign, remove a variable, add a new variable
@@ -550,6 +489,7 @@ pub fn mutate_pow2(individual: &mut Individual, param: &Param, feature_indices: 
 mod tests {
     use super::*;
     use crate::param;
+    use crate::param::FitFunction;
 
     fn create_test_data_disc() -> Data {
         let mut X: HashMap<(usize, usize), f64> = HashMap::new();
@@ -615,6 +555,8 @@ mod tests {
         }
     }
 
+    use crate::individual::AdditionalMetrics;
+
     fn create_test_population() -> Population {
         let mut pop = Population {
             individuals: Vec::new(),
@@ -636,7 +578,8 @@ mod tests {
                 hash: i as u64,
                 epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
                 parents : None,
-                betas: None
+                betas: None, threshold_ci: None,
+                metrics: AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}
             };
             pop.individuals.push(ind);
         }
@@ -665,18 +608,18 @@ mod tests {
             param.general.fit = fit_method.clone();
             // gpu = false
             param.general.keep_trace = true;
-            fit(&mut pop, &mut data, &mut None, &None, &mut None, &param);
+            pop.fit(&mut data, &mut None, &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             param.general.keep_trace = false;
-            fit(&mut pop, &mut data, &mut None, &None, &mut None, &param);
+            pop.fit(&mut data, &mut None, &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             // gpu = true
             let gpu_assay = Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, pop.individuals.len() as usize, &param.gpu));
             param.general.keep_trace = true;
-            fit(&mut pop, &mut data, &mut None, &gpu_assay, &mut None, &param);
+            pop.fit(&mut data, &mut None, &gpu_assay, &mut None, &param);
             populations.push(pop.individuals.clone());
             param.general.keep_trace = false;
-            fit(&mut pop, &mut data, &mut None, &gpu_assay, &mut None, &param);
+            pop.fit(&mut data, &mut None, &gpu_assay, &mut None, &param);
             populations.push(pop.individuals.clone());
             
             for p in 1..populations.len() {
@@ -714,19 +657,19 @@ mod tests {
             param.general.fit = fit_method.clone();
             // gpu = false
             param.general.keep_trace = true;
-            fit(&mut pop, &mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
+            pop.fit(&mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             param.general.keep_trace = false;
-            fit(&mut pop, &mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
+            pop.fit(&mut data, &mut Some(test_data.clone()), &None, &mut None, &param);
             populations.push(pop.individuals.clone());
             // gpu = true
             let gpu_assay = Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, pop.individuals.len() as usize, &param.gpu));
             let test_assay = Some(GpuAssay::new(&test_data.X, &test_data.feature_selection, test_data.sample_len, pop.individuals.len() as usize, &param.gpu));
             param.general.keep_trace = true;
-            fit(&mut pop, &mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
+            pop.fit(&mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
             populations.push(pop.individuals.clone());
             param.general.keep_trace = false;
-            fit(&mut pop, &mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
+            pop.fit(&mut data, &mut Some(test_data.clone()), &gpu_assay, &test_assay, &param);
             populations.push(pop.individuals.clone());
             
             for p in 1..populations.len() {

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use crate::experiment::VotingMethod;
 use crate::experiment::ImportanceAggregation;
-use log::{warn,error};
+use log::{warn};
 
 #[derive(Debug,Serialize,Deserialize,Clone, PartialEq)]
 #[allow(non_camel_case_types)]
@@ -12,7 +12,11 @@ pub enum FitFunction {
     auc,
     specificity,
     sensitivity,  
-    ExperimentalMcc
+    mcc,
+    f1_score,
+    npv,
+    ppv,
+    g_means,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -126,6 +130,8 @@ pub struct CV {
     pub inner_folds: usize,
     #[serde(default = "zero_default")] 
     pub overfit_penalty: f64,
+    #[serde(default = "uzero_default")]  
+    pub resampling_inner_folds_epochs: usize,
     #[serde(default = "folds_default")]  
     pub outer_folds: usize,
     #[serde(default = "false_default")] 
@@ -260,7 +266,9 @@ pub struct Experimental {
     #[serde(default = "zero_default")] 
     pub threshold_ci_alpha: f64,
     #[serde(default = "uzero_default")] 
-    pub threshold_ci_n_bootstrap: usize
+    pub threshold_ci_n_bootstrap: usize,
+    #[serde(default = "zero_default")] 
+    pub bias_penalty: f64,
 }
 
 // Default section definitions
@@ -348,30 +356,70 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     let param_file_reader = File::open(param_file)?;
     let param_reader = BufReader::new(param_file_reader);
     
-    let config:Param = serde_yaml::from_reader(param_reader)?;
+    let mut config:Param = serde_yaml::from_reader(param_reader)?;
 
-    if config.experimental.threshold_ci  {
-        if !config.general.keep_trace {
-            panic!("Experimental thresholdCI currently requires keep_trace==true")
-        }
-
-        if config.experimental.threshold_ci_alpha <= 0.0 || config.experimental.threshold_ci_alpha >= 1.0 {
-            panic!("Configuration error: invalid experimental_threshold_ci_alpha value. Must be in range (0, 1).");
-        }
-
-
-        // Sanity check to prevent bad practices
-        let B_min = 40.0/config.experimental.threshold_ci_alpha; //(Efron, 1987)
-        let B_opt = 100.0/config.experimental.threshold_ci_alpha;
-        if (config.experimental.threshold_ci_n_bootstrap as f64) < B_min {
-            error!("Bootstrap sample size B={} is BELOW theoretical minimum B_min={}. Confidence interval quantiles may be undefined or severely biased.", config.experimental.threshold_ci_n_bootstrap, B_min);
-            panic!("Bootstrap sample size B={} is BELOW theoretical minimum B_min={}. Confidence interval quantiles may be undefined or severely biased.", config.experimental.threshold_ci_n_bootstrap, B_min);
-        } else if (config.experimental.threshold_ci_n_bootstrap as f64) < B_opt {
-            warn!("Bootstrap sample size B={} is ABOVE minimum but BELOW optimal threshold B={}. Expect moderate instability and potential under-coverage.", config.experimental.threshold_ci_n_bootstrap, B_opt);
-        }   
-    }
+    let _ = validate(&mut config);
 
     Ok(config)
+}
+
+pub fn validate(param: &mut Param) -> Result<(), String> {
+        validate_bootstrap(param)?;
+        validate_penalties(param)?;
+        Ok(())
+    }
+    
+    
+    fn validate_bootstrap(param: &mut Param) -> Result<(), String> {
+        if param.experimental.threshold_ci_n_bootstrap == 0 {
+            return Ok(()); 
+        }
+            
+        if param.experimental.threshold_ci_alpha <= 0.0 || param.experimental.threshold_ci_alpha >= 1.0 {
+            return Err(format!("Invalid threshold_ci_alpha={:.3}. Must be in range (0, 1).", param.experimental.threshold_ci_alpha));
+        }
+            
+        const B_MIN: usize = 1000;   // CI (Efron & Tibshirani 1993)
+        const B_REC: usize = 2000;   // Robustness (Rousselet et al. 2021)
+        
+        let B = param.experimental.threshold_ci_n_bootstrap;
+        
+        if B < B_MIN {
+            return Err(format!(
+                "Bootstrap B={} < {} (Efron & Tibshirani 1993 minimum for percentile CI). \
+                Quantile estimates may be unstable. Increase B or disable (set to 0).",
+                B, B_MIN
+            ));
+        } else if B < B_REC {
+            warn!(
+                "⚠️  Bootstrap B={} < {} (Rousselet et al. 2021 recommendation). \
+                Percentile CI may be too narrow for small samples. \
+                Consider B ≥ {} for {}% CI stability.",
+                B, B_REC, B_REC, (1.0 - param.experimental.threshold_ci_alpha) * 100.0
+            );
+        }
+        
+        Ok(())
+    }
+    
+    fn validate_penalties(param: &mut Param) -> Result<(), String> {
+        if param.general.k_penalty < 0.0 {
+            return Err(format!("Invalid k_penalty={:.3}. Must be >= 0.", param.general.k_penalty));
+        }
+
+        if param.general.fr_penalty < 0.0 {
+            return Err(format!("Invalid fr_penalty={:.3}. Must be >= 0.", param.general.fr_penalty));
+        }
+
+        if param.experimental.bias_penalty < 0.0 {
+            return Err(format!("Invalid bias_penalty={:.3}. Must be >= 0.", param.experimental.bias_penalty));
+        }
+
+        if param.experimental.threshold_ci_penalty < 0.0 {
+            return Err(format!("Invalid threshold_ci_penalty={:.3}. Must be >= 0.", param.experimental.threshold_ci_penalty));
+        }
+
+        Ok(())
 }
 
 // Default value definitions

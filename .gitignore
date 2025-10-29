@@ -7,3 +7,4 @@ out/
 *.msgpack
 *.mp
 *.DS_Store
+*.svg

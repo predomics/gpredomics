@@ -103,6 +103,11 @@ fn main() {
     let running_clone_for_signal = Arc::clone(&running);
     let mut signals = Signals::new(&[SIGTERM, SIGHUP, SIGINT]).expect("Failed to set up signal handler");
 
+    rayon::ThreadPoolBuilder::new()
+    .num_threads(param.general.thread_number as usize)
+    .build_global()
+    .expect("Rayon global pool already set");
+
     // Main thread now monitors the signal
     let mut soft_kill = false;
     let _signal_thread = thread::spawn(move || {
