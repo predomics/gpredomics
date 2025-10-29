@@ -9,7 +9,6 @@ use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
 use log::{info,warn};
 use rayon::prelude::*;
-use rayon::ThreadPoolBuilder;
 use fishers_exact::fishers_exact;
 use crate::utils::serde_json_hashmap_numeric;
 use crate::ChaCha8Rng;
@@ -373,39 +372,32 @@ impl Data {
 
     // Dissociate this function from select_features to allow its use in beam algorithm
     pub fn evaluate_features(&self, param: &Param) -> (Vec<(usize, u8, f64)>, Vec<(usize, u8, f64)>) {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(param.general.thread_number)
-            .build()
-            .unwrap();
-    
-        let mut results: Vec<(usize, u8, f64)> = pool.install(|| {
-            (0..self.feature_len)
-                .into_par_iter()
-                .map(|j| {
-                    let (class, value) = match param.data.feature_selection_method.as_str() {
-                        "studentt" => self.compare_classes_studentt(
-                            j,
-                            param.data.feature_maximal_pvalue,
-                            param.data.feature_minimal_prevalence_pct as f64 / 100.0,
-                            param.data.feature_minimal_feature_value,
-                        ),
-                        "bayesian_fisher" => self.compare_classes_bayesian_fisher(
-                            j,
-                            param.data.feature_minimal_log_abs_bayes_factor,
-                            param.data.feature_minimal_prevalence_pct as f64 / 100.0,
-                            param.data.feature_minimal_feature_value,
-                        ),
-                        _ => self.compare_classes_wilcoxon(
-                            j,
-                            param.data.feature_maximal_pvalue,
-                            param.data.feature_minimal_prevalence_pct as f64 / 100.0,
-                            param.data.feature_minimal_feature_value,
-                        )
-                    };
-                    (j, class, value)
-                })
-                .collect()
-        });
+        let mut results: Vec<(usize, u8, f64)> = (0..self.feature_len)
+            .into_par_iter()
+            .map(|j| {
+                let (class, value) = match param.data.feature_selection_method.as_str() {
+                    "studentt" => self.compare_classes_studentt(
+                        j,
+                        param.data.feature_maximal_pvalue,
+                        param.data.feature_minimal_prevalence_pct as f64 / 100.0,
+                        param.data.feature_minimal_feature_value,
+                    ),
+                    "bayesian_fisher" => self.compare_classes_bayesian_fisher(
+                        j,
+                        param.data.feature_minimal_log_abs_bayes_factor,
+                        param.data.feature_minimal_prevalence_pct as f64 / 100.0,
+                        param.data.feature_minimal_feature_value,
+                    ),
+                    _ => self.compare_classes_wilcoxon(
+                        j,
+                        param.data.feature_maximal_pvalue,
+                        param.data.feature_minimal_prevalence_pct as f64 / 100.0,
+                        param.data.feature_minimal_feature_value,
+                    )
+                };
+                (j, class, value)
+            })
+            .collect();
 
         if param.data.feature_selection_method == "bayesian_fisher" {
             results.sort_by(|a, b| {

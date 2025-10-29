@@ -8,9 +8,8 @@ use crate::bayesian_mcmc::MCMCAnalysisTrace;
 use log::{debug, info, error, warn};
 use rand_chacha::ChaCha8Rng;
 use rand::SeedableRng;
-use rayon::ThreadPoolBuilder;
 use crate::Individual;
-use crate::ga;
+use crate::param::FitFunction;
 //use crate::lib::{param, run_ga, run_cv, run_beam, run_mcmc};
 
 ////////////////////////
@@ -215,40 +214,32 @@ pub struct Experiment {
 impl Experiment {
     pub fn compute_importance(&mut self) {
         let mut rng = ChaCha8Rng::seed_from_u64(self.parameters.general.seed);
-
-        let pool = ThreadPoolBuilder::new()
-        .num_threads(self.parameters.general.thread_number)
-        .build()
-        .expect("Failed to build thread pool");
-
-        pool.install(|| { 
-            if matches!(self.cv_folds_ids, None)  {
-                info!("Computing importance on final population's FBM (non-CV mode)");
-                self.importance_collection = Some(self.final_population.as_ref().unwrap().select_best_population(self.parameters.cv.cv_best_models_ci_alpha).compute_pop_oob_feature_importance(&self.train_data, self.parameters.importance.n_permutations_oob, &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true, None));
-                info!("{}", self.importance_collection.as_ref().unwrap().display_feature_importance_terminal(&self.train_data, 30));
-            } else {
-                info!("Computing CV importance with {} folds", self.cv_folds_ids.as_ref().unwrap().len());
-                if let Some(fold_ids) = &self.cv_folds_ids {
-                    debug!("Reconstructing CV object from Experiment...");
-                    let cv_result = CV::reconstruct(&self.train_data, fold_ids.clone(), self.collections.clone());
-                    
-                    match cv_result {
-                        Ok(cv) => {
-                            debug!("Computing Intra-fold and Inter-fold importances...");
-                            self.importance_collection = Some(cv.compute_cv_oob_feature_importance(&self.parameters, self.parameters.importance.n_permutations_oob,
-                                &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true).expect("CV importance calculation failed."));
-                            
-                            info!("{}", self.importance_collection.as_ref().unwrap().display_feature_importance_terminal(&self.train_data, 30));
-                        }
-                        Err(e) => {
-                            panic!("Failed to reconstruct CV structure: {}", e);
-                        }
+        if matches!(self.cv_folds_ids, None)  {
+            info!("Computing importance on final population's FBM (non-CV mode)");
+            self.importance_collection = Some(self.final_population.as_ref().unwrap().select_best_population(self.parameters.cv.cv_best_models_ci_alpha).compute_pop_oob_feature_importance(&self.train_data, self.parameters.importance.n_permutations_oob, &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true, None));
+            info!("{}", self.importance_collection.as_ref().unwrap().display_feature_importance_terminal(&self.train_data, 30));
+        } else {
+            info!("Computing CV importance with {} folds", self.cv_folds_ids.as_ref().unwrap().len());
+            if let Some(fold_ids) = &self.cv_folds_ids {
+                debug!("Reconstructing CV object from Experiment...");
+                let cv_result = CV::reconstruct(&self.train_data, fold_ids.clone(), self.collections.clone());
+                
+                match cv_result {
+                    Ok(cv) => {
+                        debug!("Computing Intra-fold and Inter-fold importances...");
+                        self.importance_collection = Some(cv.compute_cv_oob_feature_importance(&self.parameters, self.parameters.importance.n_permutations_oob,
+                            &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true).expect("CV importance calculation failed."));
+                        
+                        info!("{}", self.importance_collection.as_ref().unwrap().display_feature_importance_terminal(&self.train_data, 30));
                     }
-                } else {
-                    error!("CV fold IDs are None but expected for CV importance calculation");
+                    Err(e) => {
+                        panic!("Failed to reconstruct CV structure: {}", e);
+                    }
                 }
+            } else {
+                error!("CV fold IDs are None but expected for CV importance calculation");
             }
-        })
+        }
     }
 
     pub fn display_results(&mut self) {
@@ -628,7 +619,7 @@ impl Jury {
     pub fn evaluate(&mut self, data: &Data) {
         for expert in &mut self.experts.individuals {
             if expert.accuracy == 0.0 {
-                expert.compute_roc_and_metrics(data, None);
+                expert.compute_roc_and_metrics(data, &FitFunction::auc, None);
             }
         }
         
@@ -692,8 +683,8 @@ impl Jury {
 
             let auc = compute_auc_from_value(&scores_filtered, &true_filtered);
             
-            let (accuracy, sensitivity, specificity) = 
-                compute_metrics_from_classes(&pred_filtered, &true_filtered);
+            let (accuracy, sensitivity, specificity, _) = 
+                compute_metrics_from_classes(&pred_filtered, &true_filtered, [false ; 5]);
 
             (auc, accuracy, sensitivity, specificity, rejection_rate)
         } else {
@@ -730,7 +721,7 @@ impl Jury {
         
         if !filtered_data.is_empty() {
             let (pred_classes, true_classes): (Vec<u8>, Vec<u8>) = filtered_data.into_iter().unzip();
-            let (_, sensitivity, specificity) = compute_metrics_from_classes(&pred_classes, &true_classes);
+            let (_, sensitivity, specificity, _) = compute_metrics_from_classes(&pred_classes, &true_classes, [false ; 5]);
             
             let youden_index = sensitivity + specificity - 1.0;
             
@@ -848,30 +839,36 @@ impl Jury {
             
             for (expert_idx, expert_pred) in expert_predictions.iter().enumerate() {
                 if sample_index < expert_pred.len() {
+                    let vote = expert_pred[sample_index];
+                    
+                    if vote == 2 {
+                        continue;
+                    }
+                    
                     let weight = weights[expert_idx];
                     total_weight += weight;
-                    
-                    if expert_pred[sample_index] == 1 {
+                    if vote == 1 {
                         weighted_positive += weight;
                     }
                 }
             }
 
             let (predicted_class, ratio) = if total_weight > 0.0 {
-                let ratio = weighted_positive / total_weight;
+            let ratio = weighted_positive / total_weight;
 
-                let class = if (ratio - threshold).abs() < (threshold_window / 100.0) {
-                    2u8 
-                } else if weighted_positive >= total_weight * threshold {
-                    1u8
-                } else {
-                    0u8
-                };
-                
-                (class, ratio)
+            let class = if (ratio - threshold).abs() < (threshold_window / 100.0) {
+                2u8  // Abstention collective (threshold_window)
+            } else if ratio >= threshold {  
+                1u8
             } else {
-                (2u8, -1.0) // -1 are excluded
+                0u8
             };
+            
+            (class, ratio)
+        } else {
+            (2u8, 0.5)  
+        };
+
             
             ratios.push(ratio);
             predicted_classes.push(predicted_class);
@@ -2963,7 +2960,7 @@ mod tests {
         );
 
         jury.evaluate(&data_positive);
-        let (auc, accuracy, sensitivity, specificity, rejection_rate) = 
+        let (_, accuracy, sensitivity, _, rejection_rate) = 
             jury.compute_new_metrics(&data_positive);
 
         // Jury predicts 1, true class = 1 -> True Positive
@@ -3246,7 +3243,7 @@ mod tests {
             );
 
             jury.evaluate(&data);
-            let (pred_classes, scores) = jury.predict(&data);
+            let (pred_classes, _) = jury.predict(&data);
             
             // Score = 0.6, threshold = 0.5, |0.6 - 0.5| = 0.1 = 10%
             if window < 10.0 {
@@ -3508,5 +3505,4 @@ mod tests {
         assert!(specificity >= 0.0 && specificity <= 1.0, "Specificity should be valid with specialized weighting");
         assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0, "Rejection rate should be valid with specialized weighting");
     }
-
 }
