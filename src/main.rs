@@ -33,11 +33,6 @@ fn main() {
 
     let param = param::get("param.yaml".to_string()).unwrap();
 
-    // if param.cv.overfit_penalty != 0.0 {
-    //     error!("overfit_penalty parameter is deprecated, please set it to 0.");
-    //     panic!("overfit_penalty parameter is deprecated, please set it to 0.");
-    // }
-
     let args = Cli::parse();
 
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();

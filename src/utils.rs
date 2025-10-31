@@ -75,7 +75,9 @@ pub fn shuffle_row(X: &mut HashMap<(usize, usize), f64>, sample_len: usize, feat
     }
 }
 
-// Statistical functions
+//-----------------------------------------------------------------------------
+// Statistical utilites
+//-----------------------------------------------------------------------------
 
 pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f64) {
     assert!(n > 0, "confInterBinomial: Sample size (n) must be greater than zero.");
@@ -365,135 +367,6 @@ fn apply_threshold_balance(sensitivity: f64, specificity: f64, penalties: Option
     }
 }
 
-pub fn display_epoch_legend(param: &Param) {
-    info!("Legend:    [≠ diversity filter]    [↺ resampling]    [\x1b[1m\x1b[31m█\x1b[0m: {}]    [\x1b[1m\x1b[33m█\x1b[0m: penalized fit]",
-        match param.general.fit {
-            FitFunction::sensitivity => {"sensitivity"},
-            FitFunction::specificity => {"specificity"},
-            FitFunction::ppv => {"PPV"},
-            FitFunction::npv => {"NPV"},
-            FitFunction::mcc => {"MCC"},
-            FitFunction::g_means => {"G_means"},
-            FitFunction::f1_score => {"F1-score"},
-            _ => {"AUC"}
-        });
-
-    info!("{}", "─".repeat(120));
-    }
-
-pub fn display_epoch(pop: &Population, param: &Param, epoch: usize) {
-    let best_model = &pop.individuals[0];
-    let mean_k = pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64;
-        debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
-            best_model.auc,
-            best_model.get_language(),
-            best_model.get_data_type(),
-            best_model.fit, 
-            best_model.k, 
-            best_model.epoch,
-            best_model.specificity,
-            best_model.sensitivity,
-            &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
-            &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/param.ga.population_size as f64,
-            mean_k
-            );
-
-    let scale = 50;
-    let best_model_pos = match param.general.fit {
-        FitFunction::sensitivity => { (best_model.sensitivity * scale as f64) as usize},
-        FitFunction::specificity => { (best_model.specificity * scale as f64) as usize},
-        _ => {(best_model.auc * scale as f64) as usize}};
-
-    let best_fit_pos = (best_model.fit * scale as f64) as usize;
-    let max_pos = best_model_pos.max(best_fit_pos);
-    let mut bar = vec!["█"; scale]; // White
-    for i in (max_pos + 1)..scale { bar[i] = "\x1b[0m▒\x1b[0m"}; // Gray
-    if best_model_pos < scale {  bar[best_model_pos] = "\x1b[1m\x1b[31m█\x1b[0m"} // Red
-    if best_fit_pos < scale {bar[best_fit_pos] = "\x1b[1m\x1b[33m█\x1b[0m"} // Orange
-    let output: String = bar.concat();
-    let mut special_epoch = "".to_string();
-    
-    if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
-        special_epoch = format!("{}≠", special_epoch);
-    };
-    if param.ga.random_sampling_pct > 0.0 && epoch % param.ga.random_sampling_epochs == 0 || 
-        param.cv.overfit_penalty > 0.0 && param.cv.resampling_inner_folds_epochs > 0 && epoch % param.cv.resampling_inner_folds_epochs == 0 {
-        special_epoch = format!("{}↺", special_epoch);
-    };
-
-    info!("#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, epoch-best_model.epoch);
-
-}
-
-
-pub fn compute_threshold_and_metrics_with_bootstrap(value: &[f64], y: &Vec<u8>, fit_function: &FitFunction, penalties: Option<[f64; 2]>, n_bootstrap: usize, alpha: f64, rng: &mut ChaCha8Rng) 
-    -> (f64, [f64;3], f64, f64, f64, f64, f64) {
-    let (auc, center_threshold, _, _, _, obj) = compute_roc_and_metrics_from_value(value, y, fit_function, penalties);
-    
-    let seeds: Vec<u64> = (0..n_bootstrap)
-        .map(|_| rng.next_u64())
-        .collect();
-
-    let pos_indices: Vec<usize> = y.iter()
-                .enumerate()
-                .filter(|(_, &label)| label == 1)
-                .map(|(i, _)| i)
-                .collect();
-
-    let neg_indices: Vec<usize> = y.iter()
-        .enumerate()
-        .filter(|(_, &label)| label == 0)
-        .map(|(i, _)| i)
-        .collect();
-        
-    let mut thresholds: Vec<f64> = seeds
-        .par_iter()
-        .map(|&seed| {
-            let mut local_rng = ChaCha8Rng::seed_from_u64(seed);
-
-            let bootstrap_pos: Vec<usize> = (0..pos_indices.len())
-                .map(|_| pos_indices[local_rng.gen_range(0..pos_indices.len())])
-                .collect();
-
-            let bootstrap_neg: Vec<usize> = (0..neg_indices.len())
-                .map(|_| neg_indices[local_rng.gen_range(0..neg_indices.len())])
-                .collect();
-
-            let mut bootstrap_indices = bootstrap_pos;
-            bootstrap_indices.extend(bootstrap_neg);
-            
-            let bootstrap_values: Vec<f64> = bootstrap_indices
-                .iter()
-                .map(|&i| value[i])
-                .collect();
-            let bootstrap_y: Vec<u8> = bootstrap_indices
-                .iter()
-                .map(|&i| y[i])
-                .collect();
-            
-            let (_, threshold, _, _, _, _) = 
-                compute_roc_and_metrics_from_value(
-                    &bootstrap_values,
-                    &bootstrap_y,
-                    fit_function,
-                    penalties
-                );
-            threshold
-        })
-        .collect();
-    
-    thresholds.sort_unstable_by(|a, b| {
-        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    
-    let lower_idx = ((alpha / 2.0) * (n_bootstrap - 1) as f64).ceil() as usize;
-    let upper_idx = ((1.0 - alpha / 2.0) * (n_bootstrap - 1) as f64).floor() as usize;
-
-    let (acc, se, sp, rej, _) = compute_metrics_from_value(value, y, center_threshold, Some([thresholds[lower_idx], thresholds[upper_idx]]), [false ; 5]);
-    
-    (auc, [thresholds[lower_idx], center_threshold, thresholds[upper_idx]], acc, se, sp, obj, rej)
-    
-}
 
 pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
     let mut n = 0.0;
@@ -534,6 +407,229 @@ pub fn mad(values: &[f64]) -> f64 {
         values.iter().map(|&v| (v - med).abs()).collect()
     };
     1.4826 * median(&mut dev)                
+}
+
+/// Stratified bootstrap for ROC threshold confidence intervals
+/// 
+/// Theory: Efron (1979) IID or Politis & Romano (1994) Subsampling
+/// 
+/// # Arguments
+/// - `subsample_frac`: fraction [0.5, 1.0]
+///   - 1.0 = classic IID bootstrap
+///   - 0.632 = optimal subsampling
+///   - 0.5 = very conservative half-bootstrap
+pub fn compute_threshold_and_metrics_with_bootstrap(
+    value: &[f64], 
+    y: &Vec<u8>,  
+    fit_function: &FitFunction, 
+    penalties: Option<[f64; 2]>, 
+    n_bootstrap: usize, 
+    alpha: f64, 
+    subsample_frac: f64, 
+    rng: &mut ChaCha8Rng
+) -> (f64, [f64;3], f64, f64, f64, f64, f64) {
+    
+    assert!(subsample_frac > 0.0 && subsample_frac <= 1.0);
+    assert!(n_bootstrap > 10);
+    assert!(alpha > 0.0 && alpha < 1.0);
+    
+    let (auc, center_threshold, _, _, _, obj) = 
+        compute_roc_and_metrics_from_value(value, y, fit_function, penalties);
+    
+    let seeds: Vec<u64> = (0..n_bootstrap)
+        .map(|_| rng.next_u64())
+        .collect();
+
+    let pos_indices: Vec<usize> = y.iter()
+        .enumerate()
+        .filter(|(_, &label)| label == 1)
+        .map(|(i, _)| i)
+        .collect();
+
+    let neg_indices: Vec<usize> = y.iter()
+        .enumerate()
+        .filter(|(_, &label)| label == 0)
+        .map(|(i, _)| i)
+        .collect();
+    
+    let n_pos_total = pos_indices.len();
+    let n_neg_total = neg_indices.len();
+    let n_total = n_pos_total + n_neg_total;
+    
+    let n_pos_sample = ((n_pos_total as f64) * subsample_frac).ceil() as usize;
+    let n_neg_sample = ((n_neg_total as f64) * subsample_frac).ceil() as usize;
+    let m_total = n_pos_sample + n_neg_sample;
+    
+    let is_subsampling = (subsample_frac - 1.0).abs() > 1e-6;
+    
+    // Geyer rescaling
+    let sqrt_m = if is_subsampling {
+        (m_total as f64).sqrt()
+    } else {
+        1.0
+    };
+    
+    let mut bootstrap_statistics: Vec<f64> = seeds
+        .par_iter()
+        .map(|&seed| {
+            let mut local_rng = ChaCha8Rng::seed_from_u64(seed);
+
+            let bootstrap_pos: Vec<usize> = if is_subsampling {
+                let mut perm: Vec<usize> = (0..n_pos_total).collect();
+                perm.shuffle(&mut local_rng);
+                perm.into_iter()
+                    .take(n_pos_sample)
+                    .map(|i| pos_indices[i])
+                    .collect()
+            } else {
+                (0..n_pos_total)
+                    .map(|_| pos_indices[local_rng.gen_range(0..n_pos_total)])
+                    .collect()
+            };
+
+            let bootstrap_neg: Vec<usize> = if is_subsampling {
+                let mut perm: Vec<usize> = (0..n_neg_total).collect();
+                perm.shuffle(&mut local_rng);
+                perm.into_iter()
+                    .take(n_neg_sample)
+                    .map(|i| neg_indices[i])
+                    .collect()
+            } else {
+                (0..n_neg_total)
+                    .map(|_| neg_indices[local_rng.gen_range(0..n_neg_total)])
+                    .collect()
+            };
+            
+            let mut bootstrap_indices = bootstrap_pos;
+            bootstrap_indices.extend(bootstrap_neg);
+            
+            let bootstrap_values: Vec<f64> = bootstrap_indices
+                .iter()
+                .map(|&i| value[i])
+                .collect();
+            let bootstrap_y: Vec<u8> = bootstrap_indices
+                .iter()
+                .map(|&i| y[i])
+                .collect();
+            
+            let (_, threshold_boot, _, _, _, _) = 
+                compute_roc_and_metrics_from_value(
+                    &bootstrap_values,
+                    &bootstrap_y,
+                    fit_function,
+                    penalties
+                );
+            
+            // √m Geyer rescale
+            if is_subsampling {
+                sqrt_m * (threshold_boot - center_threshold)
+            } else {
+                threshold_boot
+            }
+        })
+        .collect();
+    
+    bootstrap_statistics.sort_unstable_by(|a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    
+    let lower_idx = ((alpha / 2.0) * (n_bootstrap - 1) as f64).ceil() as usize;
+    let upper_idx = ((1.0 - alpha / 2.0) * (n_bootstrap - 1) as f64).floor() as usize;
+    
+    let lower_idx = lower_idx.min(n_bootstrap - 1);
+    let upper_idx = upper_idx.min(n_bootstrap - 1);
+    
+    // Geyer
+    let (lower_threshold, upper_threshold) = if is_subsampling {
+        let sqrt_n = (n_total as f64).sqrt();
+        let lower = center_threshold - bootstrap_statistics[upper_idx] / sqrt_n;
+        let upper = center_threshold - bootstrap_statistics[lower_idx] / sqrt_n;
+        (lower, upper)
+    } else {
+        (bootstrap_statistics[lower_idx], bootstrap_statistics[upper_idx])
+    };
+    
+    debug_assert!(lower_threshold <= upper_threshold);
+    
+    let (acc, se, sp, rej, _) = compute_metrics_from_value(
+        value, y, center_threshold, 
+        Some([lower_threshold, upper_threshold]), 
+        [false; 5]
+    );
+    
+    (auc, [lower_threshold, center_threshold, upper_threshold], acc, se, sp, obj, rej)
+}
+
+//-----------------------------------------------------------------------------
+// Display utilites
+//-----------------------------------------------------------------------------
+
+pub fn display_epoch_legend(param: &Param) {
+    info!("Legend:    [≠ diversity filter]    [↺ resampling]    [\x1b[1m\x1b[31m█\x1b[0m: {}]    [\x1b[1m\x1b[33m█\x1b[0m: penalized fit]",
+        match param.general.fit {
+            FitFunction::sensitivity => {"sensitivity"},
+            FitFunction::specificity => {"specificity"},
+            FitFunction::ppv => {"PPV"},
+            FitFunction::npv => {"NPV"},
+            FitFunction::mcc => {"MCC"},
+            FitFunction::g_means => {"G_means"},
+            FitFunction::f1_score => {"F1-score"},
+            _ => {"AUC"}
+        });
+
+    info!("{}", "─".repeat(120));
+    }
+
+pub fn display_epoch(pop: &Population, param: &Param, epoch: usize) {
+    if pop.individuals.len() > 0 {
+        let best_model = &pop.individuals[0];
+        let mean_k = pop.individuals.iter().map(|i| {i.k}).sum::<usize>() as f64/param.ga.population_size as f64;
+            debug!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
+                best_model.auc,
+                best_model.get_language(),
+                best_model.get_data_type(),
+                best_model.fit, 
+                best_model.k, 
+                best_model.epoch,
+                best_model.specificity,
+                best_model.sensitivity,
+                &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
+                &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/param.ga.population_size as f64,
+                mean_k
+                );
+
+        let scale = 50;
+        let best_model_pos = match param.general.fit {
+            FitFunction::sensitivity => { (best_model.sensitivity * scale as f64) as usize},
+            FitFunction::specificity => { (best_model.specificity * scale as f64) as usize},
+            _ => {(best_model.auc * scale as f64) as usize}};
+
+        let best_fit_pos = (best_model.fit * scale as f64) as usize;
+        let max_pos = best_model_pos.max(best_fit_pos);
+        let mut bar = vec!["█"; scale]; // White
+        for i in (max_pos + 1)..scale { bar[i] = "\x1b[0m▒\x1b[0m"}; // Gray
+        if best_model_pos < scale {  bar[best_model_pos] = "\x1b[1m\x1b[31m█\x1b[0m"} // Red
+        if best_fit_pos < scale {bar[best_fit_pos] = "\x1b[1m\x1b[33m█\x1b[0m"} // Orange
+        let output: String = bar.concat();
+        let mut special_epoch = "".to_string();
+        
+        if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
+            special_epoch = format!("{}≠", special_epoch);
+        };
+        if param.ga.random_sampling_pct > 0.0 && epoch % param.ga.random_sampling_epochs == 0 || 
+            param.cv.overfit_penalty > 0.0 && param.cv.resampling_inner_folds_epochs > 0 && epoch % param.cv.resampling_inner_folds_epochs == 0 {
+            special_epoch = format!("{}↺", special_epoch);
+        };
+
+        let analysis_tag = if param.tag != "".to_string() {
+            format!("[{}] ", param.tag)
+        } else {
+            "".to_string()
+        };
+
+        info!("{}#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", analysis_tag, epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, epoch-best_model.epoch);
+
+    }
 }
 
 // Graphical functions
@@ -768,6 +864,10 @@ fn round_down_nicely(value: f64) -> f64 {
         0.5 * power_of_ten
     }
 }
+
+//-----------------------------------------------------------------------------
+// Serialization utilites
+//-----------------------------------------------------------------------------
 
 // Serde functions for JSONize HashMaps
 pub mod serde_json_hashmap_numeric {
@@ -1955,6 +2055,7 @@ mod tests {
                 None, 
                 1000,  // n_bootstrap
                 0.05,  // alpha (95% CI)
+                1_f64,
                 &mut rng
             );
         
@@ -1979,12 +2080,12 @@ mod tests {
         
         let (_, [l1, c1, u1], _, _, _, _, _) = 
             compute_threshold_and_metrics_with_bootstrap(
-                &value, &y, &FitFunction::auc, None, 100, 0.05, &mut rng1
+                &value, &y, &FitFunction::auc, None, 100, 0.05, 1_f64, &mut rng1
             );
         
         let (_, [l2, c2, u2], _, _, _, _, _) = 
             compute_threshold_and_metrics_with_bootstrap(
-                &value, &y, &FitFunction::auc, None, 100, 0.05, &mut rng2
+                &value, &y, &FitFunction::auc, None, 100, 0.05, 1_f64, &mut rng2
             );
         
         assert!((l1 - l2).abs() < 1e-10, "Same seed should give same lower CI");
@@ -2001,7 +2102,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (_, [lower, _center, upper], _, _, _, _, rej) = 
             compute_threshold_and_metrics_with_bootstrap(
-                &value, &y, &FitFunction::auc, None, 500, 0.05, &mut rng
+                &value, &y, &FitFunction::auc, None, 500, 0.05, 1_f64, &mut rng
             );
         
         // With imbalance, the CI should be wider
@@ -2024,13 +2125,13 @@ mod tests {
         // 95% CI (alpha=0.05)
         let (_, [l1, _, u1], _, _, _, _, _) = 
             compute_threshold_and_metrics_with_bootstrap(
-                &value, &y, &FitFunction::auc, None, 2000, 0.01, &mut rng1
+                &value, &y, &FitFunction::auc, None, 2000, 0.01, 1_f64, &mut rng1
             );
         
         // 90% CI (alpha=0.10)
         let (_, [l2, _, u2], _, _, _, _, _) = 
             compute_threshold_and_metrics_with_bootstrap(
-                &value, &y, &FitFunction::auc, None, 2000, 0.90, &mut rng2
+                &value, &y, &FitFunction::auc, None, 2000, 0.90, 1_f64, &mut rng2
             );
         
         let width_99 = u1 - l1;

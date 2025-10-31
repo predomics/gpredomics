@@ -6,7 +6,7 @@ gpredomics is a Rust rewrite of Predomics for learning interpretable BTR‑style
 
 - Interpretable languages: binary (subset sum), ternary (−1/0/1 algebraic sum), ratio (sum positive over sum negative), pow2 (ternary with powers of two coefficients).
 - Data encodings: raw values, prevalence via epsilon thresholding, and log transforms with epsilon flooring for numerical stability.
-- Optimizers: Genetic Algorithm (ga2 Predomics style), Beam search (combinatorial and incremental), and MCMC with Sequential Backward Selection (beta).
+- Optimizers: Genetic Algorithm (ga2 Predomics style), Beam search (LimitedExhaustive and ParallelForward), and MCMC with Sequential Backward Selection (beta).
 - Fitness targets: AUC, specificity, sensitivity, MCC, F1-score and G means with optional penalties on model size (k_penalty) and false‑rates (fr_penalty).
 - Cross‑validation: stratified folds, Family of Best Models extraction, and OOB permutation importance aggregation across folds.
 - GPU acceleration: wgpu‑based scoring with configurable memory policy and safe CPU fallback when device limits are reached.
@@ -34,19 +34,21 @@ To launch gpredomics, simply type:
 
 Below are minimal TSV schemas that match the loader’s expectations.
 
-X.tsv : features by rows and samples by columns; first column contains feature names, subsequent columns contain numeric values per sample.
+`X.tsv` : features by rows and samples by columns; first column contains feature names, subsequent columns contain numeric values per sample.
 | feature |	sample_a | sample_b	| sample_c
 | :-- | :-- | :-- | :-- 
 | feature_1 | 0.10 | 0.20 | 0.30
 | feature_2 | 0.00 | 0.05 | 0.10
 | feature_3 | 0.90 | 0.80 | 0.70
 
-y.tsv: two‑column TSV mapping sample to class; header line is ignored; classes: 0 (negative), 1 (positive), 2 (unknown, ignored in metrics).
+`y.tsv`: two‑column TSV mapping sample to class; header line is ignored; classes: 0 (negative), 1 (positive), 2 (unknown, ignored in metrics).
 | sample | class
 | :-- | :-- 
 | sample_a| 0
 | sample_b| 1
 | sample_c| 1
+
+A new parameter now allows you to accept a transposed X format, which is standard in ML. To do this, set `features_in_rows` to `false` in param.yaml. 
 
 ### CLI
 
@@ -84,7 +86,7 @@ Please note that there is a R package, [GpredomicsR](https://github.com/predomic
 ## Algorithms
 
 - Genetic Algorithm: evaluates and evolves a population with selection, crossover, mutation, and GPU‑accelerated scoring when general.gpu is true.
-- Beam search (beta): supports combinatorial and incremental modes and is currently under active development.
+- Beam search (beta): supports LimitedExhaustive and ParallelForward modes.
 - MCMC (beta): explores models probabilistically, enforcing single data_type per run, and retains the best log‑likelihood SBS trajectory.
 
 ## Cross‑validation and importance

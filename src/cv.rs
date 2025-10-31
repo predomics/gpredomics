@@ -85,15 +85,10 @@ impl CV {
     /// * `param` - Parameters to pass to the algorithm
     /// * `thread_number` - Number of threads to use in the thread pool
     /// * `running` - Atomic boolean flag for early termination control
-    pub fn pass<F>(&mut self, algo: F, param: &Param, thread_number: usize, running: Arc<AtomicBool>)
+    pub fn pass<F>(&mut self, algo: F, param: &Param, running: Arc<AtomicBool>)
         where F: Fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population> + Send + Sync 
         {
-            let thread_pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(thread_number)
-                .build()
-                .unwrap();
-
-            let collections: Vec<Vec<Population>> = thread_pool.install(|| {
+            let collections: Vec<Vec<Population>> = {
                 self.training_sets
                     .par_iter_mut()
                     .zip(self.validation_folds.par_iter_mut())
@@ -101,7 +96,10 @@ impl CV {
                     .filter_map(|(i, (train, valid))| {
                         info!("\x1b[1;93mCompleting fold #{}...\x1b[0m", i+1);
 
-                        let collection: Vec<Population> = algo(train, param, Arc::clone(&running));
+                        let mut i_param = param.clone();
+                        i_param.tag = format!("Fold {}", i+1);
+
+                        let collection: Vec<Population> = algo(train, &i_param, Arc::clone(&running));
                         
                         if collection.len() > 0 {
                             let final_population = collection.last().unwrap();
@@ -130,7 +128,7 @@ impl CV {
                     })
                     .collect()
                     
-            });
+            };
 
             self.fold_collections = collections;
         }
@@ -612,7 +610,7 @@ mod tests {
             vec![pop]
         };
         
-        cv.pass(mock_algo, &param, 1, running);
+        cv.pass(mock_algo, &param, running);
         
         assert!(cv.fold_collections.len() > 0);
         assert!(cv.fold_collections.len() <= outer_folds);
@@ -630,7 +628,7 @@ mod tests {
             vec![Population::new()]
         };
         
-        cv.pass(mock_algo, &param, 1, running);
+        cv.pass(mock_algo, &param, running);
         
         assert!(cv.fold_collections.len() > 0);
         let collections = cv.fold_collections;
@@ -656,7 +654,7 @@ mod tests {
             vec![Population::test()]
         };
 
-        cv.pass(mock_algo, &param, 1, running_clone);
+        cv.pass(mock_algo, &param, running_clone);
 
         // Check that fold_collections is defined
         assert!(cv.fold_collections.len() > 0);
@@ -825,7 +823,7 @@ mod tests {
                 "ga" => ga::ga(d, &mut None, &cv_param, r),
                 _ => panic!("Such algorithm is not useful for the test."),
             }
-        }, &cv_param, cv_param.general.thread_number, r);
+        }, &cv_param, r);
         
         let result = cv.compute_cv_oob_feature_importance(
             &cv_param, 5, &mut rng,
@@ -934,7 +932,7 @@ mod tests {
                 "ga" => ga::ga(d, &mut None, &cv_param, r),
                 _ => panic!("Such algorithm is not useful for the test."),
             }
-        }, &cv_param, cv_param.general.thread_number, r);
+        }, &cv_param, r);
         
         // on_validation = true
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
@@ -1088,7 +1086,7 @@ mod tests {
             vec![pop]
         };
 
-        cv.pass(mock_algo, &param, 1, Arc::clone(&running));
+        cv.pass(mock_algo, &param, Arc::clone(&running));
         assert!(cv.fold_collections.len() > 0);
 
         let importance_collection = cv.compute_cv_oob_feature_importance(

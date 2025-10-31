@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::BufReader;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use crate::experiment::VotingMethod;
+use crate::{beam::BeamMethod, voting::VotingMethod};
 use crate::experiment::ImportanceAggregation;
 use log::{warn};
 
@@ -50,6 +50,8 @@ pub struct Param {
     pub gpu: GPU,
     #[serde(default)]
     pub experimental: Experimental,
+    #[serde(skip)]
+    pub tag: String
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -104,8 +106,10 @@ pub struct Data {
     pub Xtest: String,
     #[serde(default = "empty_string")]                     
     pub ytest: String,
+    #[serde(default = "false_default")]  
+    pub features_in_rows: bool,                     
     #[serde(default = "uzero_default")]                      
-    pub feature_maximal_number_per_class: usize,
+    pub max_features_per_class: usize,
     #[serde(default = "feature_selection_method_default")]                      
     pub feature_selection_method: String,
     #[serde(default = "feature_minimal_prevalence_pct_default")]                     
@@ -207,7 +211,7 @@ pub struct GA {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct BEAM {
     #[serde(default = "beam_method_default")]  
-    pub method: String,
+    pub method: BeamMethod,
     #[serde(default = "one_default")]  
     pub kmin: usize,                           
     #[serde(default = "kmax_default")]  
@@ -267,6 +271,8 @@ pub struct Experimental {
     pub threshold_ci_alpha: f64,
     #[serde(default = "uzero_default")] 
     pub threshold_ci_n_bootstrap: usize,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_frac_bootstrap: f64,
     #[serde(default = "zero_default")] 
     pub bias_penalty: f64,
 }
@@ -358,13 +364,13 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     
     let mut config:Param = serde_yaml::from_reader(param_reader)?;
 
-    let _ = validate(&mut config);
+    let _ = validate(&mut config)?;
 
     Ok(config)
 }
 
 pub fn validate(param: &mut Param) -> Result<(), String> {
-        validate_bootstrap(param)?;
+        if param.experimental.threshold_ci { validate_bootstrap(param)? } ;
         validate_penalties(param)?;
         Ok(())
     }
@@ -392,7 +398,7 @@ pub fn validate(param: &mut Param) -> Result<(), String> {
             ));
         } else if B < B_REC {
             warn!(
-                "⚠️  Bootstrap B={} < {} (Rousselet et al. 2021 recommendation). \
+                "Bootstrap B={} < {} (Rousselet et al. 2021 recommendation). \
                 Percentile CI may be too narrow for small samples. \
                 Consider B ≥ {} for {}% CI stability.",
                 B, B_REC, B_REC, (1.0 - param.experimental.threshold_ci_alpha) * 100.0
@@ -417,6 +423,10 @@ pub fn validate(param: &mut Param) -> Result<(), String> {
 
         if param.experimental.threshold_ci_penalty < 0.0 {
             return Err(format!("Invalid threshold_ci_penalty={:.3}. Must be >= 0.", param.experimental.threshold_ci_penalty));
+        }
+
+        if param.general.algo == "ga".to_string() && param.ga.random_sampling_pct > 0.0 && param.cv.overfit_penalty > 0.0 {
+            return Err(format!("Randomized samples and overfit penalty cannot be used together. If you want to resample the folds of the cross-validation used to penalise overfitting, you can use the parameter random_sampling_epochs."));
         }
 
         Ok(())
@@ -450,7 +460,7 @@ fn n_model_to_display_default() -> u32 { 10 }
 fn false_default() -> bool { false }
 fn true_default() -> bool { true }
 fn display_level_default() -> usize { 2 }
-fn beam_method_default() -> String { "combinatorial".to_string() }
+fn beam_method_default() -> BeamMethod { BeamMethod::LimitedExhaustive }
 fn best_models_ci_alpha_default() -> f64 { 0.05 }
 fn max_nb_of_models_default() -> usize { 10000 }
 fn class_names_default() -> Vec<String> { Vec::new() }

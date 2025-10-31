@@ -232,14 +232,14 @@ impl Population {
                 FitFunction::auc => {
                         if param.general.keep_trace || param.experimental.bias_penalty != 0.0 {
                             if let Some(ref mut threshold_ci) = i.threshold_ci {
-                                (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, None, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, &mut ChaCha8Rng::seed_from_u64(i.hash));
+                                (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, None, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, param.experimental.threshold_ci_frac_bootstrap, &mut ChaCha8Rng::seed_from_u64(i.hash));
                             } else {
                                 (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = compute_roc_and_metrics_from_value(&scores, &data.y, &param.general.fit, None);
                             }
                         } else {
                             // The AUC calculation can be optimised if the user does not wish to calculate the other metrics at the same time.
                             if let Some(ref mut threshold_ci) = i.threshold_ci {
-                                (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], _, _, _, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, None, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, &mut ChaCha8Rng::seed_from_u64(i.hash));
+                                (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], _, _, _, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, None, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, param.experimental.threshold_ci_frac_bootstrap,&mut ChaCha8Rng::seed_from_u64(i.hash));
                             } else {
                                 i.auc = compute_auc_from_value(&scores, &data.y);
                             } 
@@ -248,7 +248,7 @@ impl Population {
                 },
                 _ => {
                     if let Some(ref mut threshold_ci) = i.threshold_ci {
-                        (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, i.fit, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, penalties, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, &mut ChaCha8Rng::seed_from_u64(i.hash));
+                        (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, i.fit, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, penalties, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, param.experimental.threshold_ci_frac_bootstrap,&mut ChaCha8Rng::seed_from_u64(i.hash));
                     } else {
                         (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, i.fit) = compute_roc_and_metrics_from_value(&scores, &data.y, &param.general.fit, penalties);
                     }

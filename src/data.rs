@@ -52,14 +52,28 @@ impl Data {
     }
 
     /// Load data from `X.tsv` and `y.tsv` files.
-    pub fn load_data(&mut self, X_path: &str, y_path: &str) -> Result<(), Box<dyn Error>> {
+    pub fn load_data(&mut self, X_path: &str, y_path: &str, features_in_rows: bool) 
+    -> Result<(), Box<dyn Error>> 
+    {
+        if features_in_rows {
+            self.load_data_features_in_rowss(X_path, y_path)
+        } else {
+            self.load_data_features_in_columns(X_path, y_path)
+        }
+    }
+
+    /// Legacy format (current Gpredomics format): rows=features, columns=samples
+    fn load_data_features_in_rowss(&mut self, X_path: &str, y_path: &str) 
+        -> Result<(), Box<dyn Error>> 
+    {
         #[inline]
         fn trim_line(line: &str) -> &str {
             line.trim_end_matches(['\n', '\r'])
         }
 
+        // ★ KEEP ORIGINAL LOG MESSAGE
         info!("Loading files {} and {}...", X_path, y_path);
-        // Open and read the X.tsv file
+        
         let file_X = File::open(X_path)?;
         let mut reader_X = BufReader::with_capacity(8 * 1024 * 1024, file_X);
 
@@ -95,7 +109,90 @@ impl Data {
                     }
                 }
             }
+        }
 
+        // Open and read the y.tsv file
+        let file_y = File::open(y_path)?;
+        let reader_y = BufReader::new(file_y);
+
+        // Parse y.tsv and store target values
+        let mut y_map = HashMap::new();
+        for line in reader_y.lines().skip(1) {
+            let line = line?;
+            let trimmed_line = trim_line(&line);
+            let mut fields = trimmed_line.split('\t');
+            
+            // First field is the sample name
+            if let Some(sample_name) = fields.next() {
+                // Second field is the target value
+                if let Some(value) = fields.next() {
+                    let target: u8 = value.parse()?;
+                    y_map.insert(sample_name.to_string(), target);
+                }
+            }
+        }
+
+        // Reorder `y` to match the order of `samples` from X.tsv
+        self.y = self
+            .samples
+            .iter()
+            .map(|sample_name| *y_map.get(sample_name).unwrap_or_else(|| {
+                warn!("No y value available for {}. Setting y to 2 for this sample.", sample_name);
+                &2 
+            })).collect();
+
+        self.feature_len = self.features.len();
+        self.sample_len = self.samples.len();
+
+        Ok(())
+    }
+
+    /// Standard ML format: rows=samples, columns=features
+    fn load_data_features_in_columns(&mut self, X_path: &str, y_path: &str) 
+        -> Result<(), Box<dyn Error>> 
+    {
+        #[inline]
+        fn trim_line(line: &str) -> &str {
+            line.trim_end_matches(['\n', '\r'])
+        }
+
+        info!("Loading files {} and {}...", X_path, y_path);
+        
+        let file_X = File::open(X_path)?;
+        let mut reader_X = BufReader::with_capacity(8 * 1024 * 1024, file_X);
+
+        // Read the first line to get feature names
+        let mut first_line = String::new();
+        reader_X.read_line(&mut first_line)?;
+        let trimmed_first_line = trim_line(&first_line);
+        self.features = trimmed_first_line.split('\t').skip(1).map(String::from).collect();
+        
+        let file_size = std::fs::metadata(X_path)?.len() as usize;
+        let estimated_line_size = 20 + (self.features.len() * 9); 
+        let estimated_samples = file_size / estimated_line_size.max(50); 
+
+        let capacity = ((self.features.len() * estimated_samples) as f64 * 0.25) as usize; 
+        self.X.reserve(capacity.max(self.features.len()));
+
+        // Read the remaining lines: each line = one sample
+        for (sample,line) in reader_X.lines().enumerate() {
+            let line = line?;
+            let trimmed_line = trim_line(&line);
+            let mut fields = trimmed_line.split('\t');
+
+            // First field is the sample name
+            if let Some(sample_name) = fields.next() {
+                self.samples.push(sample_name.to_string());
+            }
+
+            // Remaining fields are the feature values
+            for (feature,value) in fields.enumerate() {
+                if let Ok(num_val)=parse(value) {
+                    if num_val!=0.0 {
+                        self.X.insert((sample,feature),num_val);
+                    }
+                }
+            }
         }
 
         // Open and read the y.tsv file
@@ -417,15 +514,15 @@ impl Data {
         
         let mut class_0_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 0).collect();
         let mut class_1_features: Vec<(usize, u8, f64)> = results.iter().cloned().filter(|&(_, class, _)| class == 1).collect();
-        if param.data.feature_maximal_number_per_class != 0 && class_0_features.len() < param.data.feature_maximal_number_per_class {
+        if param.data.max_features_per_class != 0 && class_0_features.len() < param.data.max_features_per_class {
             warn!("Class {:?} has only {} significant features based on required threshold ! All features kept for this class.", self.classes[0], class_0_features.len());
-        } else if  param.data.feature_maximal_number_per_class != 0 && class_0_features.len() >=  param.data.feature_maximal_number_per_class {
-            class_0_features.truncate(param.data.feature_maximal_number_per_class);
+        } else if  param.data.max_features_per_class != 0 && class_0_features.len() >=  param.data.max_features_per_class {
+            class_0_features.truncate(param.data.max_features_per_class);
         } 
-        if param.data.feature_maximal_number_per_class != 0 && class_1_features.len() < param.data.feature_maximal_number_per_class {
+        if param.data.max_features_per_class != 0 && class_1_features.len() < param.data.max_features_per_class {
             warn!("Class {:?} has only {} significant features based on required threshold ! All features kept for this class.", self.classes[1], class_1_features.len());
-        } else if  param.data.feature_maximal_number_per_class != 0 && class_1_features.len() >=  param.data.feature_maximal_number_per_class {
-            class_1_features.truncate(param.data.feature_maximal_number_per_class);
+        } else if  param.data.max_features_per_class != 0 && class_1_features.len() >=  param.data.max_features_per_class {
+            class_1_features.truncate(param.data.max_features_per_class);
         }
 
         (class_0_features, class_1_features)
@@ -433,6 +530,8 @@ impl Data {
         
     /// Fill feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
     pub fn select_features(&mut self, param: &Param) {
+        info!("Selecting features...");
+        
         self.feature_selection = Vec::new();
         self.feature_class = HashMap::new();
 
@@ -630,6 +729,8 @@ impl fmt::Debug for Data {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
     use crate::param;
     use rand::Rng;
     use rand::SeedableRng;
@@ -821,7 +922,7 @@ mod tests {
     #[test]
     fn test_load_data() {
         let mut data_test = Data::new();
-        let _err = data_test.load_data("./samples/tests/X.tsv", "./samples/tests/y.tsv");
+        let _err = data_test.load_data("./samples/tests/X.tsv", "./samples/tests/y.tsv", true);
 
         // Use the hashed test.X to make the code cleaner
         let mut sorted_X: BTreeMap<(usize, usize), f64> = BTreeMap::new();
@@ -937,9 +1038,9 @@ mod tests {
     #[test]
     fn test_select_features() {
         let mut data = Data::new();
-        let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv");
+        let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv", true);
         let mut param = param::get("param.yaml".to_string()).unwrap();
-        param.data.feature_maximal_number_per_class = 0;
+        param.data.max_features_per_class = 0;
 
         // Test with Bayesian Fisher
         param.data.feature_selection_method = "bayesian_fisher".to_string();
@@ -950,14 +1051,14 @@ mod tests {
         assert_eq!(data.feature_selection.len(), 316, "The bayesian method should identify 316 significant features for feature_minimal_log_abs_bayes_factor=2");
         
         // Test reduced number
-        param.data.feature_maximal_number_per_class = 1;
+        param.data.max_features_per_class = 1;
         data.select_features(&param);
         assert_eq!(data.feature_selection.len(), 2, "Incorrect number of selected features : select only one feature per class should lead to 2 selected features");
         assert_eq!(data.feature_selection, vec![473, 1313], "Incorrect selected features : the result differs from the past and from the original script result.");
 
         // Test with Studentt
         param.data.feature_selection_method = "studentt".to_string();
-        param.data.feature_maximal_number_per_class = 0;
+        param.data.max_features_per_class = 0;
         param.data.feature_maximal_pvalue = 0.05;
         param.data.feature_minimal_feature_value = 0.0001;
         param.data.feature_minimal_prevalence_pct = 0.0;
@@ -967,7 +1068,7 @@ mod tests {
 
         // Test with Wilcoxon
         param.data.feature_selection_method = "wilcoxon".to_string();
-        param.data.feature_maximal_number_per_class = 0;
+        param.data.max_features_per_class = 0;
         param.data.feature_maximal_pvalue = 0.05;
         param.data.feature_minimal_feature_value = 0.0001;
         param.data.feature_minimal_prevalence_pct = 0.0;
@@ -1106,10 +1207,22 @@ mod tests {
         assert_eq!(original_data.sample_len, cumulated_data.sample_len, "the combination of a Data with an empty Data must contain the sample_len of the non-empty Data");
     }
 
+    fn create_test_files(suffix: &str) -> (PathBuf, PathBuf) {
+        let temp_dir = std::env::temp_dir();
+        let x_path = temp_dir.join(format!("gpredomics_test_X_{}.tsv", suffix));
+        let y_path = temp_dir.join(format!("gpredomics_test_y_{}.tsv", suffix));
+        (x_path, y_path)
+    }
+
+    /// Helper to cleanup test files
+    fn cleanup_test_files(x_path: &PathBuf, y_path: &PathBuf) {
+        let _ = fs::remove_file(x_path);
+        let _ = fs::remove_file(y_path);
+    }
     // a few ways to make add() more robust:
     // fn test_add_same_samples() {} -> case where data1 contains samples 1 & 2 and data2 samples 1 & 3
     // fn test_add_different_features() {} -> case where data1 contains feature X but data2 doesn't
-
+    
     #[test]
     fn test_data_compatibility() {
 
@@ -1121,5 +1234,153 @@ mod tests {
         assert!(!data_test.check_compatibility(&data_test2),"two data with different features should not be compatible");
     }
 
-    // useful to test fmt display and debug ? 
+    fn test_load_legacy_format_qin2014() {
+        let (x_path, y_path) = create_test_files("legacy_001");
+
+        // X.tsv: features×samples format (legacy)
+        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\nFeature2\t1.0\t2.0\t1.5\nFeature3\t0.2\t0.0\t0.8\n";
+        fs::write(&x_path, x_content).unwrap();
+
+        // y.tsv: sample labels
+        let y_content = "SampleID\tLabel\nSample1\t0\nSample2\t1\nSample3\t1\n";
+        fs::write(&y_path, y_content).unwrap();
+
+        let mut data = Data::new();
+        data.load_data(x_path.to_str().unwrap(), y_path.to_str().unwrap(), true).unwrap();
+
+        assert_eq!(data.sample_len, 3);
+        assert_eq!(data.feature_len, 3);
+        assert_eq!(data.samples, vec!["Sample1", "Sample2", "Sample3"]);
+        assert_eq!(data.features, vec!["Feature1", "Feature2", "Feature3"]);
+        assert_eq!(data.y, vec![0, 1, 1]);
+        assert_eq!(data.X.get(&(0, 0)), Some(&0.5));
+        assert_eq!(data.X.get(&(1, 0)), None);
+        assert_eq!(data.X.get(&(2, 1)), Some(&1.5));
+
+        cleanup_test_files(&x_path, &y_path);
+    }
+
+    #[test]
+    fn test_load_standard_format_qin2014() {
+        let (x_path, y_path) = create_test_files("standard_001");
+
+        let x_content = "SampleID\tFeature1\tFeature2\tFeature3\nSample1\t0.5\t1.0\t0.2\nSample2\t0.0\t2.0\t0.0\nSample3\t0.3\t1.5\t0.8\n";
+        fs::write(&x_path, x_content).unwrap();
+
+        let y_content = "SampleID\tLabel\nSample1\t0\nSample2\t1\nSample3\t1\n";
+        fs::write(&y_path, y_content).unwrap();
+
+        let mut data = Data::new();
+        data.load_data(x_path.to_str().unwrap(), y_path.to_str().unwrap(), false).unwrap();
+
+        assert_eq!(data.sample_len, 3);
+        assert_eq!(data.feature_len, 3);
+        assert_eq!(data.samples, vec!["Sample1", "Sample2", "Sample3"]);
+        assert_eq!(data.features, vec!["Feature1", "Feature2", "Feature3"]);
+        assert_eq!(data.y, vec![0, 1, 1]);
+        assert_eq!(data.X.get(&(0, 0)), Some(&0.5));
+        assert_eq!(data.X.get(&(1, 0)), None);
+        assert_eq!(data.X.get(&(2, 1)), Some(&1.5));
+
+        cleanup_test_files(&x_path, &y_path);
+    }
+
+    #[test]
+    fn test_qin2014_legacy_vs_standard_equivalence() {
+        let (x_legacy, y_legacy) = create_test_files("legacy_equiv");
+        let (x_standard, y_standard) = create_test_files("standard_equiv");
+
+        let x_legacy_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\nFeature2\t1.0\t2.0\t1.5\nFeature3\t0.2\t0.0\t0.8\n";
+        fs::write(&x_legacy, x_legacy_content).unwrap();
+
+        let x_standard_content = "SampleID\tFeature1\tFeature2\tFeature3\nSample1\t0.5\t1.0\t0.2\nSample2\t0.0\t2.0\t0.0\nSample3\t0.3\t1.5\t0.8\n";
+        fs::write(&x_standard, x_standard_content).unwrap();
+
+        let y_content = "SampleID\tLabel\nSample1\t0\nSample2\t1\nSample3\t1\n";
+        fs::write(&y_legacy, y_content).unwrap();
+        fs::write(&y_standard, y_content).unwrap();
+
+        let mut data_legacy = Data::new();
+        data_legacy.load_data(x_legacy.to_str().unwrap(), y_legacy.to_str().unwrap(), true).unwrap();
+
+        let mut data_standard = Data::new();
+        data_standard.load_data(x_standard.to_str().unwrap(), y_standard.to_str().unwrap(), false).unwrap();
+
+        assert_eq!(data_legacy.X, data_standard.X);
+        assert_eq!(data_legacy.y, data_standard.y);
+        assert_eq!(data_legacy.features, data_standard.features);
+        assert_eq!(data_legacy.samples, data_standard.samples);
+        assert_eq!(data_legacy.feature_len, data_standard.feature_len);
+        assert_eq!(data_legacy.sample_len, data_standard.sample_len);
+
+        cleanup_test_files(&x_legacy, &y_legacy);
+        cleanup_test_files(&x_standard, &y_standard);
+    }
+
+    #[test]
+    fn test_sparse_zeros_not_stored() {
+        let (x_path, y_path) = create_test_files("sparse_001");
+
+        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\nFeature2\t1.0\t2.0\t1.5\nFeature3\t0.2\t0.0\t0.8\n";
+        fs::write(&x_path, x_content).unwrap();
+
+        let y_content = "SampleID\tLabel\nSample1\t0\nSample2\t1\nSample3\t1\n";
+        fs::write(&y_path, y_content).unwrap();
+
+        let mut data = Data::new();
+        data.load_data(x_path.to_str().unwrap(), y_path.to_str().unwrap(), true).unwrap();
+
+        assert_eq!(data.X.get(&(1, 0)), None);
+        assert_eq!(data.X.get(&(1, 2)), None);
+        assert_eq!(data.X.get(&(0, 0)), Some(&0.5));
+        assert_eq!(data.X.len(), 7);
+
+        cleanup_test_files(&x_path, &y_path);
+    }
+
+    #[test]
+    fn test_y_reordering_with_unordered_input() {
+        let (x_path, y_path) = create_test_files("reorder_001");
+
+        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\n";
+        fs::write(&x_path, x_content).unwrap();
+
+        let y_content = "SampleID\tLabel\nSample3\t1\nSample1\t0\nSample2\t1\n";
+        fs::write(&y_path, y_content).unwrap();
+
+        let mut data = Data::new();
+        data.load_data(x_path.to_str().unwrap(), y_path.to_str().unwrap(), true).unwrap();
+
+        assert_eq!(data.y, vec![0, 1, 1]);
+        assert_eq!(data.samples, vec!["Sample1", "Sample2", "Sample3"]);
+
+        cleanup_test_files(&x_path, &y_path);
+    }
+
+    #[test]
+    fn test_consistency_multiple_loads() {
+        let (x_path, y_path) = create_test_files("consistency_001");
+
+        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\nFeature2\t1.0\t2.0\t1.5\n";
+        fs::write(&x_path, x_content).unwrap();
+
+        let y_content = "SampleID\tLabel\nSample1\t0\nSample2\t1\nSample3\t1\n";
+        fs::write(&y_path, y_content).unwrap();
+
+        let mut data1 = Data::new();
+        data1.load_data(x_path.to_str().unwrap(), y_path.to_str().unwrap(), true).unwrap();
+
+        let mut data2 = Data::new();
+        data2.load_data(x_path.to_str().unwrap(), y_path.to_str().unwrap(), true).unwrap();
+
+        assert_eq!(data1, data2);
+
+        cleanup_test_files(&x_path, &y_path);
+    }
+
+    #[test]
+    fn test_default_features_in_rows_false() {
+        let param = Param::new();
+        assert_eq!(param.data.features_in_rows, false);
+    }
 }

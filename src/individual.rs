@@ -2245,8 +2245,8 @@ mod tests {
         let mut individual = Individual::new();
         let mut data = Data::new();
         let mut data_test = Data::new();
-        let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv");
-        let _ = data_test.load_data("samples/Qin2014/Xtest.tsv", "samples/Qin2014/Ytest.tsv");
+        let _ = data.load_data("samples/Qin2014/Xtrain.tsv", "samples/Qin2014/Ytrain.tsv", true);
+        let _ = data_test.load_data("samples/Qin2014/Xtest.tsv", "samples/Qin2014/Ytest.tsv", true);
 
         // Set the language and data type 
         individual.language = TERNARY_LANG;
