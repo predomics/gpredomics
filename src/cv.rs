@@ -817,7 +817,7 @@ mod tests {
         let r =  Arc::new(AtomicBool::new(true));
         let mut cv_param = Param::default();
         cv_param.ga.max_epochs = 3;
-        cv_param.data.feature_maximal_pvalue = 1.0;
+        cv_param.data.feature_maximal_adj_pvalue = 1.0;
         cv.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
             match p.general.algo.as_str() {
                 "ga" => ga::ga(d, &mut None, &cv_param, r),
@@ -926,7 +926,7 @@ mod tests {
         let r =  Arc::new(AtomicBool::new(true));
         let mut cv_param = Param::default();
         cv_param.ga.max_epochs = 3;
-        cv_param.data.feature_maximal_pvalue = 1.0;
+        cv_param.data.feature_maximal_adj_pvalue = 1.0;
         cv.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
             match p.general.algo.as_str() {
                 "ga" => ga::ga(d, &mut None, &cv_param, r),

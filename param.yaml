@@ -29,8 +29,8 @@ data:
   feature_minimal_prevalence_pct: 10          # per class, e.g. features are retained if any of the class reaches this level
   feature_minimal_feature_value: 1e-4         # features which mean is below that value are discarded
   feature_selection_method: wilcoxon          # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
-  feature_maximal_pvalue: 0.05                # features with differences less significant (p value above that threshold) than this will be removed
-  feature_minimal_log_abs_bayes_factor: 2     # features with a fewer log absolute bayes factor will be removed (bayesian method only)
+  feature_maximal_adj_pvalue: 0.1             # features with a corrected p-value (BH) above this threshold will be removed
+  feature_minimal_log_abs_bayes_factor: 0.5   # features with a fewer log absolute bayes factor will be removed (bayesian method only)
   inverse_classes: false                      # if true, negative class becomes the objective
   classes:
     - "healthy"
@@ -80,7 +80,7 @@ ga:
   random_sampling_epochs: 0                   # if random_samples>0, the number of epoch during a same randomized dataset is kept 
 
 beam:
-  method: LimitedExhaustive                     # LimitedExhaustive: generate all combinations (k out of features_to_keep). ParallelForward: increment each extendable_models of each 1 feature from features_to_keep.
+  method: LimitedExhaustive                   # LimitedExhaustive: generate all combinations (k out of features_to_keep). ParallelForward: increment each extendable_models of each 1 feature from features_to_keep.
   kmin: 2                                     # the number of variables used in the initial population
   kmax: 100                                   # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
   best_models_ci_alpha: 1e-5                  # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
@@ -105,3 +105,5 @@ experimental:
   threshold_ci_n_bootstrap: 1000              # number of boostrap 
   threshold_ci_frac_bootstrap: 0.643          # should a boostrap based on random draw with discount (on all data, frac=1, Efron method) or a random draw without discount on a random subset (0<frac<1, Politis & Romano method)
   bias_penalty: 0                             # penalize models with specificity/sensitivity < 0.5 by doing fit - (1.0 - bad_metrics) * bias_penalty  
+  significance_penalty: 0.05                  # weight λ for significance-aware penalty (higher = stronger).
+  significance_penalty_threshold: 0.05        # hinge threshold: penalize with above λ max(0, q − q*) for q-values, or max(0, tBF − |log10(BF)|) for bayesian_fisher.

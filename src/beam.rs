@@ -492,9 +492,16 @@ pub fn combine(features_to_keep: Vec<usize>, k: usize, data: &Data, param: &Para
         let max_nb:usize = max_n_for_combinations(k as u128, param.beam.max_nb_of_models as u128) as usize;
 
         // Get features rank
-        let (mut class_0_features, mut class_1_features) = data.evaluate_features(param);
-        class_0_features = class_0_features.iter().filter(|&&(index, _, _)| features_to_keep.contains(&index)).cloned().collect();
-        class_1_features = class_1_features.iter().filter(|&&(index, _, _)| features_to_keep.contains(&index)).cloned().collect();
+        let iter = data.feature_selection.iter()
+            .copied()
+            .filter(|idx| features_to_keep.contains(idx))
+            .filter_map(|idx| {
+                let class = *data.feature_class.get(&idx)?;
+                let value = *data.feature_significance.get(&idx)?;
+                Some((idx, class, value))
+            });
+
+        let (class_0_features, class_1_features): (Vec<_>, Vec<_>) = iter.partition(|&(_, class, _)| class == 0);
 
         // For Binary languages, pick directly max_nb positive-associated features to avoid different ind_k within an iteration (like 10+10 features Ternary vs 10 features Binary for k=20)
         if languages.contains(&BINARY_LANG) {

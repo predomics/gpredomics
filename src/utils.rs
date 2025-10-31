@@ -15,7 +15,6 @@ use crate::Population;
 use crate::Param;
 use log::{debug,info};
 
-
 /// a macro to declare simple Vec<String>
 #[macro_export]
 macro_rules! string_vec {

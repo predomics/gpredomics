@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use crate::{beam::BeamMethod, voting::VotingMethod};
 use crate::experiment::ImportanceAggregation;
+use crate::data::PreselectionMethod;
 use log::{warn};
 
 #[derive(Debug,Serialize,Deserialize,Clone, PartialEq)]
@@ -111,12 +112,12 @@ pub struct Data {
     #[serde(default = "uzero_default")]                      
     pub max_features_per_class: usize,
     #[serde(default = "feature_selection_method_default")]                      
-    pub feature_selection_method: String,
+    pub feature_selection_method: PreselectionMethod,
     #[serde(default = "feature_minimal_prevalence_pct_default")]                     
     pub feature_minimal_prevalence_pct: f64, 
-    #[serde(default = "feature_maximal_pvalue_default")]                     
-    pub feature_maximal_pvalue: f64, 
-    #[serde(default = "zero_default")]                      
+    #[serde(default = "feature_maximal_adj_pvalue_default")]                     
+    pub feature_maximal_adj_pvalue: f64,  
+    #[serde(default = "zero_default")]                 
     pub feature_minimal_feature_value: f64, 
     #[serde(default = "feature_minimal_log_abs_bayes_factor_default")]                      
     pub feature_minimal_log_abs_bayes_factor: f64, 
@@ -275,6 +276,10 @@ pub struct Experimental {
     pub threshold_ci_frac_bootstrap: f64,
     #[serde(default = "zero_default")] 
     pub bias_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub significance_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub significance_penalty_threshold: f64,
 }
 
 // Default section definitions
@@ -440,9 +445,9 @@ fn min_epochs_default() -> usize { 10 }
 fn max_epochs_default() -> usize { 200 }
 fn max_age_best_model_default() -> usize { 10 }
 fn algorithm_default() -> String { "ga".to_string() }
-fn feature_selection_method_default() -> String { "wilcoxon".to_string() }
+fn feature_selection_method_default() -> PreselectionMethod { PreselectionMethod::wilcoxon }
 fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
-fn feature_maximal_pvalue_default() -> f64 { 0.5 }
+fn feature_maximal_adj_pvalue_default() -> f64 { 0.5 }
 fn feature_minimal_log_abs_bayes_factor_default() -> f64 { 2.0 }
 fn language_default() -> String { "binary".to_string() }
 fn data_type_default() -> String { "raw".to_string() }
