@@ -7,9 +7,9 @@ use log::{debug, info, warn};
 use crate::Individual;
 use crate::param::FitFunction;
 
-////////////////////////
-//////// VOTING ////////
-////////////////////////
+//-----------------------------------------------------------------------------
+// Voting 
+//-----------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Jury {
@@ -1630,6 +1630,7 @@ mod tests {
             features: vec!["feature1".to_string()],
             samples: vec!["sample1".to_string()],
             feature_class,
+            feature_significance: HashMap::new(),
             feature_selection: vec![0],
             feature_len: 1,
             sample_len: 1,
@@ -1970,6 +1971,7 @@ mod tests {
             features: vec!["feature1".to_string()],
             samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string()],
             feature_class,
+            feature_significance: HashMap::new(),
             feature_selection: vec![0],
             feature_len: 1,
             sample_len: 3,
@@ -2060,6 +2062,7 @@ mod tests {
             features: vec!["feature1".to_string()],
             samples: samples.clone(),
             feature_class,
+            feature_significance: HashMap::new(),
             feature_selection: vec![0],
             feature_len: 1,
             sample_len: samples.len(),

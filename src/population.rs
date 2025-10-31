@@ -3,7 +3,7 @@ use crate::param::{FitFunction};
 use crate::experiment::ImportanceAggregation;
 use crate::utils::{conf_inter_binomial, compute_roc_and_metrics_from_value, compute_auc_from_value, compute_metrics_from_classes, compute_threshold_and_metrics_with_bootstrap};
 use crate::cv::CV;
-use crate::data::Data;
+use crate::data::{Data, PreselectionMethod};
 use crate::individual::Individual;
 use crate::param::Param;
 use rand::RngCore;
@@ -186,10 +186,10 @@ impl Population {
     
     pub fn fit(&mut self, data: &Data, _test_data: &mut Option<Data>, gpu_assay: &Option<GpuAssay>, _test_assay: &Option<GpuAssay>, param: &Param) {
         self.fit_without_penalty(data, _test_data, gpu_assay, _test_assay, param);
-        self.penalize(param);
+        self.penalize(data, param);
     }
 
-    pub fn penalize(&mut self, param: &Param) { 
+    pub fn penalize(&mut self, data: &Data, param: &Param) { 
         self.individuals
             .par_iter_mut()
             .for_each(|i| {
@@ -204,8 +204,35 @@ impl Population {
                     if i.sensitivity < 0.5 { i.fit = i.fit - (1.0 - i.sensitivity) * param.experimental.bias_penalty } ; 
                     if i.specificity < 0.5 { i.fit = i.fit - (1.0 - i.specificity) * param.experimental.bias_penalty } ;
                 };
+                // Significance penalty
+                if param.experimental.significance_penalty > 0.0 {
+                    let lambda = param.experimental.significance_penalty;        
+                    if lambda > 0.0 {
+                        let thr = param.experimental.significance_penalty_threshold;
+                        let mut acc = 0.0f64;
+                        let mut cnt = 0usize;
+
+                        for &feat_idx in i.features.keys() {
+                            if let Some(&v) = data.feature_significance.get(&feat_idx) {
+                                // v = q-value if studentt/wilcoxon ; v = |log10(BF)| if bayesian_fisher
+                                let term = if param.data.feature_selection_method == PreselectionMethod::bayesian_fisher {
+                                    // penalize lack of evidence : max(0, tBF - |log10 BF|)
+                                    (thr - v.max(0.0)).max(0.0)
+                                } else {
+                                    // penalize high q-value q⋆: max(0, q - q⋆)
+                                    (v.clamp(0.0, 1.0) - thr).max(0.0)
+                                };
+                                acc += term;
+                                cnt += 1;
+                            }
+                        }
+
+                        if cnt > 0 {
+                            i.fit -= lambda * acc / (cnt as f64);
+                        }
+                    }
                 }
-            )
+            });
     }
 
     pub fn fit_without_penalty(&mut self, data: &Data, _test_data: &mut Option<Data>, gpu_assay: &Option<GpuAssay>, _test_assay: &Option<GpuAssay>, param: &Param) {
@@ -305,7 +332,8 @@ impl Population {
         }
 
         // Additional penalties
-        self.penalize(param);
+        // use any data of CV as they all have the information about significance
+        self.penalize(&cv.training_sets[0], param);
     }
 
     pub fn select_best_population(&self, alpha:f64) -> Population { 
@@ -1022,6 +1050,7 @@ mod tests {
             y,
             sample_len: num_samples,
             feature_class: HashMap::new(),
+            feature_significance: HashMap::new(),
             features: (0..num_features).map(|i| format!("feature_{}", i)).collect(),
             samples: (0..num_samples).map(|i| format!("sample_{}", i)).collect(),
             feature_selection: (0..num_features).collect(),
@@ -1915,4 +1944,141 @@ mod tests {
     //             fit_reduction, expected_k_penalty);
     // }
 
+    use crate::data::PreselectionMethod;
+    use crate::individual::ThresholdCI;
+
+    fn mk_individual_with_features(fit: f64, feats: &[(usize, i8)], sens: f64, spec: f64) -> Individual {
+        let mut i = Individual::new();
+        i.fit = fit;
+        i.features = feats.iter().cloned().collect::<HashMap<usize, i8>>();
+        i.k = i.features.len();
+        i.sensitivity = sens;
+        i.specificity = spec;
+        i
+    }
+
+    fn mk_param_default() -> Param {
+        let mut p = Param::default();
+        // Isolate significance penalty unless explicitly set in each test
+        p.general.k_penalty = 0.0;
+        p.experimental.threshold_ci_penalty = 0.0;
+        p.experimental.bias_penalty = 0.0;
+        p.experimental.significance_penalty = 0.0; // disabled by weight=0 by default
+        p.experimental.significance_penalty_threshold = 0.05;
+        // Default method (overridden per test)
+        p.data.feature_selection_method = PreselectionMethod::studentt;
+        p
+    }
+
+    #[test]
+    fn penalize_qvalues_hinge_basic_studentt() {
+        // q = [0.01, 0.10, 0.50], q* = 0.05 => hinge = [0.00, 0.05, 0.45], mean = (0.50)/3
+        // fit' = 1.0 - λ * mean(hinge)
+        let mut data = Data::new(); // assumes Data::new() exists; otherwise construct minimal Data
+        data.feature_significance.insert(0, 0.01);
+        data.feature_significance.insert(1, 0.10);
+        data.feature_significance.insert(2, 0.50);
+
+        let mut param = mk_param_default();
+        param.data.feature_selection_method = PreselectionMethod::studentt;
+        param.experimental.significance_penalty = 0.3;
+        param.experimental.significance_penalty_threshold = 0.05;
+
+        let mut pop = Population {
+            individuals: vec![mk_individual_with_features(1.0, &[(0,1),(1,1),(2,1)], 0.8, 0.8)],
+        };
+
+        pop.penalize(&data, &param);
+        let expected_mean = (0.0 + 0.05 + 0.45) / 3.0;
+        let expected = 1.0 - 0.3 * expected_mean;
+        let got = pop.individuals[0].fit;
+        assert!((got - expected).abs() < 1e-12, "got {}, expected {}", got, expected);
+    }
+
+    #[test]
+    fn penalize_qvalues_no_penalty_under_threshold_wilcoxon() {
+        // All q <= q* => zero penalty
+        let mut data = Data::new();
+        data.feature_significance.insert(10, 0.001);
+        data.feature_significance.insert(11, 0.02);
+
+        let mut param = mk_param_default();
+        param.data.feature_selection_method = PreselectionMethod::wilcoxon;
+        param.experimental.significance_penalty = 1.0;
+        param.experimental.significance_penalty_threshold = 0.05;
+
+        let mut pop = Population {
+            individuals: vec![mk_individual_with_features(0.7, &[(10,1),(11,1)], 0.9, 0.9)],
+        };
+
+        pop.penalize(&data, &param);
+        assert!((pop.individuals[0].fit - 0.7).abs() < 1e-12);
+    }
+
+    #[test]
+    fn penalize_qvalues_ignores_missing_feature_entries() {
+        // One feature without q in data.feature_significance is safely ignored
+        let mut data = Data::new();
+        data.feature_significance.insert(5, 0.20); // only idx 5 available
+
+        let mut param = mk_param_default();
+        param.data.feature_selection_method = PreselectionMethod::studentt;
+        param.experimental.significance_penalty = 0.5;
+        param.experimental.significance_penalty_threshold = 0.10;
+
+        let mut pop = Population {
+            individuals: vec![mk_individual_with_features(0.9, &[(5,1),(6,1)], 0.8, 0.8)],
+        };
+
+        // hinge: idx5 -> max(0, 0.20-0.10)=0.10 ; idx6 missing -> ignored ; mean=0.10
+        pop.penalize(&data, &param);
+        let expected = 0.9 - 0.5 * 0.10;
+        assert!((pop.individuals[0].fit - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn penalize_bayesian_fisher_hinge_inverse_on_log10_bf() {
+        // bayesian_fisher stores v = |log10(BF)| >= 0; hinge is max(0, tBF - v)
+        // v = [0.2, 1.5], tBF=1.0 => hinge = [0.8, 0.0], mean = 0.4
+        let mut data = Data::new();
+        data.feature_significance.insert(1, 0.2);
+        data.feature_significance.insert(2, 1.5);
+
+        let mut param = mk_param_default();
+        param.data.feature_selection_method = PreselectionMethod::bayesian_fisher;
+        param.experimental.significance_penalty = 0.25;
+        param.experimental.significance_penalty_threshold = 1.0; // tBF
+
+        let mut pop = Population {
+            individuals: vec![mk_individual_with_features(0.85, &[(1,1),(2,1)], 0.7, 0.7)],
+        };
+
+        pop.penalize(&data, &param);
+        let expected = 0.85 - 0.25 * ((0.8 + 0.0) / 2.0);
+        assert!((pop.individuals[0].fit - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn penalize_combines_k_bias_threshold_ci_correctly() {
+        // Verify combination of k-penalty, bias_penalty, and threshold_ci_penalty
+        let mut data = Data::new();
+        let mut param = mk_param_default();
+        param.general.k_penalty = 0.02;
+        param.experimental.bias_penalty = 0.5;
+        param.experimental.threshold_ci_penalty = 0.3;
+        param.experimental.significance_penalty = 0.0; // no significance penalty here
+
+        let mut i = mk_individual_with_features(0.9, &[(3,1),(4,1)], 0.3, 0.4);
+        i.threshold_ci = Some( ThresholdCI { upper: 0.0, lower: 0.0, rejection_rate: 0.2 } );
+        let mut pop = Population { individuals: vec![i] };
+
+        // Expected:
+        // k=2 -> -2*0.02 = -0.04
+        // sens=0.3<0.5 -> -(1-0.3)*0.5 = -0.35
+        // spec=0.4<0.5 -> -(1-0.4)*0.5 = -0.30
+        // threshold_ci 0.2 -> -0.3*0.2 = -0.06
+        // total delta = -0.75 ; fit' = 0.9 - 0.75 = 0.15
+        pop.penalize(&data, &param);
+        assert!((pop.individuals[0].fit - 0.15).abs() < 1e-12);
+    }
 }

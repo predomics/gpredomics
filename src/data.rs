@@ -7,13 +7,21 @@ use std::fmt;
 use crate::param::Param;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::distribution::Normal;// For random shuffling
-use log::{info,warn};
+use log::{info,warn,debug};
 use rayon::prelude::*;
 use fishers_exact::fishers_exact;
 use crate::utils::serde_json_hashmap_numeric;
 use crate::ChaCha8Rng;
 use fast_float::parse;
 use rand::seq::SliceRandom; 
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[allow(non_camel_case_types)]
+pub enum PreselectionMethod {
+    wilcoxon,
+    studentt,
+    bayesian_fisher
+}
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Data {
@@ -24,6 +32,7 @@ pub struct Data {
     pub samples: Vec<String>,
     #[serde(with = "serde_json_hashmap_numeric::usize_u8")]
     pub feature_class: HashMap<usize, u8>, // Sign for each feature
+    pub feature_significance: HashMap<usize, f64>,
     pub feature_selection: Vec<usize>,
     pub feature_len: usize,
     pub sample_len: usize,
@@ -39,6 +48,7 @@ impl Data {
             features: Vec::new(),
             samples: Vec::new(),
             feature_class: HashMap::new(),
+            feature_significance: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 0,
             sample_len: 0,
@@ -472,14 +482,14 @@ impl Data {
         let mut results: Vec<(usize, u8, f64)> = (0..self.feature_len)
             .into_par_iter()
             .map(|j| {
-                let (class, value) = match param.data.feature_selection_method.as_str() {
-                    "studentt" => self.compare_classes_studentt(
+                let (class, value) = match param.data.feature_selection_method {
+                    PreselectionMethod::studentt => self.compare_classes_studentt(
                         j,
-                        param.data.feature_maximal_pvalue,
+                        param.data.feature_maximal_adj_pvalue,
                         param.data.feature_minimal_prevalence_pct as f64 / 100.0,
                         param.data.feature_minimal_feature_value,
                     ),
-                    "bayesian_fisher" => self.compare_classes_bayesian_fisher(
+                    PreselectionMethod::bayesian_fisher => self.compare_classes_bayesian_fisher(
                         j,
                         param.data.feature_minimal_log_abs_bayes_factor,
                         param.data.feature_minimal_prevalence_pct as f64 / 100.0,
@@ -487,7 +497,7 @@ impl Data {
                     ),
                     _ => self.compare_classes_wilcoxon(
                         j,
-                        param.data.feature_maximal_pvalue,
+                        param.data.feature_maximal_adj_pvalue,
                         param.data.feature_minimal_prevalence_pct as f64 / 100.0,
                         param.data.feature_minimal_feature_value,
                     )
@@ -496,7 +506,7 @@ impl Data {
             })
             .collect();
 
-        if param.data.feature_selection_method == "bayesian_fisher" {
+        if param.data.feature_selection_method == PreselectionMethod::bayesian_fisher {
             results.sort_by(|a, b| {
                 match b.2.partial_cmp(&a.2) {
                     Some(ordering) => ordering,
@@ -504,6 +514,10 @@ impl Data {
                 }
             });
         } else {
+            // Keep only tested features and ajust their p-values
+            results.retain(|(_, _, value)| *value != 2.0);
+            results = self.apply_fdr_correction(results, param.data.feature_maximal_adj_pvalue);
+
             results.sort_by(|a, b| {
                 match a.2.partial_cmp(&b.2) {
                     Some(ordering) => ordering,
@@ -537,8 +551,9 @@ impl Data {
 
         let (class_0_features, class_1_features) = self.evaluate_features(param);
 
-        for (j, class, _) in class_0_features.into_iter().chain(class_1_features.into_iter()) {
+        for (j, class, value) in class_0_features.into_iter().chain(class_1_features.into_iter()) {
             self.feature_class.insert(j, class);
+            self.feature_significance.insert(j, value);
             self.feature_selection.push(j);
         }
 
@@ -563,6 +578,46 @@ impl Data {
         }
     }
 
+    /// Benjamini-Hochberg FDR correction (Implementation correcte)
+    fn apply_fdr_correction(&self, mut results: Vec<(usize, u8, f64)>, fdr_alpha: f64) -> Vec<(usize, u8, f64)> {
+        if results.is_empty() {
+            return results;
+        }
+        
+        assert!(fdr_alpha >= 0.0 && fdr_alpha <= 1.0, "FDR alpha {} is outside [0,1], clamping to valid range", fdr_alpha);
+        
+        results.sort_by(|a, b| {
+            a.2.partial_cmp(&b.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        
+        let n = results.len();
+        let n_f = n as f64;
+        let raw_nominal = results.iter().filter(|r| r.2 <= fdr_alpha).count();
+
+        let mut threshold_idx: Option<usize> = None;
+        for i in (0..n).rev() {
+            let rank = (i + 1) as f64;
+            let threshold = (rank / n_f) * fdr_alpha;
+            if results[i].2 <= threshold {
+                threshold_idx = Some(i);
+                break;
+            }
+        }
+    
+        if let Some(idx) = threshold_idx {
+            results.truncate(idx + 1);
+        } else {
+            results.clear();  
+        }
+
+        let kept = results.len();
+        debug!("BH-FDR ajusted α={:.3}: kept {} / {} features", fdr_alpha, kept, raw_nominal);
+
+        results
+    }
+
+    
     /// filter Data for some samples (represented by a Vector of indices)
     pub fn subset(&self, samples: Vec<usize>) -> Data {
         let mut X: HashMap<(usize,usize),f64> = HashMap::new();
@@ -580,6 +635,7 @@ impl Data {
             features: self.features.clone(),
             samples: samples.iter().map(|i| {self.samples[*i].clone()}).collect(),
             feature_class: HashMap::new(),
+            feature_significance: self.feature_significance.clone(),
             feature_selection: Vec::new(),
             feature_len: self.feature_len,
             sample_len: samples.len(),
@@ -594,6 +650,7 @@ impl Data {
             features: self.features.clone(),
             samples: self.samples.clone(),
             feature_class: self.feature_class.clone(),
+            feature_significance: self.feature_significance.clone(),
             feature_selection: self.feature_selection.clone(),
             feature_len: self.feature_len,
             sample_len: self.sample_len,
@@ -758,6 +815,7 @@ mod tests {
                 features: vec!["feature1".to_string(), "feature2".to_string()],
                 samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(), "sample4".to_string(), "sample5".to_string(), "sample6".to_string()],
                 feature_class,
+                feature_significance: HashMap::new(),
                 feature_selection: vec![0, 1],
                 feature_len: 2,
                 sample_len: 6,
@@ -785,6 +843,7 @@ mod tests {
                 y,
                 sample_len: num_samples,
                 feature_class: HashMap::new(),
+                feature_significance: HashMap::new(),
                 features: (0..num_features).map(|i| format!("feature_{}", i)).collect(),
                 samples: (0..num_samples).map(|i| format!("sample_{}", i)).collect(),
                 feature_selection: (0..num_features).collect(),
@@ -846,6 +905,7 @@ mod tests {
                 "sample4".to_string(), "sample5".to_string(), "sample6".to_string(), "sample7".to_string(), 
                 "sample8".to_string(), "sample9".to_string(), "sample10".to_string()],
                 feature_class,
+                feature_significance: HashMap::new(),
                 feature_selection: vec![0, 1],
                 feature_len: 2,
                 sample_len: 10,
@@ -878,6 +938,7 @@ mod tests {
             samples: vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string(),
             "sample4".to_string(), "sample5".to_string()],
             feature_class,
+            feature_significance: HashMap::new(),
             feature_selection: vec![0, 1],
             feature_len: 2,
             sample_len: 5,
@@ -910,6 +971,7 @@ mod tests {
             samples: vec!["sample6".to_string(), "sample7".to_string(), 
             "sample8".to_string(), "sample9".to_string(), "sample10".to_string()],
             feature_class,
+            feature_significance: HashMap::new(),
             feature_selection: vec![0, 1],
             feature_len: 2,
             sample_len: 5,
@@ -1043,7 +1105,7 @@ mod tests {
         param.data.max_features_per_class = 0;
 
         // Test with Bayesian Fisher
-        param.data.feature_selection_method = "bayesian_fisher".to_string();
+        param.data.feature_selection_method = PreselectionMethod::bayesian_fisher;
         param.data.feature_minimal_log_abs_bayes_factor = 2.0;
 
         param.data.feature_minimal_prevalence_pct = 0.0;
@@ -1057,24 +1119,24 @@ mod tests {
         assert_eq!(data.feature_selection, vec![473, 1313], "Incorrect selected features : the result differs from the past and from the original script result.");
 
         // Test with Studentt
-        param.data.feature_selection_method = "studentt".to_string();
+        param.data.feature_selection_method = PreselectionMethod::studentt;
         param.data.max_features_per_class = 0;
-        param.data.feature_maximal_pvalue = 0.05;
+        param.data.feature_maximal_adj_pvalue = 0.05;
         param.data.feature_minimal_feature_value = 0.0001;
         param.data.feature_minimal_prevalence_pct = 0.0;
 
         data.select_features(&param);
-        assert_eq!(data.feature_selection.len(), 195, "The student-based preselection method should identify 195 significant features for feature_minimal_log_abs_bayes_factor=2");
+        assert_eq!(data.feature_selection.len(), 112, "The student-based preselection method should identify 112 significant features for feature_maximal_adj_pvalue=0.05");
 
         // Test with Wilcoxon
-        param.data.feature_selection_method = "wilcoxon".to_string();
+        param.data.feature_selection_method = PreselectionMethod::wilcoxon;
         param.data.max_features_per_class = 0;
-        param.data.feature_maximal_pvalue = 0.05;
+        param.data.feature_maximal_adj_pvalue = 0.05;
         param.data.feature_minimal_feature_value = 0.0001;
         param.data.feature_minimal_prevalence_pct = 0.0;
 
         data.select_features(&param);
-        assert_eq!(data.feature_selection.len(), 348, "The wilcoxon-based preselection should identify 348 significant features for feature_minimal_log_abs_bayes_factor=2");
+        assert_eq!(data.feature_selection.len(), 303, "The wilcoxon-based preselection should identify 348 significant features for feature_maximal_adj_pvalue=0.05");
     }
 
     // tests for subset
@@ -1150,6 +1212,7 @@ mod tests {
             features: vec!["feature1".to_string()],
             samples: vec!["sample1".to_string(), "sample2".to_string()],
             feature_class: HashMap::new(),
+            feature_significance: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 1,
             sample_len: 2,
@@ -1162,6 +1225,7 @@ mod tests {
             features: vec!["feature1".to_string()],
             samples: vec!["sample3".to_string(), "sample4".to_string()],
             feature_class: HashMap::new(),
+            feature_significance: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 1,
             sample_len: 2,
@@ -1382,5 +1446,171 @@ mod tests {
     fn test_default_features_in_rows_false() {
         let param = Param::new();
         assert_eq!(param.data.features_in_rows, false);
+    }
+
+    #[test]
+    fn test_fdr_correction_empty() {
+        let data = Data::new();
+        let results = vec![];
+        let corrected = data.apply_fdr_correction(results, 0.05);
+        assert_eq!(corrected.len(), 0);
+    }
+
+    #[test]
+    fn test_fdr_correction_single_feature() {
+        let data = Data::new();
+        let results = vec![(0, 0u8, 0.03)];
+        let corrected = data.apply_fdr_correction(results, 0.05);
+        // Single feature: threshold = (1/1) * 0.05 = 0.05
+        // p=0.03 <= 0.05 → kept
+        assert_eq!(corrected.len(), 1);
+        assert_eq!(corrected[0].2, 0.03);
+    }
+
+    #[test]
+    fn test_fdr_correction_all_pass() {
+        let data = Data::new();
+        let results = vec![
+            (0, 0u8, 0.001),
+            (1, 0u8, 0.002),
+            (2, 0u8, 0.003),
+        ];
+        let corrected = data.apply_fdr_correction(results, 0.05);
+        // Rank 1: threshold = (1/3) * 0.05 = 0.0167, p=0.001 <= 0.0167 ✓
+        // Rank 2: threshold = (2/3) * 0.05 = 0.0333, p=0.002 <= 0.0333 ✓
+        // Rank 3: threshold = (3/3) * 0.05 = 0.05, p=0.003 <= 0.05 ✓
+        assert_eq!(corrected.len(), 3);
+    }
+
+    #[test]
+    fn test_fdr_correction_partial_rejection() {
+        let data = Data::new();
+        let results = vec![
+            (0, 0u8, 0.001),   // Rank 1: threshold = (1/5)*0.05 = 0.01
+            (1, 0u8, 0.005),   // Rank 2: threshold = (2/5)*0.05 = 0.02
+            (2, 0u8, 0.015),   // Rank 3: threshold = (3/5)*0.05 = 0.03
+            (3, 0u8, 0.04),    // Rank 4: threshold = (4/5)*0.05 = 0.04
+            (4, 0u8, 0.10),    // Rank 5: threshold = (5/5)*0.05 = 0.05
+        ];
+        let corrected = data.apply_fdr_correction(results, 0.05);
+        assert_eq!(corrected.len(), 4); // Rank i = Rank 4 -> Threshold = 0.04 -> only 0.10 rejected
+    }
+
+    #[test]
+    fn test_fdr_correction_realistic_omics() {
+        // Simulation: 100 features, 5 significant (true positives)
+        // + 95 noise features with random p-values
+        let data = Data::new();
+        let mut results = vec![];
+
+        // Add 5 truly significant features (low p-values)
+        for i in 0..5 {
+            results.push((i, 0u8, 0.001 + (i as f64) * 0.0001));
+        }
+
+        // Add 95 noise features with uniform random p-values (0.05 to 1.0)
+        for i in 5..100 {
+            let p_value = 0.05 + ((i as f64) * 0.0095); // 0.05 to 0.95
+            results.push((i, 0u8, p_value));
+        }
+
+        let corrected = data.apply_fdr_correction(results.clone(), 0.05);
+
+        // Beyond rank ~5: threshold grows, but p-values are too high
+        
+        // We expect to keep only the truly significant ones
+        assert!(corrected.len() <= 10, "Should be conservative with alpha=0.05");
+        assert!(corrected.len() >= 1, "Should keep at least top features");
+
+        // Verify all kept features have low p-values
+        for (_, _, p_val) in &corrected {
+            assert!(*p_val <= 0.01, "Kept features should have p-value <= 0.01");
+        }
+    }
+
+    #[test]
+    fn test_fdr_correction_sorted_independently() {
+        let data = Data::new();
+        // Input NOT sorted
+        let results = vec![
+            (0, 0u8, 0.10),
+            (1, 0u8, 0.001),
+            (2, 0u8, 0.05),
+            (3, 0u8, 0.02),
+        ];
+        let corrected = data.apply_fdr_correction(results, 0.05);
+        
+        // Should sort: 0.001, 0.02, 0.05, 0.10
+        // Rank 1: 0.001 <= (1/4)*0.05 = 0.0125 ✓
+        // Rank 2: 0.02 <= (2/4)*0.05 = 0.025 ✓
+        // Rank 3: 0.05 <= (3/4)*0.05 = 0.0375 ✗
+        // Rank 4: 0.10 <= (4/4)*0.05 = 0.05 ✗
+        
+        assert_eq!(corrected.len(), 2);
+    }
+
+    #[test]
+    fn test_fdr_correction_alpha_levels() {
+        let data = Data::new();
+        let results = vec![
+            (0, 0u8, 0.001),
+            (1, 0u8, 0.01),
+            (2, 0u8, 0.05),
+            (3, 0u8, 0.10),
+        ];
+
+        // Alpha = 0.05
+        let corrected_05 = data.apply_fdr_correction(results.clone(), 0.05);
+        
+        // Alpha = 0.10 (more permissive)
+        let corrected_10 = data.apply_fdr_correction(results.clone(), 0.10);
+
+        // More permissive alpha should keep more features
+        assert!(corrected_10.len() >= corrected_05.len());
+    }
+
+    #[test]
+    fn test_fdr_correction_preserves_feature_ids() {
+        let data = Data::new();
+        let results = vec![
+            (42, 0u8, 0.001),
+            (100, 0u8, 0.02),
+            (7, 0u8, 0.10),
+        ];
+        let corrected = data.apply_fdr_correction(results, 0.05);
+        
+        // Feature IDs should be preserved
+        let ids: Vec<usize> = corrected.iter().map(|(id, _, _)| *id).collect();
+        assert!(ids.contains(&42));
+    }
+
+    #[test]
+    fn test_fdr_correction_alpha_zero() {
+        // BH with alpha=0: thresholds (i/n)*0 = 0, so only p==0 would pass.
+        // Here we use p-values strictly > 0 to validate 0 discoveries.
+        let data = Data::new();
+        let results = vec![
+            (0, 0u8, 0.001),
+            (1, 0u8, 0.02),
+            (2, 0u8, 0.50),
+            (3, 0u8, 0.99),
+        ];
+        let corrected = data.apply_fdr_correction(results, 0.0);
+        assert_eq!(corrected.len(), 0, "With alpha=0 & p>0, every features should be discarded");
+    }
+
+    #[test]
+    fn test_fdr_correction_alpha_one() {
+        // BH with alpha=1: the largest threshold is (n/n)*1 = 1, 
+        // so all p-values in [0,1] are retained.
+        let data = Data::new();
+        let results = vec![
+            (0, 0u8, 0.001),
+            (1, 0u8, 0.20),
+            (2, 0u8, 0.70),
+            (3, 0u8, 1.00),
+        ];
+        let corrected = data.apply_fdr_correction(results.clone(), 1.0);
+        assert_eq!(corrected.len(), results.len(), "With alpha=1 & p∈[0,1], every features should be selected");
     }
 }

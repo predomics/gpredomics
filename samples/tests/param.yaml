@@ -7,7 +7,7 @@ data:
   X: "X.tsv"
   y: "y.tsv"
   feature_minimal_prevalence_pct: 10 # per class, e.g. if any of the class reaches this level
-  feature_maximal_pvalue: 0.001 # feature with differences less significant than this will be removed
+  feature_maximal_adj_pvalue: 0.001 # feature with differences less significant than this will be removed
   feature_minimal_feature_value: 0.0001
 
 ga:

@@ -10,7 +10,7 @@ data:
   ytest: "Ytest.tsv"
   pvalue_method: wilcoxon
   feature_minimal_prevalence_pct: 20 # per class, e.g. if any of the class reaches this level
-  feature_maximal_pvalue: 0.5 # feature with differences less significant than this will be removed
+  feature_maximal_adj_pvalue: 0.5 # feature with differences less significant than this will be removed
   feature_minimal_feature_value: 0.0
 
 ga:
