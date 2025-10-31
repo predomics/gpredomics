@@ -11,6 +11,7 @@ mod ga;
 mod cv;
 pub mod gpu;
 pub mod experiment;
+pub mod voting;
 
 use crate::experiment::{Experiment, ExperimentMetadata};
 use data::Data;
@@ -167,7 +168,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     
     // Load train data
     let mut data = Data::new();
-    let _ = data.load_data(&run_param.data.X.to_string(), &run_param.data.y.to_string());
+    let _ = data.load_data(&run_param.data.X.to_string(), &run_param.data.y.to_string(), param.data.features_in_rows);
     data.set_classes(run_param.data.classes.clone());
     if run_param.data.inverse_classes { data.inverse_classes(); }
     info!("\x1b[2;97m{:?}\x1b[0m", data);  
@@ -182,16 +183,9 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         cv_folds_ids = Some(folds.get_ids());
 
         run_param.general.gpu = false;
-        if run_param.general.thread_number >= param.cv.outer_folds {
-            run_param.general.thread_number = param.general.thread_number/param.cv.outer_folds; 
-            info!("\x1b[1;93mCross-validation parallelization using {} threads per fold\x1b[0m", run_param.general.thread_number);
-        } else {
-            run_param.general.thread_number = 1; 
-        }
-
         folds.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
             ga::ga(d, &mut None, p, r)  
-        }, &run_param, run_param.general.thread_number, running);
+        }, &run_param, running);
 
         final_population = folds.clone().get_fbm(&param);
         final_population.fit(&data, &mut None, &None, &None, &run_param);
@@ -209,7 +203,7 @@ pub fn run_ga(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     let test_data = if !param.data.Xtest.is_empty() {
         debug!("Loading test data...");
         let mut td = Data::new();
-        let _ = td.load_data(&param.data.Xtest, &param.data.ytest);
+        let _ = td.load_data(&param.data.Xtest, &param.data.ytest, param.data.features_in_rows);
         td.set_classes(param.data.classes.clone());
         if param.data.inverse_classes { td.inverse_classes(); }
         td
@@ -346,7 +340,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     
     // Load train data
     let mut data = Data::new();
-    let _ = data.load_data(&run_param.data.X.to_string(), &run_param.data.y.to_string());
+    let _ = data.load_data(&run_param.data.X.to_string(), &run_param.data.y.to_string(), param.data.features_in_rows);
     data.set_classes(run_param.data.classes.clone());
     if run_param.data.inverse_classes { data.inverse_classes(); }
     info!("\x1b[2;97m{:?}\x1b[0m", data);  
@@ -361,16 +355,9 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         cv_folds_ids = Some(folds.get_ids());
 
         run_param.general.gpu = false;
-        if run_param.general.thread_number >= param.cv.outer_folds {
-            run_param.general.thread_number = param.general.thread_number/param.cv.outer_folds; 
-            info!("\x1b[1;93mCross-validation parallelization using {} threads per fold\x1b[0m", run_param.general.thread_number);
-        } else {
-            run_param.general.thread_number = 1; 
-        }
-
         folds.pass(|d: &mut Data, p: &Param, r: Arc<AtomicBool>| {
             beam::beam(d, &mut None, p, r)  
-        }, &run_param, run_param.general.thread_number, running);
+        }, &run_param, running);
 
         final_population = folds.clone().get_fbm(&param);
         final_population.fit(&data, &mut None, &None, &None, &run_param);
@@ -389,7 +376,7 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     let test_data = if !param.data.Xtest.is_empty() {
         debug!("Loading test data...");
         let mut td = Data::new();
-        let _ = td.load_data(&param.data.Xtest, &param.data.ytest);
+        let _ = td.load_data(&param.data.Xtest, &param.data.ytest, param.data.features_in_rows);
         td.set_classes(param.data.classes.clone());
         if param.data.inverse_classes { td.inverse_classes(); }
         td
@@ -397,8 +384,16 @@ pub fn run_beam(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         Data::new()
     };
 
-    info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_population.individuals[0].features.len());
-    info!("{}", final_population.display(&data, Some(&test_data), param));
+    if !param.general.keep_trace {
+        warn!("keep_trace=false: only final population returned. \
+                    Set it to true to display best individuals across all epochs (recommended for Beam)");
+        info!("\x1b[1;93mTop model rankings for k={}\x1b[0m", final_population.individuals[0].features.len());
+        info!("{}", final_population.display(&data, Some(&test_data), param));
+    } else {
+        info!("\x1b[1;93mTop model rankings for [{}, {}] interval\x1b[0m", param.beam.kmin, final_population.individuals[0].features.len());
+        info!("{}", final_population.display(&data, Some(&test_data), param));
+    }
+   
 
     let exec_time = start.elapsed().as_secs_f64();
 
@@ -438,7 +433,7 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     }
     // Load Data using Gpredomics Data structure
     let mut data = Data::new();
-    let _ = data.load_data(param.data.X.as_str(), param.data.y.as_str());
+    let _ = data.load_data(param.data.X.as_str(), param.data.y.as_str(), param.data.features_in_rows);
     data.set_classes(param.data.classes.clone());
     if param.data.inverse_classes { data.inverse_classes(); }
 
@@ -495,7 +490,7 @@ pub fn run_mcmc(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     // Using MCMC models to compute prediction on test data
     let mut test_data = Data::new();
     if !param.data.Xtest.is_empty() {
-        let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest);
+        let _ = test_data.load_data(&param.data.Xtest, &param.data.ytest, param.data.features_in_rows);
         test_data.set_classes(param.data.classes.clone());
         if param.data.inverse_classes { test_data.inverse_classes(); }
         test_data = test_data.remove_class(2);

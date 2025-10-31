@@ -20,21 +20,35 @@ use crate::utils::{display_epoch,display_epoch_legend};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+//-----------------------------------------------------------------------------
+// Genetic Algorithm core functions
+//-----------------------------------------------------------------------------
+
 pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running: Arc<AtomicBool>) -> Vec<Population> {   
     let time = Instant::now();
-    // generate a random population with a given size  (and evaluate it for selection)
-    let mut pop = Population::new();
-    let mut epoch:usize = 0;
-    let mut populations: Vec<Population> = Vec::new();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
-    info!("Selecting features...");
     data.select_features(param);
-    info!("{} features selected.",data.feature_selection.len());
     debug!("FEATURES {:?}",data.feature_class);
 
-    // generate initial population
+    let gpu_assay = get_gpu_assay(data, param);
 
+    // Initialize first population
+    let base_pop = generate_pop(data, param, &mut rng);
+    info!("Population size: {}, kmin {}, kmax {}",base_pop.individuals.len(),base_pop.individuals.iter().map(|i| {i.k}).min().unwrap_or(0),base_pop.individuals.iter().map(|i| {i.k}).max().unwrap_or(0));
+
+    display_epoch_legend(param);
+    let populations = iterative_evolution(&base_pop, data, &gpu_assay, param, running, &mut rng);
+
+    let elapsed = time.elapsed();
+    info!("Genetic algorithm computed {:?} generations in {:.2?}", populations.len(), elapsed);
+
+    populations
+    
+}
+
+pub fn generate_pop(data: &Data, param : &Param, rng: &mut ChaCha8Rng) -> Population {
+    let mut pop = Population::new();
     let languages: Vec<u8> = param.general.language.split(",").map(individual::language).collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(individual::data_type).collect();
     let sub_population_size = param.ga.population_size / (languages.len() * data_types.len()) as u32;
@@ -50,7 +64,7 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
                     *language,
                     *data_type,
                     param.general.data_type_epsilon,
-                    data, param.experimental.threshold_ci, &mut rng);
+                    data, param.experimental.threshold_ci, rng);
                 debug!("generated for {} {}...",sub_pop.individuals[0].get_language(),sub_pop.individuals[0].get_data_type());
             
                 target_size = remove_stillborn(&mut sub_pop);
@@ -64,120 +78,92 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
             }
         }
     }
+    pop.compute_hash();
+    let clone_number = pop.remove_clone();
+    if clone_number>0 { debug!("Some clones were removed : {}.", clone_number) } ;
+    pop
+}
 
-    info!("Population size: {}, kmin {}, kmax {}",pop.individuals.len(),pop.individuals.iter().map(|i| {i.k}).min().unwrap_or(0),pop.individuals.iter().map(|i| {i.k}).max().unwrap_or(0));
-
+pub fn iterative_evolution(base_pop: &Population, data: &mut Data, gpu_assay: &Option<GpuAssay>, param: &Param, running: Arc<AtomicBool>, rng: &mut ChaCha8Rng) -> Vec<Population> {
+    let mut epoch: usize= 0;
     let mut cv: Option<CV> = None;
-    if param.cv.overfit_penalty != 0.0 {
+    let mut populations: Vec<Population> = vec![];
+
+    let mut data_rng = rng.clone();
+    let mut evolution_rng = rng.clone();
+
+    // Prepare epoch associated data
+    let mut epoch_data = if param.ga.random_sampling_pct > 0.0 {
+        let random_samples = (data.sample_len as f64 * (param.ga.random_sampling_pct/100.0)) as usize;
+        data.subset(data.random_subset(random_samples, &mut data_rng))
+    } else if param.cv.overfit_penalty != 0.0 {
         let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 10 };
         info!("Learning on {:?}-folds.", folds_nb);
-        cv = Some(CV::new(&data, folds_nb, &mut rng));
-
-        if param.ga.random_sampling_pct > 0.0 {
-            warn!("Randomized sampling is not compatible with inner cross-validation and will then be deactivated. Note that you c")
-        }
-    }
-
-    if param.ga.random_sampling_pct > 0.0 || param.cv.overfit_penalty > 0.0 {
-        warn!("Randomized samples and overfit penalty are not compatible yet with GPU. CPU will then be used.");
-    }
-
-    if param.ga.random_sampling_pct > 0.0 && param.cv.overfit_penalty > 0.0 {
-        panic!("Randomized samples and overfit penalty cannot be used together. If you want to resample the folds of the cross-validation used to penalise overfitting, you can use the parameter random_sampling_epochs.");
-    }
-
-    let gpu_assay = if param.general.gpu && param.ga.random_sampling_pct == 0.0 && param.cv.overfit_penalty == 0.0 {
-        let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
-        let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
-        let assay = if gpu_max_nb_models < param.ga.population_size as usize {
-            warn!("GPU requires a maximum number of models (<=> Population size). \
-            \nAccording to your configuration, param.ga.population_size must not exceed {}. \
-            \nIf your configuration supports it and you know what you're doing, consider alternatively increasing the size of the buffers to {:.0} MB (do not forget to adjust the total size accordingly) \
-            \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models,
-            ((param.ga.population_size as usize * data.sample_len * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0)+1.0));
-            None
-        } else {
-            Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, param.ga.population_size as usize, &param.gpu))
-        }; 
-        assay
-    } else {
-        None
-    };
-
-    let mut evaluation_data = if param.ga.random_sampling_pct > 0.0 {
-        let random_samples = (data.sample_len as f64 * (param.ga.random_sampling_pct/100.0)) as usize;
-        data.subset(data.random_subset(random_samples, &mut rng))
+        cv = Some(CV::new(&data, folds_nb, &mut data_rng));
+        Data::new()
     } else {
         data.clone()
     };
 
+    // Clean data before process
+    let mut pop = base_pop.clone() ;
+    pop.compute_hash();
+    let _clone_number = pop.remove_clone();
+
+    // Fitting base population on data
     if let Some(ref cv) = cv {
         debug!("Fitting population on folds...");
         pop.fit_on_folds(cv, &param, &vec![None; param.cv.inner_folds]);
-        if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
     } else {
         debug!("Fitting population...");
-        pop.fit(&evaluation_data, &mut None, &gpu_assay, &None, param);
+        pop.fit(&epoch_data, &mut None, gpu_assay, &None, param);
     }
 
-    display_epoch_legend(param);
+    pop = pop.sort();
 
+    // Evolve!
     loop {
         epoch += 1;
-        debug!("Starting epoch {}", epoch);
-        
-        let mut current_data = &Data::new();
-        if param.ga.random_sampling_pct > 0.0 {
-            if epoch % param.ga.random_sampling_epochs == 0 {
-                let random_samples = (data.sample_len as f64 * (param.ga.random_sampling_pct/100.0)) as usize;
-                debug!("Re-sampling {} samples...", random_samples);
-                evaluation_data = data.subset(data.random_subset(random_samples, &mut rng))
-                }
 
-            let use_full_dataset = param.ga.n_epochs_before_global > 0 && epoch % param.ga.n_epochs_before_global == 0;
-            current_data = if use_full_dataset {
-                debug!("Using full dataset for evaluation at epoch {}", epoch);
-                &data
-            } else {
-                &evaluation_data
-            };
-            pop.fit(current_data, &mut None, &gpu_assay, &None, param);
-        } else if param.cv.overfit_penalty > 0.0 && param.cv.resampling_inner_folds_epochs > 0 && param.cv.resampling_inner_folds_epochs % epoch == 0 { 
-            let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 3 };
-            let gpu_assays_per_fold: Vec<Option<GpuAssay>> = vec![None; param.cv.inner_folds];
+        // Data shuffling if required
+        // Fit precendent generation on new data only for during for resampling epochs
+        if param.ga.random_sampling_pct > 0.0 && epoch % param.ga.random_sampling_epochs == 0 {
+            let random_samples = (data.sample_len as f64 * (param.ga.random_sampling_pct/100.0)) as usize;
+            debug!("Re-sampling {} samples...", random_samples);
+            epoch_data = data.subset(data.random_subset(random_samples, &mut data_rng));
+
+            pop.fit(&epoch_data, &mut None, &gpu_assay, &None, param);
+            if param.general.keep_trace { pop.compute_all_metrics(&epoch_data, &param.general.fit); }
+            pop = pop.sort();
+        } else if param.cv.overfit_penalty > 0.0 && param.cv.resampling_inner_folds_epochs > 0 && epoch % param.cv.resampling_inner_folds_epochs == 0 {
             debug!("Re-sampling folds...");
-            cv = Some(CV::new(&data, folds_nb, &mut rng));
+            let folds_nb = if param.cv.inner_folds > 1 { param.cv.inner_folds } else { 3 };
+            let gpu_assays_per_fold: Vec<Option<GpuAssay>> = vec![None; folds_nb];
+            cv  = Some(CV::new(&data, folds_nb, &mut data_rng));
+
             if let Some(ref cv) = cv {
                 pop.fit_on_folds(cv, &param, &gpu_assays_per_fold); 
-                if param.general.keep_trace { pop.compute_all_metrics(&data, &param.general.fit); }
+                pop = pop.sort();
             }
+        } 
 
-        }
-        
-        // we create a new generation
-        let mut new_pop = Population::new();
+        // Evolution and ranking
+        pop = evolve(pop, &epoch_data, &mut cv, param, gpu_assay, epoch, &mut evolution_rng);
 
-        // select some parents (according to elitiste/random params)
-        // these individuals are flagged with the parent attribute
-        // this populate half the new generation new_pop
-        pop.compute_hash();
-        let clone_number = pop.remove_clone();
-        if clone_number>0 { debug!("Some clones were removed : {}.", clone_number) } ;
-        
-        pop = pop.sort(); 
-        
-        let best_model = &pop.individuals[0];
         display_epoch(&pop, param, epoch);
-        
+
+        // Stop critera
         let mut need_to_break= false;
+
+        let best_model = &pop.individuals[0];
         if epoch>=param.ga.min_epochs {
             if epoch-best_model.epoch+1>param.ga.max_age_best_model {
                 info!("Best model has reached limit age...");
                 need_to_break = true;
-            }
+            }      
         }
 
-        if epoch>=param.ga.max_epochs {
+        if epoch >= param.ga.max_epochs {
             info!("Reach max epoch");
             need_to_break = true;
         }
@@ -187,79 +173,81 @@ pub fn ga(data: &mut Data, _test_data: &mut Option<Data>, param: &Param, running
             need_to_break = true;
         }
 
+        if param.general.keep_trace { populations.push(pop.clone()) }
+
         if need_to_break {
-            if populations.len()==0 {
-                populations = vec![pop];
-            }
+            if populations.len() == 0 { populations = vec![pop]; } 
+
+            if param.ga.random_sampling_pct > 0.0 {
+                if let Some(last_population) = populations.last_mut() {
+                    warn!("Random sampling: models optimized on samples ({} samples), metrics shown on full dataset. \n\
+                    NOTE: Fit values reflect sample-based optimization, not full dataset performance.", (param.ga.random_sampling_pct * 100.0) as u8);
+                    last_population.compute_all_metrics(&data, &param.general.fit);
+                    //(&mut *last_population).fit(&data, &mut None, &gpu_assay, &None, param);
+                }
+            }       
+
             break
         }
-
-        // Creating new generation
-        new_pop.add(select_parents(&pop, param, &mut rng));
-
-        // Filter before cross-over to improve diversity 
-        if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
-            let n = new_pop.individuals.len();
-            new_pop = new_pop.filter_by_signed_jaccard_dissimilarity(param.ga.forced_diversity_pct, param.ga.select_niche_pct == 0.0);
-            if new_pop.individuals.len() > 1 {
-                debug!("Parents filtered for diversity: {}/{} individuals retained", new_pop.individuals.len(), n);
-            } else {
-                warn!("Only 1 Individual kept after filtration with diversity");
-            }
-        }
-
-        let mut children_to_create = param.ga.population_size as usize-new_pop.individuals.len();
-        let mut children=Population::new();
-        while children_to_create > 0 {
-            let mut some_children = cross_over(&new_pop, children_to_create, &mut rng);
-            mutate(&mut some_children, param, &data.feature_selection, &mut rng);
-            children_to_create = remove_stillborn(&mut some_children) as usize;
-            if children_to_create > 0 { debug!("Some stillborn are presents: {}", children_to_create) }
-
-            children.add(some_children);
-        }
-        
-        if let Some(ref cv) = cv {
-            debug!("Fitting population on folds...");
-            children.fit_on_folds(cv, &param,  &vec![None; param.cv.inner_folds]);
-        }  else {
-            debug!("Fitting population...");
-            if param.ga.random_sampling_pct > 0.0 {
-                children.fit(current_data, &mut None, &gpu_assay, &None, param);
-            } else {
-                children.fit(data, &mut None, &gpu_assay, &None, param);
-            }       
-        }
-        
-        for i in children.individuals.iter_mut() {
-            i.epoch = epoch;
-        }
-        new_pop.add(children);
-
-        if param.general.keep_trace {
-            populations.push(pop);
-        }
-        else {
-            populations = vec![pop];
-        }
-        pop = new_pop;
-
     }
-
-    if param.ga.random_sampling_pct > 0.0 {
-        if let Some(last_population) = populations.last_mut() {
-            warn!("Random sampling: models optimized on samples ({}%),  metrics shown on full dataset. \n\
-            NOTE: Fit values reflect sample-based optimization, not full dataset performance.", (param.ga.random_sampling_pct * 100.0) as u8);
-            last_population.compute_all_metrics(&data, &param.general.fit);
-            //(&mut *last_population).fit(&data, &mut None, &gpu_assay, &None, param);
-        }
-    }
-
-    let elapsed = time.elapsed();
-    info!("Genetic algorithm computed {:?} generations in {:.2?}", populations.len(), elapsed);
 
     populations
     
+    }
+
+// Evolve the population one time: filter, cross-over and mutate
+#[inline]
+pub fn evolve(pop: Population, data: &Data, cv: &mut Option<CV>, param: &Param, gpu_assay: &Option<GpuAssay>, epoch: usize, rng: &mut ChaCha8Rng) -> Population {
+    let mut new_pop = Population::new();
+
+    new_pop.add(select_parents(&pop, param, rng));
+
+    // Filter before cross-over to improve diversity 
+    if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
+        let n = new_pop.individuals.len();
+        new_pop = new_pop.filter_by_signed_jaccard_dissimilarity(param.ga.forced_diversity_pct, param.ga.select_niche_pct == 0.0);
+        if new_pop.individuals.len() > 1 {
+            debug!("Parents filtered for diversity: {}/{} individuals retained", new_pop.individuals.len(), n);
+        } else {
+            warn!("Only 1 Individual kept after filtration with diversity");
+        }
+    }
+
+    // Generate children
+    let mut children_to_create = param.ga.population_size as usize-new_pop.individuals.len();
+
+    let mut children=Population::new();
+    
+    while children_to_create > 0 {
+        let mut some_children = cross_over(&new_pop, children_to_create, rng);
+        mutate(&mut some_children, param, &data.feature_selection, rng);
+        children_to_create = remove_stillborn(&mut some_children) as usize;
+        if children_to_create > 0 { debug!("Some stillborn are presents: {}", children_to_create) }
+
+        children.add(some_children);
+    }
+
+    for i in children.individuals.iter_mut() {
+        i.epoch = epoch;
+    }
+
+    // Fit children and clean population
+    if let Some(ref cv) = cv {
+        debug!("Fitting children on folds...");
+        children.fit_on_folds(cv, &param,  &vec![None; param.cv.inner_folds]);
+    }  else {
+        debug!("Fitting children...");
+        children.fit(&data, &mut None, gpu_assay, &None, param);    
+    }
+
+    new_pop.add(children);
+
+    new_pop.compute_hash();
+    let clone_number = new_pop.remove_clone();
+    if clone_number>0 { debug!("Some clones were removed : {}.", clone_number) } ;
+    new_pop = new_pop.sort(); 
+
+    new_pop
 }
 
 /// pick params.ga_select_elite_pct% of the best individuals and params.ga_select_random_pct%  
@@ -308,7 +296,6 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
     parents
 
 }
-
 
 /// create children from parents
 pub fn cross_over(parents: &Population, children_number: usize, rng: &mut ChaCha8Rng) -> Population {
@@ -483,6 +470,28 @@ pub fn mutate_pow2(individual: &mut Individual, param: &Param, feature_indices: 
                 _ => {}
         };
     }
+}
+
+fn get_gpu_assay(data: &Data, param: &Param) -> Option<GpuAssay> {
+    let gpu_assay = if param.general.gpu && param.ga.random_sampling_pct == 0.0 && param.cv.overfit_penalty == 0.0 {
+        let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
+        let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
+        let assay = if gpu_max_nb_models < param.ga.population_size as usize {
+            warn!("GPU requires a maximum number of models (<=> Population size). \
+            \nAccording to your configuration, param.ga.population_size must not exceed {}. \
+            \nIf your configuration supports it and you know what you're doing, consider alternatively increasing the size of the buffers to {:.0} MB (do not forget to adjust the total size accordingly) \
+            \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models,
+            ((param.ga.population_size as usize * data.sample_len * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0)+1.0));
+            None
+        } else {
+            Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, param.ga.population_size as usize, &param.gpu))
+        }; 
+        assay
+    } else {
+        None
+    };
+
+    gpu_assay
 }
 
 #[cfg(test)]
