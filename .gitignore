@@ -1,4 +1,5 @@
 target/
+tests/consistency/v*
 *.log
 *.tsv
 out/

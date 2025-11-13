@@ -10,7 +10,7 @@ use statrs::distribution::Normal;// For random shuffling
 use log::{info,warn,debug};
 use rayon::prelude::*;
 use fishers_exact::fishers_exact;
-use crate::utils::serde_json_hashmap_numeric;
+use crate::utils::{self, serde_json_hashmap_numeric};
 use crate::ChaCha8Rng;
 use fast_float::parse;
 use rand::seq::SliceRandom; 
@@ -23,6 +23,17 @@ pub enum PreselectionMethod {
     bayesian_fisher
 }
 
+pub struct FeatureAnnotations {
+    pub feature_tags: HashMap<usize, Vec<String>>,
+    pub prior_weight: HashMap<usize, f64>,
+    pub feature_penalty: HashMap<usize, f64>,
+}
+
+pub struct SampleAnnotations {
+    pub sample_tags: HashMap<usize, Vec<String>>,
+    pub samples_subclasses: HashMap<usize, u8>,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Data {
     #[serde(with = "serde_json_hashmap_numeric::tuple_usize_f64")]
@@ -32,11 +43,12 @@ pub struct Data {
     pub samples: Vec<String>,
     #[serde(with = "serde_json_hashmap_numeric::usize_u8")]
     pub feature_class: HashMap<usize, u8>, // Sign for each feature
-    pub feature_significance: HashMap<usize, f64>,
     pub feature_selection: Vec<usize>,
     pub feature_len: usize,
     pub sample_len: usize,
-    pub classes: Vec<String>
+    pub classes: Vec<String>,
+    #[serde(default)]
+    pub feature_significance: HashMap<usize, f64>,
 }
 
 impl Data {
@@ -66,14 +78,14 @@ impl Data {
     -> Result<(), Box<dyn Error>> 
     {
         if features_in_rows {
-            self.load_data_features_in_rowss(X_path, y_path)
+            self.load_data_features_in_rows(X_path, y_path)
         } else {
             self.load_data_features_in_columns(X_path, y_path)
         }
     }
 
     /// Legacy format (current Gpredomics format): rows=features, columns=samples
-    fn load_data_features_in_rowss(&mut self, X_path: &str, y_path: &str) 
+    fn load_data_features_in_rows(&mut self, X_path: &str, y_path: &str) 
         -> Result<(), Box<dyn Error>> 
     {
         #[inline]
@@ -81,7 +93,6 @@ impl Data {
             line.trim_end_matches(['\n', '\r'])
         }
 
-        // ★ KEEP ORIGINAL LOG MESSAGE
         info!("Loading files {} and {}...", X_path, y_path);
         
         let file_X = File::open(X_path)?;
@@ -636,7 +647,7 @@ impl Data {
             samples: samples.iter().map(|i| {self.samples[*i].clone()}).collect(),
             feature_class: HashMap::new(),
             feature_significance: self.feature_significance.clone(),
-            feature_selection: Vec::new(),
+            feature_selection: self.feature_selection.clone(), // Inherit feature selection from parent
             feature_len: self.feature_len,
             sample_len: samples.len(),
             classes: self.classes.clone()
@@ -684,16 +695,8 @@ impl Data {
     }
 
     pub fn random_subset(&self, n_samples: usize, rng: &mut ChaCha8Rng) -> Vec<usize> {
-        let mut indices_class0 = Vec::new();
-        let mut indices_class1 = Vec::new();
-        for (i, &label) in self.y.iter().enumerate() {
-            if label == 0 {
-                indices_class0.push(i);
-            } else if label == 1 {
-                indices_class1.push(i);
-            }
-
-        }
+        // Use stratify_indices_by_class to separate positive and negative samples
+        let (indices_class1, indices_class0) = utils::stratify_indices_by_class(&self.y);
 
         let total_len = self.sample_len;
         let n_class0 = indices_class0.len();

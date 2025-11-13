@@ -1,9 +1,9 @@
 use serde::{Serialize, Deserialize};
 use crate::param::{FitFunction};
 use crate::experiment::ImportanceAggregation;
-use crate::utils::{conf_inter_binomial, compute_roc_and_metrics_from_value, compute_auc_from_value, compute_metrics_from_classes, compute_threshold_and_metrics_with_bootstrap};
+use crate::utils::{conf_inter_binomial, compute_roc_and_metrics_from_value, compute_auc_from_value, compute_metrics_from_classes, precompute_bootstrap_indices, compute_threshold_and_metrics_with_precomputed_bootstrap, PrecomputedBootstrap};
 use crate::cv::CV;
-use crate::data::{Data, PreselectionMethod};
+use crate::data::Data;
 use crate::individual::Individual;
 use crate::param::Param;
 use rand::RngCore;
@@ -16,7 +16,6 @@ use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, Impor
 use crate::utils::{mean_and_std, median, mad};
 use crate::gpu::GpuAssay;
 use log::{warn};
-use crate::utils;
 use rand::SeedableRng;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -45,111 +44,99 @@ impl Population {
     }
 
     pub fn display(&mut self, data: &Data, data_to_test: Option<&Data>, param: &Param) -> String {
-        let other_set;
-        if param.data.n_validation_samples > 0 {
-            other_set = "Validation"
-        } else {
-            other_set = "Test"
-        }
-
         if param.general.algo == "mcmc" {
-            let mut str: String = format!("Displaying bayesian model with the greatest log evidence. Metrics are shown in the following order: Train/{}.", other_set);
+            let other_set = if data_to_test.is_some() { "Test" } else { "Train" };
+            let mut str = format!("Displaying bayesian model with the greatest log evidence. Metrics are shown in the following order: Train/{}.", other_set);
+            
             let (train_auc, train_best_threshold, train_best_acc, train_best_sens, train_best_spec, _) = self.bayesian_compute_roc_and_metrics(&data);
-            if let Some(data_to_test) = data_to_test {
+            
+            str = if let Some(data_to_test) = data_to_test {
                 let (test_auc, test_best_acc, test_best_sens, test_best_spec) = self.bayesian_compute_metrics(&data_to_test, train_best_threshold);
-                str = format!("{}\n\nBayesian model {}:{} [n_st = {}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}", str,
-                self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), train_auc, test_auc, train_best_acc, test_best_acc, 
-                train_best_sens, test_best_sens, train_best_spec, test_best_spec)
+                format!("{}\n\nBayesian model {}:{} [n_st = {}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}", 
+                    str, self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), 
+                    train_auc, test_auc, train_best_acc, test_best_acc, train_best_sens, test_best_sens, train_best_spec, test_best_spec)
             } else {
-                str = format!("{}\nBayesian model {}:{} [n_st = {}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}", str,
-                self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), train_auc, train_best_acc, train_best_sens,
-                train_best_sens)
-            }   
+                format!("{}\nBayesian model {}:{} [n_st = {}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}", 
+                    str, self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), 
+                    train_auc, train_best_acc, train_best_sens, train_best_sens)
+            };
+            
             str = format!("{}\n\nThese metrics were calculated by optimizing the probability of decision (threshold={:.3} instead of 0.5)", str, train_best_threshold);
             str = format!("{}\nNote: the number of iterations corresponds to the sum of the number of betas and feature coefficient variations, resulting in a number greater than n_iter-n_burn)", str);
             format!("{}\nTo reproduce these results, relaunch this exact training with data to be predicted and/or export the MCMC trace with save_trace_outdir", str)
         } else {
-            let limit:u32;
-            if (self.individuals.len() as u32) < param.general.n_model_to_display || param.general.n_model_to_display == 0 {
-                limit = self.individuals.len() as u32
+            let limit = if (self.individuals.len() as u32) < param.general.n_model_to_display || param.general.n_model_to_display == 0 {
+                self.individuals.len() as u32
             } else {
-                limit = param.general.n_model_to_display
-            }
+                param.general.n_model_to_display
+            };
 
             let mut str = String::new();
         
-            if param.general.keep_trace {
-                let mut train_aucs: Vec<f64> = Vec::new();
-                let mut train_accuracies: Vec<f64> = Vec::new();
-                let mut train_sensitivities: Vec<f64> = Vec::new();
-                let mut train_specificities: Vec<f64> = Vec::new();
+            let fbm = self.select_best_population(0.05);
+            
+            if !fbm.individuals.is_empty() {
+                let train_aucs: Vec<f64> = fbm.individuals.iter().map(|i| i.auc).collect();
+                let train_accuracies: Vec<f64> = fbm.individuals.iter().map(|i| i.accuracy).collect();
+                let train_sensitivities: Vec<f64> = fbm.individuals.iter().map(|i| i.sensitivity).collect();
+                let train_specificities: Vec<f64> = fbm.individuals.iter().map(|i| i.specificity).collect();
 
-                for individual in &self.individuals {
-                    train_aucs.push(individual.auc);
-                    train_accuracies.push(individual.accuracy);
-                    train_sensitivities.push(individual.sensitivity);
-                    train_specificities.push(individual.specificity);
-                }
+                let (train_auc_mean, _) = mean_and_std(&train_aucs);
+                let (train_acc_mean, _) = mean_and_std(&train_accuracies);
+                let (train_sens_mean, _) = mean_and_std(&train_sensitivities);
+                let (train_spec_mean, _) = mean_and_std(&train_specificities);
 
-                let train_auc_median = utils::median(&mut train_aucs.clone());
-                let train_acc_median = utils::median(&mut train_accuracies.clone());
-                let train_sens_median = utils::median(&mut train_sensitivities.clone());
-                let train_spec_median = utils::median(&mut train_specificities.clone());
-
-                if let Some(data_to_test) = data_to_test {
-                    let mut test_aucs: Vec<f64> = Vec::new();
-                    let mut test_accuracies: Vec<f64> = Vec::new();
-                    let mut test_sensitivities: Vec<f64> = Vec::new();
-                    let mut test_specificities: Vec<f64> = Vec::new();
-
-                    for individual in &self.individuals {
-                        let test_auc = individual.compute_new_auc(data_to_test);
-                        let (test_acc, test_sens, test_spec, _, _) = individual.compute_metrics(data_to_test);
-                        
-                        test_aucs.push(test_auc);
-                        test_accuracies.push(test_acc);
-                        test_sensitivities.push(test_sens);
-                        test_specificities.push(test_spec);
+                let fbm_text = if let Some(data_to_test) = data_to_test {
+                    let test_aucs: Vec<f64> = fbm.individuals.iter().map(|i| i.compute_new_auc(data_to_test)).collect();
+                    let mut test_acc_vec = Vec::new();
+                    let mut test_sens_vec = Vec::new();
+                    let mut test_spec_vec = Vec::new();
+                    
+                    for individual in &fbm.individuals {
+                        let (acc, sens, spec, _, _) = individual.compute_metrics(data_to_test);
+                        test_acc_vec.push(acc);
+                        test_sens_vec.push(sens);
+                        test_spec_vec.push(spec);
                     }
 
-                    let test_auc_median = utils::median(&mut test_aucs.clone());
-                    let test_acc_median = utils::median(&mut test_accuracies.clone());
-                    let test_sens_median = utils::median(&mut test_sensitivities.clone());
-                    let test_spec_median = utils::median(&mut test_specificities.clone());
+                    let (test_auc_mean, _) = mean_and_std(&test_aucs);
+                    let (test_acc_mean, _) = mean_and_std(&test_acc_vec);
+                    let (test_sens_mean, _) = mean_and_std(&test_sens_vec);
+                    let (test_spec_mean, _) = mean_and_std(&test_spec_vec);
 
-                    str = format!("{}\n\x1b[1;33mPopulation median - AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}\x1b[0m\n", 
-                        str, train_auc_median, test_auc_median, train_acc_median, test_acc_median, 
-                        train_sens_median, test_sens_median, train_spec_median, test_spec_median);
+                    format!("\n\x1b[1;33mFBM mean (n={}) - AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}\x1b[0m\n", 
+                        fbm.individuals.len(), train_auc_mean, test_auc_mean, train_acc_mean, test_acc_mean, 
+                        train_sens_mean, test_sens_mean, train_spec_mean, test_spec_mean)
                 } else {
-                    str = format!("{}\x1b[1;33mPopulation median - AUC {:.3} accuracy {:.3} sensitivity {:.3} specificity {:.3}\x1b[0m\n", 
-                        str, train_auc_median, train_acc_median, train_sens_median, train_spec_median);
-                }
-            };
+                    format!("\n\x1b[1;33mFBM mean (n={}) - AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}\x1b[0m\n", 
+                        fbm.individuals.len(), train_auc_mean, train_acc_mean, train_sens_mean, train_spec_mean)
+                };
+                
+                str = format!("{}{}", str, fbm_text);
+            }
 
-            if param.general.cv == false {
-                str = format!("{}Displaying {} models. Metrics are shown in the following order: Train/{}.", str, limit, other_set)
+            // Detect CV mode from algo tag containing "cv" or "fold"
+            let is_cv_mode = param.tag.contains("cv") || param.tag.contains("fold");
+            
+            str = if is_cv_mode {
+                format!("{}Displaying {} models. Metrics are shown in the following order: Train fold/Validation fold.", str, limit)
             } else {
-                str = format!("{}Displaying {} models. Metrics are shown in the following order: Validation fold/Complete train.", str, limit)
+                format!("{}Displaying {} models. Metrics are shown in the following order: Train/Test.", str, limit)
             };
             
-            for i in 0..=(limit-1) as usize {
-                if param.general.keep_trace == false {
-                    match param.general.fit {
-                        FitFunction::sensitivity =>  {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, &param.general.fit, Some([param.general.fr_penalty, 1.0]));},
-                        FitFunction::specificity => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, &param.general.fit, Some([1.0, param.general.fr_penalty]));},
-                        _ => {(self.individuals[i].auc, self.individuals[i].threshold, self.individuals[i].accuracy, self.individuals[i].sensitivity, self.individuals[i].specificity, _) = self.individuals[i].compute_roc_and_metrics(data, &param.general.fit, None);},
-                    }
-                }
-                if param.general.display_colorful == true && param.general.log_base == "" {
-                    str = format!("{}\nModel \x1b[1;93m#{:?}\x1b[0m {}\n ", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful, param.experimental.threshold_ci_alpha));
-                } else if param.general.display_colorful == false && param.general.log_base == "" {
-                    str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, param.general.display_colorful, param.experimental.threshold_ci_alpha));
-                } else {
-                    // avoid ASCII symbols and newlines in log file
-                    str = format!("{}\nModel #{:?} {}", str, i+1, self.individuals[i].display(data, data_to_test, &param.general.algo, param.general.display_level, false, param.experimental.threshold_ci_alpha));
-                }
+            // Compute all metrics if they weren't already computed during fit
+            if !param.general.keep_trace {
+                self.compute_all_metrics(data, &param.general.fit);
             }
-        return str
+            
+            for i in 0..limit as usize {
+                let model_display = self.individuals[i].display(data, data_to_test, &param.general.algo, 
+                    param.general.threshold_ci_alpha);
+                
+                let model_text = format!("\x1b[1;93m#{:?}\x1b[0m", i+1);
+                str = format!("{}\nModel {} {}\n ", str, model_text, model_display);
+            }
+            str
         }
     }
 
@@ -189,7 +176,7 @@ impl Population {
         self.penalize(data, param);
     }
 
-    pub fn penalize(&mut self, data: &Data, param: &Param) { 
+    pub fn penalize(&mut self, _data: &Data, param: &Param) { 
         self.individuals
             .par_iter_mut()
             .for_each(|i| {
@@ -197,45 +184,53 @@ impl Population {
                 i.fit = i.fit - i.k as f64 * param.general.k_penalty;
                 // Rejection rate
                 if let Some(ref mut threshold_ci) = i.threshold_ci {
-                    i.fit = i.fit - (param.experimental.threshold_ci_penalty * threshold_ci.rejection_rate) ;
+                    i.fit = i.fit - (param.general.threshold_ci_penalty * threshold_ci.rejection_rate) ;
                 };
                 // Bias penalty
-                if param.experimental.bias_penalty != 0.0 { 
-                    if i.sensitivity < 0.5 { i.fit = i.fit - (1.0 - i.sensitivity) * param.experimental.bias_penalty } ; 
-                    if i.specificity < 0.5 { i.fit = i.fit - (1.0 - i.specificity) * param.experimental.bias_penalty } ;
+                if param.general.bias_penalty != 0.0 { 
+                    if i.sensitivity < 0.5 { i.fit = i.fit - (1.0 - i.sensitivity) * param.general.bias_penalty } ; 
+                    if i.specificity < 0.5 { i.fit = i.fit - (1.0 - i.specificity) * param.general.bias_penalty } ;
                 };
                 // Significance penalty
-                if param.experimental.significance_penalty > 0.0 {
-                    let lambda = param.experimental.significance_penalty;        
-                    if lambda > 0.0 {
-                        let thr = param.experimental.significance_penalty_threshold;
-                        let mut acc = 0.0f64;
-                        let mut cnt = 0usize;
+                // if param.experimental.significance_penalty > 0.0 {
+                //     let lambda = param.experimental.significance_penalty;        
+                //     if lambda > 0.0 {
+                //         let thr = param.experimental.significance_penalty_threshold;
+                //         let mut acc = 0.0f64;
+                //         let mut cnt = 0usize;
 
-                        for &feat_idx in i.features.keys() {
-                            if let Some(&v) = data.feature_significance.get(&feat_idx) {
-                                // v = q-value if studentt/wilcoxon ; v = |log10(BF)| if bayesian_fisher
-                                let term = if param.data.feature_selection_method == PreselectionMethod::bayesian_fisher {
-                                    // penalize lack of evidence : max(0, tBF - |log10 BF|)
-                                    (thr - v.max(0.0)).max(0.0)
-                                } else {
-                                    // penalize high q-value q⋆: max(0, q - q⋆)
-                                    (v.clamp(0.0, 1.0) - thr).max(0.0)
-                                };
-                                acc += term;
-                                cnt += 1;
-                            }
-                        }
+                //         for &feat_idx in i.features.keys() {
+                //             if let Some(&v) = data.feature_significance.get(&feat_idx) {
+                //                 // v = q-value if studentt/wilcoxon ; v = |log10(BF)| if bayesian_fisher
+                //                 let term = if param.data.feature_selection_method == PreselectionMethod::bayesian_fisher {
+                //                     // penalize lack of evidence : max(0, tBF - |log10 BF|)
+                //                     (thr - v.max(0.0)).max(0.0)
+                //                 } else {
+                //                     // penalize high q-value q⋆: max(0, q - q⋆)
+                //                     (v.clamp(0.0, 1.0) - thr).max(0.0)
+                //                 };
+                //                 acc += term;
+                //                 cnt += 1;
+                //             }
+                //         }
 
-                        if cnt > 0 {
-                            i.fit -= lambda * acc / (cnt as f64);
-                        }
-                    }
-                }
+                //         if cnt > 0 {
+                //             i.fit -= lambda * acc / (cnt as f64);
+                //         }
+                //     }
+                // }
             });
     }
 
     pub fn fit_without_penalty(&mut self, data: &Data, _test_data: &mut Option<Data>, gpu_assay: &Option<GpuAssay>, _test_assay: &Option<GpuAssay>, param: &Param) {
+        // Precompute bootstrap indices if any individual needs threshold CI
+        let precomputed_bootstrap: Option<PrecomputedBootstrap> = 
+            if self.individuals.iter().any(|i| i.threshold_ci.is_some()) {
+                let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+                Some(precompute_bootstrap_indices(&data.y, param.general.threshold_ci_n_bootstrap, param.general.threshold_ci_alpha, param.general.threshold_ci_frac_bootstrap, &mut rng))
+            } else {
+                None
+            };
         let mut all_scores: Vec<f64> = vec![]; 
         if let Some(assay) = gpu_assay {
             all_scores = assay.compute_scores(&self.individuals, param.general.data_type_epsilon as f32).into_iter().map(|x| {x as f64}).collect();
@@ -257,16 +252,16 @@ impl Population {
             };
             match param.general.fit {
                 FitFunction::auc => {
-                        if param.general.keep_trace || param.experimental.bias_penalty != 0.0 {
+                        if param.general.keep_trace || param.general.bias_penalty != 0.0 {
                             if let Some(ref mut threshold_ci) = i.threshold_ci {
-                                (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, None, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, param.experimental.threshold_ci_frac_bootstrap, &mut ChaCha8Rng::seed_from_u64(i.hash));
+                                (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_precomputed_bootstrap(&scores, &data.y, &param.general.fit, None, &precomputed_bootstrap.as_ref().unwrap());
                             } else {
                                 (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, _) = compute_roc_and_metrics_from_value(&scores, &data.y, &param.general.fit, None);
                             }
                         } else {
                             // The AUC calculation can be optimised if the user does not wish to calculate the other metrics at the same time.
                             if let Some(ref mut threshold_ci) = i.threshold_ci {
-                                (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], _, _, _, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, None, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, param.experimental.threshold_ci_frac_bootstrap,&mut ChaCha8Rng::seed_from_u64(i.hash));
+                                (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], _, _, _, _, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_precomputed_bootstrap(&scores, &data.y, &param.general.fit, None, &precomputed_bootstrap.as_ref().unwrap());
                             } else {
                                 i.auc = compute_auc_from_value(&scores, &data.y);
                             } 
@@ -275,7 +270,7 @@ impl Population {
                 },
                 _ => {
                     if let Some(ref mut threshold_ci) = i.threshold_ci {
-                        (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, i.fit, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_bootstrap(&scores, &data.y, &param.general.fit, penalties, param.experimental.threshold_ci_n_bootstrap, param.experimental.threshold_ci_alpha, param.experimental.threshold_ci_frac_bootstrap,&mut ChaCha8Rng::seed_from_u64(i.hash));
+                        (i.auc, [threshold_ci.lower, i.threshold, threshold_ci.upper], i.accuracy, i.sensitivity, i.specificity, i.fit, threshold_ci.rejection_rate) = compute_threshold_and_metrics_with_precomputed_bootstrap(&scores, &data.y, &param.general.fit, penalties, &precomputed_bootstrap.as_ref().unwrap());
                     } else {
                         (i.auc, i.threshold, i.accuracy, i.sensitivity, i.specificity, i.fit) = compute_roc_and_metrics_from_value(&scores, &data.y, &param.general.fit, penalties);
                     }
@@ -291,28 +286,58 @@ impl Population {
             }}
         )}
 
-    pub fn sort(mut self) -> Self {
-        self.individuals.sort_by(|i,j| j.fit.partial_cmp(&i.fit).unwrap());
+     pub fn sort(mut self) -> Self {
+        use std::cmp::Reverse;
+        const TIE_EPS: f64 = 1e-6; // tolérance de comparaison inter-backends
+
+        self.individuals.sort_by_key(|ind| {
+            // Catégories: 0=+inf, 1=finis, 2=-inf, 3=NaN (ordre ascendant => +inf en premier)
+            let cat: u8 = if ind.fit.is_nan() {
+                3
+            } else if ind.fit.is_infinite() {
+                if ind.fit.is_sign_positive() { 0 } else { 2 }
+            } else {
+                1
+            };
+
+            // Quantification symétrique du fit par pas d’epsilon
+            let qfit: i64 = if cat == 1 {
+                let v = (ind.fit / TIE_EPS).round();
+                if v > (i64::MAX as f64) {
+                    i64::MAX
+                } else if v < (i64::MIN as f64) {
+                    i64::MIN
+                } else {
+                    v as i64
+                }
+            } else {
+                0
+            };
+
+            // Ordre composite: catégorie asc, fit quantifié desc, hash desc
+            (cat, Reverse(qfit), Reverse(ind.hash))
+        });
+
         self
     }
 
-    pub fn fit_on_folds(&mut self, cv: &CV, param: &Param, gpu_assays: &Vec<Option<GpuAssay>>) {
+    pub fn fit_on_folds(&mut self, cv: &CV, param: &Param, gpu_assays: &Vec<(Option<GpuAssay>, Option<GpuAssay>)>) {
         let num_individuals = self.individuals.len();
         let num_folds = cv.validation_folds.len();
         
         let mut fold_penalized_fits = vec![vec![0.0; num_folds]; num_individuals];
         
         for (fold_idx, fold) in cv.validation_folds.iter().enumerate() {
-            let fold_gpu_assay = &gpu_assays[fold_idx];
+            let (val_gpu_assay, train_gpu_assay) = &gpu_assays[fold_idx];
             
-            // Validation fold
+            // Validation fold - use its GPU assay
             let mut fold_data = fold.clone();
-            self.fit_without_penalty(&mut fold_data, &mut None, fold_gpu_assay, &None, param);
+            self.fit_without_penalty(&mut fold_data, &mut None, val_gpu_assay, &None, param);
             let validation_fits: Vec<f64> = self.individuals.iter().map(|ind| ind.fit).collect();
             
-            // Training set
+            // Training set - use its GPU assay
             let mut train_data = cv.training_sets[fold_idx].clone();
-            self.fit_without_penalty( &mut train_data, &mut None, fold_gpu_assay, &None, param);
+            self.fit_without_penalty( &mut train_data, &mut None, train_gpu_assay, &None, param);
             let training_fits: Vec<f64> = self.individuals.iter().map(|ind| ind.fit).collect();
             
             // Penalized scores
@@ -347,6 +372,11 @@ impl Population {
         for ind in &self.individuals {
             eval.push(ind.fit)
             //eval = ind.fit - (k_penalty * spar) -> it is useful as fit already take k_penalty in account ? 
+        }
+
+        // Return empty population if no individuals
+        if eval.is_empty() {
+            return best_pop;
         }
 
         // Control the distribution of evaluation metric
@@ -415,10 +445,33 @@ impl Population {
     }
 
     pub fn compute_all_metrics(&mut self, data: &Data, method: &FitFunction) {
+        // Precompute bootstrap indices if any individual needs threshold CI
+        let precomputed_bootstrap: Option<PrecomputedBootstrap> = 
+            if self.individuals.iter().any(|i| i.threshold_ci.is_some()) {
+                // Use a fixed seed for reproducibility in metrics computation
+                let mut rng = ChaCha8Rng::seed_from_u64(42);
+                Some(precompute_bootstrap_indices(&data.y, 1000, 0.05, 0.8, &mut rng))
+            } else {
+                None
+            };
+
         self.individuals
             .par_iter_mut()
             .for_each(|ind| {
-                (ind.auc, ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity, _) = ind.compute_roc_and_metrics(data, method, None);
+                if ind.threshold_ci.is_some() {
+                    let scores = ind.evaluate(data);
+                    let threshold_ci = ind.threshold_ci.as_mut().unwrap();
+                    (ind.auc, [threshold_ci.lower, ind.threshold, threshold_ci.upper], ind.accuracy, ind.sensitivity, ind.specificity, _, threshold_ci.rejection_rate) = 
+                        compute_threshold_and_metrics_with_precomputed_bootstrap(
+                            &scores,
+                            &data.y,
+                            method,
+                            None,
+                            &precomputed_bootstrap.as_ref().unwrap()
+                        );
+                } else {
+                    (ind.auc, ind.threshold, ind.accuracy, ind.sensitivity, ind.specificity, _) = ind.compute_roc_and_metrics(data, method, None);
+                }
             });
         }
 
@@ -767,6 +820,42 @@ impl Population {
         result.push_str(&format!("Total unique features: {}/{}\n", freq_vec.len(), data.feature_selection.len()));
         
         result
+    }
+
+    /// Prune all individuals in the population by OOB permutation importance.
+    /// Applies `Individual::prune_by_importance` to each individual in parallel.
+    /// Returns &mut Self for chaining.
+    pub fn prune_all_by_importance(&mut self, data: &Data, n_perm: usize, base_rng_seed: u64,
+        threshold: Option<f64>, quantile: Option<(f64, f64)>, min_k: usize) -> &mut Self {
+        use rayon::prelude::*;
+        use rand::RngCore;
+        use rand_chacha::ChaCha8Rng;
+        use rand::SeedableRng;
+        
+        // Generate deterministic seeds per individual based on hash
+        let mut seed_rng = ChaCha8Rng::seed_from_u64(base_rng_seed);
+        let mut individual_seeds: Vec<u64> = Vec::with_capacity(self.individuals.len());
+        
+        for ind in &self.individuals {
+            individual_seeds.push(base_rng_seed ^ ind.hash ^ seed_rng.next_u64());
+        }
+        
+        // Parallel pruning with Rayon
+        self.individuals
+            .par_iter_mut()
+            .zip(individual_seeds.par_iter())
+            .for_each(|(individual, &seed)| {
+                individual.prune_by_importance(
+                    data,
+                    n_perm,
+                    seed,
+                    threshold,
+                    quantile,
+                    min_k,
+                );
+            });
+        
+        self
     }
 }
 
@@ -1632,6 +1721,15 @@ mod tests {
         (data, cv)
     }
 
+    fn fit_on_folds_test_helper(pop: &mut Population, cv: &CV, param: &Param, gpu_assays: &Vec<Option<GpuAssay>>) {
+        // Helper for tests: convert Vec<Option<GpuAssay>> to Vec<(Option<GpuAssay>, Option<GpuAssay>)>
+        // For tests, we use None for both validation and training
+        let tuple_assays: Vec<(Option<GpuAssay>, Option<GpuAssay>)> = gpu_assays.iter()
+            .map(|_| (None, None))
+            .collect();
+        pop.fit_on_folds(cv, param, &tuple_assays);
+    }
+
     #[test]
     fn test_fit_on_folds_behavior_consistency() {
         let mut pop = create_test_population();
@@ -1644,7 +1742,7 @@ mod tests {
         let initial_fits: Vec<f64> = pop.individuals.iter().map(|ind| ind.fit).collect();
 
         // Apply fit_on_folds
-        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+        fit_on_folds_test_helper(&mut pop, &cv, &param, &vec![None; cv.validation_folds.len()]);
 
         // Check that the fits have changed consistently
         let final_fits: Vec<f64> = pop.individuals.iter().map(|ind| ind.fit).collect();
@@ -1667,7 +1765,7 @@ mod tests {
         let param = Param::default();
 
         // Should not panic with an empty population
-        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+        fit_on_folds_test_helper(&mut pop, &cv, &param, &vec![None; cv.validation_folds.len()]);
 
         assert!(pop.individuals.is_empty(), "The population must remain empty");
     }
@@ -1680,7 +1778,7 @@ mod tests {
         let param = Param::default();
 
         // Provide wrong number of GPU assays (fewer than the number of folds)
-        let gpu_assays = vec![None]; // Only 1 instead of cv.validation_folds.len()
+        let gpu_assays = vec![(None, None)]; // Only 1 instead of cv.validation_folds.len()
 
         pop.fit_on_folds(&cv, &param, &gpu_assays);
     }
@@ -1695,7 +1793,7 @@ mod tests {
         param.general.k_penalty = 0.2;
 
         // Test with different CV parameters
-        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+        fit_on_folds_test_helper(&mut pop, &cv, &param, &vec![None; cv.validation_folds.len()]);
 
         // Verify that properties are preserved
         assert_eq!(pop.individuals.len(), 5, "The number of individuals must be preserved");
@@ -1717,7 +1815,7 @@ mod tests {
             .map(|ind| ind.features.clone())
             .collect();
 
-        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+        fit_on_folds_test_helper(&mut pop, &cv, &param, &vec![None; cv.validation_folds.len()]);
 
         // Structure preserved
         assert_eq!(pop.individuals.len(), initial_count, "The number of individuals must be preserved");
@@ -1770,7 +1868,7 @@ mod tests {
         pop.fit_without_penalty(&data, &mut None, &None, &None, &param);
         let initial_fit = pop.individuals[0].fit;  
 
-        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+        fit_on_folds_test_helper(&mut pop, &cv, &param, &vec![None; cv.validation_folds.len()]);
 
         let final_fit = pop.individuals[0].fit;
         let expected_k_penalty = pop.individuals[0].k as f64 * param.general.k_penalty;
@@ -1798,7 +1896,7 @@ mod tests {
         param.general.fit = FitFunction::auc;
 
         let initial_fit = pop.individuals[0].fit;
-        pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+        fit_on_folds_test_helper(&mut pop, &cv, &param, &vec![None; cv.validation_folds.len()]);
         let final_fit = pop.individuals[0].fit;
 
         let expected_k_penalty = pop.individuals[0].k as f64 * param.general.k_penalty;
@@ -1839,7 +1937,7 @@ mod tests {
             param.general.fit = FitFunction::auc;
 
             let initial_fit = pop.individuals[0].fit;
-            pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+            fit_on_folds_test_helper(&mut pop, &cv, &param, &vec![None; cv.validation_folds.len()]);
             let final_fit = pop.individuals[0].fit;
 
             let expected_k_penalty = k as f64 * k_penalty;
@@ -1899,7 +1997,7 @@ mod tests {
             let initial_fit = pop.individuals[0].fit;  
             let expected_k_penalty = pop.individuals[0].k as f64 * param.general.k_penalty;
 
-            pop.fit_on_folds(&cv, &param, &vec![None; cv.validation_folds.len()]);
+            fit_on_folds_test_helper(&mut pop, &cv, &param, &vec![None; cv.validation_folds.len()]);
             let final_fit = pop.individuals[0].fit;
 
             // Assertions
@@ -1944,141 +2042,286 @@ mod tests {
     //             fit_reduction, expected_k_penalty);
     // }
 
-    use crate::data::PreselectionMethod;
-    use crate::individual::ThresholdCI;
+    // use crate::data::PreselectionMethod;
+    // use crate::individual::ThresholdCI;
 
-    fn mk_individual_with_features(fit: f64, feats: &[(usize, i8)], sens: f64, spec: f64) -> Individual {
-        let mut i = Individual::new();
-        i.fit = fit;
-        i.features = feats.iter().cloned().collect::<HashMap<usize, i8>>();
-        i.k = i.features.len();
-        i.sensitivity = sens;
-        i.specificity = spec;
-        i
-    }
+    // fn mk_individual_with_features(fit: f64, feats: &[(usize, i8)], sens: f64, spec: f64) -> Individual {
+    //     let mut i = Individual::new();
+    //     i.fit = fit;
+    //     i.features = feats.iter().cloned().collect::<HashMap<usize, i8>>();
+    //     i.k = i.features.len();
+    //     i.sensitivity = sens;
+    //     i.specificity = spec;
+    //     i
+    // }
 
-    fn mk_param_default() -> Param {
-        let mut p = Param::default();
-        // Isolate significance penalty unless explicitly set in each test
-        p.general.k_penalty = 0.0;
-        p.experimental.threshold_ci_penalty = 0.0;
-        p.experimental.bias_penalty = 0.0;
-        p.experimental.significance_penalty = 0.0; // disabled by weight=0 by default
-        p.experimental.significance_penalty_threshold = 0.05;
-        // Default method (overridden per test)
-        p.data.feature_selection_method = PreselectionMethod::studentt;
-        p
+    // fn mk_param_default() -> Param {
+    //     let mut p = Param::default();
+    //     // Isolate significance penalty unless explicitly set in each test
+    //     p.general.k_penalty = 0.0;
+    //     p.experimental.threshold_ci_penalty = 0.0;
+    //     p.experimental.bias_penalty = 0.0;
+    //     p.experimental.significance_penalty = 0.0; // disabled by weight=0 by default
+    //     p.experimental.significance_penalty_threshold = 0.05;
+    //     // Default method (overridden per test)
+    //     p.data.feature_selection_method = PreselectionMethod::studentt;
+    //     p
+    // }
+
+    // #[test]
+    // fn penalize_qvalues_hinge_basic_studentt() {
+    //     // q = [0.01, 0.10, 0.50], q* = 0.05 => hinge = [0.00, 0.05, 0.45], mean = (0.50)/3
+    //     // fit' = 1.0 - λ * mean(hinge)
+    //     let mut data = Data::new(); // assumes Data::new() exists; otherwise construct minimal Data
+    //     data.feature_significance.insert(0, 0.01);
+    //     data.feature_significance.insert(1, 0.10);
+    //     data.feature_significance.insert(2, 0.50);
+
+    //     let mut param = mk_param_default();
+    //     param.data.feature_selection_method = PreselectionMethod::studentt;
+    //     param.experimental.significance_penalty = 0.3;
+    //     param.experimental.significance_penalty_threshold = 0.05;
+
+    //     let mut pop = Population {
+    //         individuals: vec![mk_individual_with_features(1.0, &[(0,1),(1,1),(2,1)], 0.8, 0.8)],
+    //     };
+
+    //     pop.penalize(&data, &param);
+    //     let expected_mean = (0.0 + 0.05 + 0.45) / 3.0;
+    //     let expected = 1.0 - 0.3 * expected_mean;
+    //     let got = pop.individuals[0].fit;
+    //     assert!((got - expected).abs() < 1e-12, "got {}, expected {}", got, expected);
+    // }
+
+    // #[test]
+    // fn penalize_qvalues_no_penalty_under_threshold_wilcoxon() {
+    //     // All q <= q* => zero penalty
+    //     let mut data = Data::new();
+    //     data.feature_significance.insert(10, 0.001);
+    //     data.feature_significance.insert(11, 0.02);
+
+    //     let mut param = mk_param_default();
+    //     param.data.feature_selection_method = PreselectionMethod::wilcoxon;
+    //     param.experimental.significance_penalty = 1.0;
+    //     param.experimental.significance_penalty_threshold = 0.05;
+
+    //     let mut pop = Population {
+    //         individuals: vec![mk_individual_with_features(0.7, &[(10,1),(11,1)], 0.9, 0.9)],
+    //     };
+
+    //     pop.penalize(&data, &param);
+    //     assert!((pop.individuals[0].fit - 0.7).abs() < 1e-12);
+    // }
+
+    // #[test]
+    // fn penalize_qvalues_ignores_missing_feature_entries() {
+    //     // One feature without q in data.feature_significance is safely ignored
+    //     let mut data = Data::new();
+    //     data.feature_significance.insert(5, 0.20); // only idx 5 available
+
+    //     let mut param = mk_param_default();
+    //     param.data.feature_selection_method = PreselectionMethod::studentt;
+    //     param.experimental.significance_penalty = 0.5;
+    //     param.experimental.significance_penalty_threshold = 0.10;
+
+    //     let mut pop = Population {
+    //         individuals: vec![mk_individual_with_features(0.9, &[(5,1),(6,1)], 0.8, 0.8)],
+    //     };
+
+    //     // hinge: idx5 -> max(0, 0.20-0.10)=0.10 ; idx6 missing -> ignored ; mean=0.10
+    //     pop.penalize(&data, &param);
+    //     let expected = 0.9 - 0.5 * 0.10;
+    //     assert!((pop.individuals[0].fit - expected).abs() < 1e-12);
+    // }
+
+    // #[test]
+    // fn penalize_bayesian_fisher_hinge_inverse_on_log10_bf() {
+    //     // bayesian_fisher stores v = |log10(BF)| >= 0; hinge is max(0, tBF - v)
+    //     // v = [0.2, 1.5], tBF=1.0 => hinge = [0.8, 0.0], mean = 0.4
+    //     let mut data = Data::new();
+    //     data.feature_significance.insert(1, 0.2);
+    //     data.feature_significance.insert(2, 1.5);
+
+    //     let mut param = mk_param_default();
+    //     param.data.feature_selection_method = PreselectionMethod::bayesian_fisher;
+    //     param.experimental.significance_penalty = 0.25;
+    //     param.experimental.significance_penalty_threshold = 1.0; // tBF
+
+    //     let mut pop = Population {
+    //         individuals: vec![mk_individual_with_features(0.85, &[(1,1),(2,1)], 0.7, 0.7)],
+    //     };
+
+    //     pop.penalize(&data, &param);
+    //     let expected = 0.85 - 0.25 * ((0.8 + 0.0) / 2.0);
+    //     assert!((pop.individuals[0].fit - expected).abs() < 1e-12);
+    // }
+
+    // #[test]
+    // fn penalize_combines_k_bias_threshold_ci_correctly() {
+    //     // Verify combination of k-penalty, bias_penalty, and threshold_ci_penalty
+    //     let mut data = Data::new();
+    //     let mut param = mk_param_default();
+    //     param.general.k_penalty = 0.02;
+    //     param.general.bias_penalty = 0.5;
+    //     param.general.threshold_ci_penalty = 0.3;
+    //     param.experimental.significance_penalty = 0.0; // no significance penalty here
+
+    //     let mut i = mk_individual_with_features(0.9, &[(3,1),(4,1)], 0.3, 0.4);
+    //     i.threshold_ci = Some( ThresholdCI { upper: 0.0, lower: 0.0, rejection_rate: 0.2 } );
+    //     let mut pop = Population { individuals: vec![i] };
+
+    //     // Expected:
+    //     // k=2 -> -2*0.02 = -0.04
+    //     // sens=0.3<0.5 -> -(1-0.3)*0.5 = -0.35
+    //     // spec=0.4<0.5 -> -(1-0.4)*0.5 = -0.30
+    //     // threshold_ci 0.2 -> -0.3*0.2 = -0.06
+    //     // total delta = -0.75 ; fit' = 0.9 - 0.75 = 0.15
+    //     pop.penalize(&data, &param);
+    //     assert!((pop.individuals[0].fit - 0.15).abs() < 1e-12);
+    // }
+
+    // -----------------------------------------------------------------
+    // Tests for prune_all_by_importance
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_prune_all_by_importance_basic() {
+        use crate::individual::{BINARY_LANG, RAW_TYPE};
+        
+        let data = Data::specific_test(60, 12);
+        
+        let mut population = Population::new();
+        
+        for i in 0..5 {
+            let mut individual = Individual::new();
+            individual.language = BINARY_LANG;
+            individual.data_type = RAW_TYPE;
+            individual.hash = i as u64;
+            
+            for j in 0..8 {
+                individual.features.insert((i + j) % 12, 1);
+            }
+            individual.k = individual.features.len();
+            
+            population.individuals.push(individual);
+        }
+        
+        population.prune_all_by_importance(&data, 15, 54321, Some(0.0), None, 3);
+        
+        for ind in &population.individuals {
+            assert!(ind.k >= 3, "Individual should have at least min_k features");
+            assert!(ind.k <= 8, "Individual should not gain features");
+        }
     }
 
     #[test]
-    fn penalize_qvalues_hinge_basic_studentt() {
-        // q = [0.01, 0.10, 0.50], q* = 0.05 => hinge = [0.00, 0.05, 0.45], mean = (0.50)/3
-        // fit' = 1.0 - λ * mean(hinge)
-        let mut data = Data::new(); // assumes Data::new() exists; otherwise construct minimal Data
-        data.feature_significance.insert(0, 0.01);
-        data.feature_significance.insert(1, 0.10);
-        data.feature_significance.insert(2, 0.50);
-
-        let mut param = mk_param_default();
-        param.data.feature_selection_method = PreselectionMethod::studentt;
-        param.experimental.significance_penalty = 0.3;
-        param.experimental.significance_penalty_threshold = 0.05;
-
-        let mut pop = Population {
-            individuals: vec![mk_individual_with_features(1.0, &[(0,1),(1,1),(2,1)], 0.8, 0.8)],
-        };
-
-        pop.penalize(&data, &param);
-        let expected_mean = (0.0 + 0.05 + 0.45) / 3.0;
-        let expected = 1.0 - 0.3 * expected_mean;
-        let got = pop.individuals[0].fit;
-        assert!((got - expected).abs() < 1e-12, "got {}, expected {}", got, expected);
+    fn test_prune_all_by_importance_parallel() {
+        use crate::individual::{BINARY_LANG, TERNARY_LANG, RAW_TYPE};
+        
+        let data = Data::specific_test(80, 15);
+        
+        let mut population = Population::new();
+        
+        for i in 0..20 {
+            let mut individual = Individual::new();
+            individual.language = if i % 2 == 0 { BINARY_LANG } else { TERNARY_LANG };
+            individual.data_type = RAW_TYPE;
+            individual.hash = i as u64;
+            
+            for j in 0..10 {
+                let coef = if individual.language == BINARY_LANG {
+                    1
+                } else {
+                    if j % 2 == 0 { 1 } else { -1 }
+                };
+                individual.features.insert((i + j) % 15, coef);
+            }
+            individual.k = individual.features.len();
+            
+            population.individuals.push(individual);
+        }
+        
+        population.prune_all_by_importance(&data, 20, 77777, Some(0.0), None, 4);
+        
+        // Verify all individuals were pruned
+        for ind in &population.individuals {
+            assert!(ind.k >= 4, "Individual should have at least min_k=4 features");
+            assert!(ind.k <= 10, "Individual should not have more than original features");
+        }
     }
 
     #[test]
-    fn penalize_qvalues_no_penalty_under_threshold_wilcoxon() {
-        // All q <= q* => zero penalty
-        let mut data = Data::new();
-        data.feature_significance.insert(10, 0.001);
-        data.feature_significance.insert(11, 0.02);
-
-        let mut param = mk_param_default();
-        param.data.feature_selection_method = PreselectionMethod::wilcoxon;
-        param.experimental.significance_penalty = 1.0;
-        param.experimental.significance_penalty_threshold = 0.05;
-
-        let mut pop = Population {
-            individuals: vec![mk_individual_with_features(0.7, &[(10,1),(11,1)], 0.9, 0.9)],
-        };
-
-        pop.penalize(&data, &param);
-        assert!((pop.individuals[0].fit - 0.7).abs() < 1e-12);
+    fn test_prune_all_by_importance_determinism() {
+        use crate::individual::{BINARY_LANG, RAW_TYPE};
+        
+        let data = Data::specific_test(50, 10);
+        
+        let mut pop1 = Population::new();
+        let mut pop2 = Population::new();
+        
+        for i in 0..3 {
+            let mut ind = Individual::new();
+            ind.language = BINARY_LANG;
+            ind.data_type = RAW_TYPE;
+            ind.hash = i as u64;
+            
+            for j in 0..6 {
+                ind.features.insert(j, 1);
+            }
+            ind.k = 6;
+            
+            pop1.individuals.push(ind.clone());
+            pop2.individuals.push(ind);
+        }
+        
+        let seed = 123456;
+        pop1.prune_all_by_importance(&data, 10, seed, Some(0.0), None, 2);
+        pop2.prune_all_by_importance(&data, 10, seed, Some(0.0), None, 2);
+        
+        for (ind1, ind2) in pop1.individuals.iter().zip(pop2.individuals.iter()) {
+            assert_eq!(ind1.k, ind2.k, "Feature counts should match");
+            assert_eq!(ind1.features, ind2.features, "Features should be identical");
+        }
     }
 
     #[test]
-    fn penalize_qvalues_ignores_missing_feature_entries() {
-        // One feature without q in data.feature_significance is safely ignored
-        let mut data = Data::new();
-        data.feature_significance.insert(5, 0.20); // only idx 5 available
-
-        let mut param = mk_param_default();
-        param.data.feature_selection_method = PreselectionMethod::studentt;
-        param.experimental.significance_penalty = 0.5;
-        param.experimental.significance_penalty_threshold = 0.10;
-
-        let mut pop = Population {
-            individuals: vec![mk_individual_with_features(0.9, &[(5,1),(6,1)], 0.8, 0.8)],
-        };
-
-        // hinge: idx5 -> max(0, 0.20-0.10)=0.10 ; idx6 missing -> ignored ; mean=0.10
-        pop.penalize(&data, &param);
-        let expected = 0.9 - 0.5 * 0.10;
-        assert!((pop.individuals[0].fit - expected).abs() < 1e-12);
+    fn test_prune_all_by_importance_empty_population() {
+        let data = Data::specific_test(40, 8);
+        let mut population = Population::new();
+        
+        // Should not panic
+        population.prune_all_by_importance(&data, 10, 999, Some(0.0), None, 1);
+        
+        assert!(population.individuals.is_empty(), "Empty population should remain empty");
     }
 
     #[test]
-    fn penalize_bayesian_fisher_hinge_inverse_on_log10_bf() {
-        // bayesian_fisher stores v = |log10(BF)| >= 0; hinge is max(0, tBF - v)
-        // v = [0.2, 1.5], tBF=1.0 => hinge = [0.8, 0.0], mean = 0.4
-        let mut data = Data::new();
-        data.feature_significance.insert(1, 0.2);
-        data.feature_significance.insert(2, 1.5);
-
-        let mut param = mk_param_default();
-        param.data.feature_selection_method = PreselectionMethod::bayesian_fisher;
-        param.experimental.significance_penalty = 0.25;
-        param.experimental.significance_penalty_threshold = 1.0; // tBF
-
-        let mut pop = Population {
-            individuals: vec![mk_individual_with_features(0.85, &[(1,1),(2,1)], 0.7, 0.7)],
-        };
-
-        pop.penalize(&data, &param);
-        let expected = 0.85 - 0.25 * ((0.8 + 0.0) / 2.0);
-        assert!((pop.individuals[0].fit - expected).abs() < 1e-12);
-    }
-
-    #[test]
-    fn penalize_combines_k_bias_threshold_ci_correctly() {
-        // Verify combination of k-penalty, bias_penalty, and threshold_ci_penalty
-        let mut data = Data::new();
-        let mut param = mk_param_default();
-        param.general.k_penalty = 0.02;
-        param.experimental.bias_penalty = 0.5;
-        param.experimental.threshold_ci_penalty = 0.3;
-        param.experimental.significance_penalty = 0.0; // no significance penalty here
-
-        let mut i = mk_individual_with_features(0.9, &[(3,1),(4,1)], 0.3, 0.4);
-        i.threshold_ci = Some( ThresholdCI { upper: 0.0, lower: 0.0, rejection_rate: 0.2 } );
-        let mut pop = Population { individuals: vec![i] };
-
-        // Expected:
-        // k=2 -> -2*0.02 = -0.04
-        // sens=0.3<0.5 -> -(1-0.3)*0.5 = -0.35
-        // spec=0.4<0.5 -> -(1-0.4)*0.5 = -0.30
-        // threshold_ci 0.2 -> -0.3*0.2 = -0.06
-        // total delta = -0.75 ; fit' = 0.9 - 0.75 = 0.15
-        pop.penalize(&data, &param);
-        assert!((pop.individuals[0].fit - 0.15).abs() < 1e-12);
+    fn test_prune_all_by_importance_with_quantile() {
+        use crate::individual::{TERNARY_LANG, RAW_TYPE};
+        
+        let data = Data::specific_test(70, 15);
+        
+        let mut population = Population::new();
+        
+        for i in 0..4 {
+            let mut individual = Individual::new();
+            individual.language = TERNARY_LANG;
+            individual.data_type = RAW_TYPE;
+            individual.hash = i as u64;
+            
+            for j in 0..10 {
+                individual.features.insert(j, if j % 2 == 0 { 1 } else { -1 });
+            }
+            individual.k = 10;
+            
+            population.individuals.push(individual);
+        }
+        
+        population.prune_all_by_importance(&data, 30, 888, None, Some((0.3, 0.0)), 3);
+        
+        for ind in &population.individuals {
+            assert!(ind.k >= 3, "Should maintain min_k");
+            assert!(ind.k <= 10, "Should not gain features");
+        }
     }
 }

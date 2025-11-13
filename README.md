@@ -8,6 +8,7 @@ gpredomics is a Rust rewrite of Predomics for learning interpretable BTR‑style
 - Data encodings: raw values, prevalence via epsilon thresholding, and log transforms with epsilon flooring for numerical stability.
 - Optimizers: Genetic Algorithm (ga2 Predomics style), Beam search (LimitedExhaustive and ParallelForward), and MCMC with Sequential Backward Selection (beta).
 - Fitness targets: AUC, specificity, sensitivity, MCC, F1-score and G means with optional penalties on model size (k_penalty) and false‑rates (fr_penalty).
+- Confidence interval for classification threshold, allowing to discover divisive models and to avoid uncertain classifications.
 - Cross‑validation: stratified folds, Family of Best Models extraction, and OOB permutation importance aggregation across folds.
 - GPU acceleration: wgpu‑based scoring with configurable memory policy and safe CPU fallback when device limits are reached.
 
@@ -54,7 +55,8 @@ A new parameter now allows you to accept a transposed X format, which is standar
 
 CLI commands can be specified to reload a saved experiment or evaluate a new dataset using the models selected during the experiment:
 
-- Default run: execute the binary in a directory that contains param.yaml; the program initializes logging and dispatches GA/Beam/MCMC according to general.algo.
+- Default run: execute the binary in a directory that contains `param.yaml`; the program initializes logging and dispatches GA/Beam/MCMC according to general.algo.
+- Specific configuration: execute the binary using another configuration file using --config config.yaml.
 - Reload and display: use --load <experiment.(json|mp|bin)> to deserialize a saved Experiment; the format is auto‑detected at load time. 
 - Evaluate on external data: combine --load with --evaluate and provide --x-test and --y-test to score the saved run on a new dataset.
 
@@ -65,6 +67,9 @@ Flags are defined with clap:
 ```bash
 # default execution (param.yaml in CWD)
 gpredomics
+
+# specific config
+gpredomics --config ./path/config.yaml
 
 # reload a saved experiment and print results
 gpredomics --load 2025-01-01_12-00-00_run.msgpack
@@ -97,8 +102,6 @@ Please note that there is a R package, [GpredomicsR](https://github.com/predomic
 ## Reproducibility
 
 - Runs are controlled by general.seed for reproducibility and use rayon threading and optional GPU for performance with deterministic intent where applicable.
-
-*Many details will also be included in the next release!*
 
 ## GPU support
 
@@ -143,3 +146,5 @@ NB under Linux, I always do a fully optimized build, but that is not mandatory, 
 ```sh
 RUSTFLAGS="-C target-cpu=native -C opt-level=3" cargo build --release
 ```
+
+*Last updated: v0.7.3*
