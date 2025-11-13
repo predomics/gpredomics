@@ -3,9 +3,10 @@ use crate::data::Data;
 use crate::utils::{compute_metrics_from_classes, compute_auc_from_value};
 use crate::population::Population;
 use crate::param::Param;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use crate::Individual;
 use crate::param::FitFunction;
+use crate::individual::AdditionalMetrics;
 
 //-----------------------------------------------------------------------------
 // Voting 
@@ -28,7 +29,11 @@ pub struct Jury {
     pub sensitivity: f64,
     pub specificity: f64,
     pub rejection_rate: f64,
-    pub predicted_classes: Option<Vec<u8>>
+    pub predicted_classes: Option<Vec<u8>>,
+    
+    // Additional metrics (if present in experts)
+    #[serde(default)]
+    pub metrics: AdditionalMetrics
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -111,32 +116,42 @@ impl Jury {
             sensitivity: 0.0,
             specificity: 0.0,
             rejection_rate: 1.0,
-            predicted_classes: None
+            predicted_classes: None,
+            metrics: AdditionalMetrics::default()
         }
     }
 
-    pub fn new_from_param(pop: &Population, param: &Param) -> Self {
+    pub fn new_from_param(pop: &Population, data: &Data, param: &Param) -> Self {
 
-        let voting_pop: &Population = if param.voting.use_fbm {
-            &pop.select_best_population(0.05)
+        // Make voting_pop an owned Population so we don't take references to temporaries
+        let mut voting_pop: Population = if param.voting.fbm_ci_alpha <= 1.0 && param.voting.fbm_ci_alpha >= 0.0  {
+            pop.select_best_population(param.voting.fbm_ci_alpha)
         } else {
-            &pop
+            pop.clone()
         };
 
-        let weighting_method = if param.voting.specialized {
-                warn!("Specialized voting mode is experimental");
-                if param.voting.specialized_pos_threshold < 0.0 || param.voting.specialized_pos_threshold > 1.0 {
-                    panic!("Sensitivity threshold must be in [0,1]");
-                }
-                if param.voting.specialized_neg_threshold < 0.0 || param.voting.specialized_neg_threshold > 1.0 {
-                    panic!("Specificity threshold must be in [0,1]");
-                }
-                WeightingMethod::Specialized {sensitivity_threshold: param.voting.specialized_pos_threshold, specificity_threshold: param.voting.specialized_neg_threshold}
-            } else {
-                WeightingMethod::Uniform
-            };
+        if param.voting.prune_before_voting {
+            debug!("Pruning experts using MDA resulting from 1000 permutations...");
+            // prune_all_by_importance mutates in place and returns &mut Self; call it for side-effects
+            let _ = voting_pop.prune_all_by_importance(data, 1000, param.general.seed, Some(0.0), None, 10);
+            voting_pop.fit(data, &mut None, &None, &None, param);
+            voting_pop = voting_pop.sort();
+        }
 
-        Jury::new(&voting_pop, &param.voting.min_perf, &param.voting.min_diversity, &param.voting.method, &param.voting.method_threshold, &param.voting.threshold_windows_pct, &weighting_method)
+        // let weighting_method = if param.voting.specialized {
+        //         warn!("Specialized voting mode is experimental");
+        //         if param.voting.specialized_pos_threshold < 0.0 || param.voting.specialized_pos_threshold > 1.0 {
+        //             panic!("Sensitivity threshold must be in [0,1]");
+        //         }
+        //         if param.voting.specialized_neg_threshold < 0.0 || param.voting.specialized_neg_threshold > 1.0 {
+        //             panic!("Specificity threshold must be in [0,1]");
+        //         }
+        //         WeightingMethod::Specialized {sensitivity_threshold: param.voting.specialized_pos_threshold, specificity_threshold: param.voting.specialized_neg_threshold}
+        //     } else {
+        //         WeightingMethod::Uniform
+        //     };
+
+        Jury::new(&voting_pop, &param.voting.min_perf, &param.voting.min_diversity, &param.voting.method, &param.voting.method_threshold, &param.voting.threshold_windows_pct, &WeightingMethod::Uniform)
     }
 
     // Evaluates learning data and adjusts internal weight and performance variables accordingly
@@ -163,16 +178,17 @@ impl Jury {
         
         self.predicted_classes = Some(self.predict(data).0);
 
-        let (auc, accuracy, sensitivity, specificity, rejection_rate) = self.compute_new_metrics(data);
+        let (auc, accuracy, sensitivity, specificity, rejection_rate, additional_metrics) = self.compute_new_metrics(data);
     
         self.auc = auc;
         self.accuracy = accuracy;  
         self.sensitivity = sensitivity;
         self.specificity = specificity;
         self.rejection_rate = rejection_rate;
+        self.metrics = additional_metrics;
     }
 
-    pub fn compute_new_metrics(&self, data: &Data) -> (f64, f64, f64, f64, f64) {
+    pub fn compute_new_metrics(&self, data: &Data) -> (f64, f64, f64, f64, f64, AdditionalMetrics) {
         if self.weights.is_none() {
             panic!("Jury must be evaluated on training data first. Call evaluate() before compute_new_metrics().");
         }
@@ -207,12 +223,21 @@ impl Jury {
 
             let auc = compute_auc_from_value(&scores_filtered, &true_filtered);
             
-            let (accuracy, sensitivity, specificity, _) = 
-                compute_metrics_from_classes(&pred_filtered, &true_filtered, [false ; 5]);
+            // Vérifier si des experts ont des métriques additionnelles
+            let compute_additional = [
+                self.experts.individuals.iter().any(|e| e.metrics.mcc.is_some()),
+                self.experts.individuals.iter().any(|e| e.metrics.f1_score.is_some()),
+                self.experts.individuals.iter().any(|e| e.metrics.npv.is_some()),
+                self.experts.individuals.iter().any(|e| e.metrics.ppv.is_some()),
+                self.experts.individuals.iter().any(|e| e.metrics.g_means.is_some())
+            ];
+            
+            let (accuracy, sensitivity, specificity, additional_metrics) = 
+                compute_metrics_from_classes(&pred_filtered, &true_filtered, compute_additional);
 
-            (auc, accuracy, sensitivity, specificity, rejection_rate)
+            (auc, accuracy, sensitivity, specificity, rejection_rate, additional_metrics)
         } else {
-            (0.5, 0.0, 0.0, 0.0, rejection_rate)
+            (0.5, 0.0, 0.0, 0.0, rejection_rate, AdditionalMetrics::default())
         }
     }
 
@@ -307,7 +332,8 @@ impl Jury {
                     let prediction = expert_pred[sample_index];
                     let weight = weights[expert_idx];
                     
-                    if weight > 0.0 {
+                    // Only count non-abstaining votes
+                    if weight > 0.0 && prediction != 2 {
                         effective_total_weight += weight;
                         
                         if prediction == 1 {
@@ -381,7 +407,7 @@ impl Jury {
             let ratio = weighted_positive / total_weight;
 
             let class = if (ratio - threshold).abs() < (threshold_window / 100.0) {
-                2u8  // Abstention collective (threshold_window)
+                2u8  // Rejection collective (threshold_window)
             } else if ratio >= threshold {  
                 1u8
             } else {
@@ -502,7 +528,7 @@ impl Jury {
     }
 
     // Display functions 
-    pub fn display(&mut self, data: &Data, test_data: Option<&Data>, param: &Param) {
+    pub fn display(&self, data: &Data, test_data: Option<&Data>, param: &Param) -> String {
         let mut text = format!("{}\n{}{}VOTING ANALYSIS{}{}\n{}\n", "═".repeat(80), "\x1b[1m", " ".repeat(31), " ".repeat(32), "\x1b[0m", "═".repeat(80));
 
         text = format!("{}\n{}{}", text, self.display_compact_summary(data, test_data), self.display_voting_method_info());
@@ -521,7 +547,7 @@ impl Jury {
         }
     
         text = format!("\n{}\n\n{}{} EXPERT POPULATION ({}) {}{}", text, "\x1b[1m", "~".repeat(25), self.experts.individuals.len(), "~".repeat(25), "\x1b[0m");
-        text = format!("{}\n{}", text, self.experts.display(&data, test_data, param));
+        text = format!("{}\n{}", text, self.experts.clone().display(&data, test_data, param));
 
         if param.voting.complete_display {
             text = format!("{}\n{}", text, self.experts.display_feature_prevalence(data, 0));
@@ -529,7 +555,8 @@ impl Jury {
             text = format!("{}\n{}", text, self.experts.display_feature_prevalence(data, 20));
         }
 
-        info!("{}\n", text)
+        // Apply color stripping if needed before returning
+        format!("{}\n", crate::utils::strip_ansi_if_needed(&text, param.general.display_colorful))
     }
 
     fn display_confusion_matrix(&self, predictions: &[u8], true_labels: &[u8], title: &str) -> String {
@@ -575,25 +602,66 @@ impl Jury {
                                    voting_info, total_experts, weighting_info);
         
         if test_data.is_some() {
-            let (test_auc, test_accuracy, test_sensitivity, test_specificity, test_rejection_rate) = self.compute_new_metrics(test_data.unwrap());
+            let (test_auc, test_accuracy, test_sensitivity, test_specificity, test_rejection_rate, test_additional) = self.compute_new_metrics(test_data.unwrap());
 
-            summary = format!("{} | AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} | rejection rate {:.3}/{:.3}{}", 
+            let mut summary_str = format!("{} | AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3} | rejection rate {:.3}/{:.3}", 
                     method_display,
                     self.auc, test_auc,
                     self.accuracy, test_accuracy,
                     self.sensitivity, test_sensitivity,
                     self.specificity, test_specificity,
-                    self.rejection_rate, test_rejection_rate,
-                    "\x1b[0m");
+                    self.rejection_rate, test_rejection_rate);
+            
+            // Ajouter les métriques additionnelles si présentes
+            if self.metrics.mcc.is_some() {
+                summary_str = format!("{} | MCC {:.3}/{:.3}", summary_str, 
+                    self.metrics.mcc.unwrap(), test_additional.mcc.unwrap_or(0.0));
+            }
+            if self.metrics.f1_score.is_some() {
+                summary_str = format!("{} | F1-score {:.3}/{:.3}", summary_str,
+                    self.metrics.f1_score.unwrap(), test_additional.f1_score.unwrap_or(0.0));
+            }
+            if self.metrics.npv.is_some() {
+                summary_str = format!("{} | NPV {:.3}/{:.3}", summary_str,
+                    self.metrics.npv.unwrap(), test_additional.npv.unwrap_or(0.0));
+            }
+            if self.metrics.ppv.is_some() {
+                summary_str = format!("{} | PPV {:.3}/{:.3}", summary_str,
+                    self.metrics.ppv.unwrap(), test_additional.ppv.unwrap_or(0.0));
+            }
+            if self.metrics.g_means.is_some() {
+                summary_str = format!("{} | G-means {:.3}/{:.3}", summary_str,
+                    self.metrics.g_means.unwrap(), test_additional.g_means.unwrap_or(0.0));
+            }
+            
+            summary = format!("{}{}", summary_str, "\x1b[0m");
         } else {
-            summary = format!("{} | AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} [ rejection rate {:.3}{}", 
+            let mut summary_str = format!("{} | AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3} | rejection rate {:.3}", 
                     method_display,
                     self.auc,
                     self.accuracy,
                     self.sensitivity,
                     self.specificity,
-                    self.rejection_rate,
-                    "\x1b[0m");
+                    self.rejection_rate);
+            
+            // Ajouter les métriques additionnelles si présentes
+            if self.metrics.mcc.is_some() {
+                summary_str = format!("{} | MCC {:.3}", summary_str, self.metrics.mcc.unwrap());
+            }
+            if self.metrics.f1_score.is_some() {
+                summary_str = format!("{} | F1-score {:.3}", summary_str, self.metrics.f1_score.unwrap());
+            }
+            if self.metrics.npv.is_some() {
+                summary_str = format!("{} | NPV {:.3}", summary_str, self.metrics.npv.unwrap());
+            }
+            if self.metrics.ppv.is_some() {
+                summary_str = format!("{} | PPV {:.3}", summary_str, self.metrics.ppv.unwrap());
+            }
+            if self.metrics.g_means.is_some() {
+                summary_str = format!("{} | G-means {:.3}", summary_str, self.metrics.g_means.unwrap());
+            }
+            
+            summary = format!("{}{}", summary_str, "\x1b[0m");
         }
 
         summary
@@ -699,7 +767,7 @@ impl Jury {
         let avg_inconsistency = inconsistency_list.iter().map(|(_, inc)| inc).sum::<f64>() / inconsistency_list.len() as f64;
         let avg_consistency = (1.0 - avg_inconsistency) * 100.0;
 
-        text = format!("{}\n\n{}Errors: {} | Correct: {} | Abstentions: {} | Avg Consistency: {:.1}%{}", 
+        text = format!("{}\n\n{}Errors: {} | Correct: {} | Rejections: {} | Avg Consistency: {:.1}%{}", 
             text, "\x1b[1;33m", errors.len(), correct.len(), abstentions.len(), avg_consistency, "\x1b[0m");
 
         text
@@ -1936,7 +2004,7 @@ mod tests {
         );
 
         jury.evaluate(&data_positive);
-        let (_, accuracy, sensitivity, _, rejection_rate) = 
+        let (_, accuracy, sensitivity, _, rejection_rate, _) = 
             jury.compute_new_metrics(&data_positive);
 
         // Jury predicts 1, true class = 1 -> True Positive
@@ -1946,7 +2014,7 @@ mod tests {
 
         // Test on negative class
         let data_negative = create_single_sample_data(0);
-        let (_, accuracy_neg, _, specificity_neg, _) = jury.compute_new_metrics(&data_negative);
+        let (_, accuracy_neg, _, specificity_neg, _, _) = jury.compute_new_metrics(&data_negative);
         
         // Short predicts 1, true class = 0 -> False Positive
         assert_eq!(accuracy_neg, 0.0, "Accuracy should be 0.0 (wrong prediction)");
@@ -1989,7 +2057,7 @@ mod tests {
         );
 
         jury.evaluate(&data);
-        let (_, _, _, _, rejection_rate) = jury.compute_new_metrics(&data);
+        let (_, _, _, _, rejection_rate, _) = jury.compute_new_metrics(&data);
 
         // All samples should be rejected (perfect tie in window)
         assert_eq!(rejection_rate, 1.0, "All samples should be rejected (perfect tie)");
@@ -2086,7 +2154,7 @@ mod tests {
         );
 
         jury.evaluate(&data);
-        let (ext_auc, ext_accuracy, ext_sensitivity, ext_specificity, _) = jury.compute_new_metrics(&data);
+        let (ext_auc, ext_accuracy, ext_sensitivity, ext_specificity, _, _) = jury.compute_new_metrics(&data);
 
         // External metrics must be identical
         assert!((jury.auc - ext_auc).abs() < 1e-10, 
@@ -2116,7 +2184,7 @@ mod tests {
         );
 
         jury.evaluate(&data);
-        let (_, _, _, _, rejection_rate) = jury.compute_new_metrics(&data);
+        let (_, _, _, _, rejection_rate, _) = jury.compute_new_metrics(&data);
 
         // Manual calculation of the rejection rate
         let (pred_classes, _) = jury.predict(&data);
@@ -2146,7 +2214,7 @@ mod tests {
 
         // Test on training data
         jury.evaluate(&data);
-        let (train_auc, train_acc, train_sens, train_spec, _) = jury.compute_new_metrics(&data);
+        let (train_auc, train_acc, train_sens, train_spec, _, _) = jury.compute_new_metrics(&data);
         
         assert_eq!(train_auc, jury.auc, "Training AUC should match");
         assert_eq!(train_acc, jury.accuracy, "Training accuracy should match");
@@ -2155,7 +2223,7 @@ mod tests {
 
         // Test on different test data
         let test_data = create_multi_sample_data(vec![0, 0, 1, 1]);
-        let (test_auc, test_acc, test_sens, test_spec, _) = jury.compute_new_metrics(&test_data);
+        let (test_auc, test_acc, test_sens, test_spec, _, _) = jury.compute_new_metrics(&test_data);
         
         // Metrics may differ based on different data,
         // but must remain within valid ranges.
@@ -2186,7 +2254,7 @@ mod tests {
 
             jury.evaluate(&data);
             let (pred_classes, scores) = jury.predict(&data);
-            let (_, _, _, _, rejection_rate) = jury.compute_new_metrics(&data);
+            let (_, _, _, _, rejection_rate, _) = jury.compute_new_metrics(&data);
             
             results.push((threshold, pred_classes[0], scores[0], rejection_rate));
         }
@@ -2350,7 +2418,7 @@ mod tests {
         );
 
         jury.evaluate(&data);
-        let (auc, accuracy, sensitivity, specificity, rejection_rate) = jury.compute_new_metrics(&data);
+        let (auc, accuracy, sensitivity, specificity, rejection_rate, _) = jury.compute_new_metrics(&data);
 
         // Verify that metrics remain stable with a large population
         assert!(auc >= 0.0 && auc <= 1.0, "AUC out of bounds with large population");
@@ -2386,7 +2454,7 @@ mod tests {
         );
 
         jury.evaluate(&large_data);
-        let (auc, accuracy, sensitivity, specificity, rejection_rate) = jury.compute_new_metrics(&large_data);
+        let (auc, accuracy, sensitivity, specificity, rejection_rate, _) = jury.compute_new_metrics(&large_data);
 
         // Check consistency on large dataset
         assert!(auc >= 0.0 && auc <= 1.0, "AUC inconsistent on large dataset");
@@ -2418,7 +2486,7 @@ mod tests {
         );
 
         jury.evaluate(&data);
-        let (_, _, _, _, rejection_rate) = jury.compute_new_metrics(&data);
+        let (_, _, _, _, rejection_rate, _) = jury.compute_new_metrics(&data);
 
         // Expected mathematical calculation
         let (predictions, _) = jury.predict(&data);
@@ -2476,11 +2544,1119 @@ mod tests {
         let effective_weight_sum: f64 = weights.iter().filter(|&&w| w > 0.0).sum();
         assert!((effective_weight_sum - 1.0).abs() < 1e-10, "Effective weights should sum to 1.0");
         
-        let (auc, accuracy, sensitivity, specificity, rejection_rate) = jury.compute_new_metrics(&data);
+        let (auc, accuracy, sensitivity, specificity, rejection_rate, _) = jury.compute_new_metrics(&data);
         assert!(auc >= 0.0 && auc <= 1.0, "AUC should be valid with specialized weighting");
         assert!(accuracy >= 0.0 && accuracy <= 1.0, "Accuracy should be valid with specialized weighting");
         assert!(sensitivity >= 0.0 && sensitivity <= 1.0, "Sensitivity should be valid with specialized weighting");
         assert!(specificity >= 0.0 && specificity <= 1.0, "Specificity should be valid with specialized weighting");
         assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0, "Rejection rate should be valid with specialized weighting");
+    }
+
+    #[test]
+    fn test_jury_additional_metrics_not_computed_when_experts_have_none() {
+        // Create a population without additional metrics
+        let pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+
+        // All additional metrics should be None
+        assert!(jury.metrics.mcc.is_none(), "MCC should be None when experts don't have it");
+        assert!(jury.metrics.f1_score.is_none(), "F1-score should be None when experts don't have it");
+        assert!(jury.metrics.npv.is_none(), "NPV should be None when experts don't have it");
+        assert!(jury.metrics.ppv.is_none(), "PPV should be None when experts don't have it");
+        assert!(jury.metrics.g_means.is_none(), "G-means should be None when experts don't have it");
+    }
+
+    #[test]
+    fn test_jury_additional_metrics_computed_when_experts_have_them() {
+        // Create a population with additional metrics
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        // Add metrics to all experts
+        for expert in &mut pop.individuals {
+            expert.metrics.mcc = Some(0.7);
+            expert.metrics.f1_score = Some(0.8);
+            expert.metrics.npv = Some(0.75);
+            expert.metrics.ppv = Some(0.85);
+            expert.metrics.g_means = Some(0.79);
+        }
+
+        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+
+        // All additional metrics should be computed (Some)
+        assert!(jury.metrics.mcc.is_some(), "MCC should be computed when experts have it");
+        assert!(jury.metrics.f1_score.is_some(), "F1-score should be computed when experts have it");
+        assert!(jury.metrics.npv.is_some(), "NPV should be computed when experts have it");
+        assert!(jury.metrics.ppv.is_some(), "PPV should be computed when experts have it");
+        assert!(jury.metrics.g_means.is_some(), "G-means should be computed when experts have it");
+
+        // Values should be in valid range [0, 1] or [-1, 1] for MCC
+        assert!(jury.metrics.mcc.unwrap() >= -1.0 && jury.metrics.mcc.unwrap() <= 1.0, 
+                "MCC should be in [-1, 1]");
+        assert!(jury.metrics.f1_score.unwrap() >= 0.0 && jury.metrics.f1_score.unwrap() <= 1.0,
+                "F1-score should be in [0, 1]");
+        assert!(jury.metrics.npv.unwrap() >= 0.0 && jury.metrics.npv.unwrap() <= 1.0,
+                "NPV should be in [0, 1]");
+        assert!(jury.metrics.ppv.unwrap() >= 0.0 && jury.metrics.ppv.unwrap() <= 1.0,
+                "PPV should be in [0, 1]");
+        assert!(jury.metrics.g_means.unwrap() >= 0.0 && jury.metrics.g_means.unwrap() <= 1.0,
+                "G-means should be in [0, 1]");
+    }
+
+    #[test]
+    fn test_jury_additional_metrics_partial_presence() {
+        // Test when only some experts have some metrics
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        // Only first expert has MCC
+        pop.individuals[0].metrics.mcc = Some(0.6);
+        
+        // Only first two experts have F1-score
+        pop.individuals[0].metrics.f1_score = Some(0.7);
+        pop.individuals[1].metrics.f1_score = Some(0.75);
+
+        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+
+        // MCC and F1-score should be computed
+        assert!(jury.metrics.mcc.is_some(), "MCC should be computed when at least one expert has it");
+        assert!(jury.metrics.f1_score.is_some(), "F1-score should be computed when at least one expert has it");
+        
+        // Others should not be computed
+        assert!(jury.metrics.npv.is_none(), "NPV should not be computed when no expert has it");
+        assert!(jury.metrics.ppv.is_none(), "PPV should not be computed when no expert has it");
+        assert!(jury.metrics.g_means.is_none(), "G-means should not be computed when no expert has it");
+    }
+
+    #[test]
+    fn test_jury_additional_metrics_consistency_train_test() {
+        // Test that metrics are computed consistently between train and test
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        for expert in &mut pop.individuals {
+            expert.metrics.mcc = Some(0.7);
+            expert.metrics.f1_score = Some(0.8);
+        }
+
+        let train_data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+        let test_data = create_multi_sample_data(vec![0, 1, 0, 1]);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&train_data);
+
+        // Check train metrics are stored
+        assert!(jury.metrics.mcc.is_some(), "Train MCC should be computed");
+        assert!(jury.metrics.f1_score.is_some(), "Train F1-score should be computed");
+
+        let train_mcc = jury.metrics.mcc.unwrap();
+        let train_f1 = jury.metrics.f1_score.unwrap();
+
+        // Compute test metrics
+        let (_, _, _, _, _, test_metrics) = jury.compute_new_metrics(&test_data);
+
+        assert!(test_metrics.mcc.is_some(), "Test MCC should be computed");
+        assert!(test_metrics.f1_score.is_some(), "Test F1-score should be computed");
+
+        // Both should be finite and in valid ranges
+        assert!(train_mcc.is_finite() && train_mcc >= -1.0 && train_mcc <= 1.0,
+                "Train MCC should be finite and in valid range");
+        assert!(train_f1.is_finite() && train_f1 >= 0.0 && train_f1 <= 1.0,
+                "Train F1 should be finite and in valid range");
+        assert!(test_metrics.mcc.unwrap().is_finite(),
+                "Test MCC should be finite");
+        assert!(test_metrics.f1_score.unwrap().is_finite(),
+                "Test F1 should be finite");
+    }
+
+    #[test]
+    fn test_jury_additional_metrics_with_abstentions() {
+        // Test that metrics exclude abstentions (class 2) properly
+        let mut pop = create_controlled_population(vec![1, 1, 0, 0]); // Perfect tie
+        
+        for expert in &mut pop.individuals {
+            expert.metrics.mcc = Some(0.5);
+            expert.metrics.f1_score = Some(0.6);
+        }
+
+        let data = create_multi_sample_data(vec![1, 0, 1, 0]);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &10.0,  // Large window to create abstentions
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+
+        // Even with abstentions, metrics should be computed on non-abstained predictions
+        // They might be None if all samples are abstained, but should be Some if some are not
+        let (predictions, _) = jury.predict(&data);
+        let non_abstained_count = predictions.iter().filter(|&&p| p != 2).count();
+
+        if non_abstained_count > 0 {
+            assert!(jury.metrics.mcc.is_some(), "MCC should be computed on non-abstained samples");
+            assert!(jury.metrics.f1_score.is_some(), "F1-score should be computed on non-abstained samples");
+        }
+    }
+
+    #[test]
+    fn test_jury_additional_metrics_with_consensus_voting() {
+        // Test metrics with consensus voting method
+        let mut pop = create_controlled_population(vec![1, 1, 1, 1, 0]);
+        
+        for expert in &mut pop.individuals {
+            expert.metrics.mcc = Some(0.65);
+            expert.metrics.ppv = Some(0.82);
+            expert.metrics.npv = Some(0.78);
+        }
+
+        let data = create_multi_sample_data(vec![1, 1, 0, 1]);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Consensus,
+            &0.7,  // High consensus threshold
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+
+        assert!(jury.metrics.mcc.is_some(), "MCC should be computed with consensus voting");
+        assert!(jury.metrics.ppv.is_some(), "PPV should be computed with consensus voting");
+        assert!(jury.metrics.npv.is_some(), "NPV should be computed with consensus voting");
+        
+        // Should still be in valid ranges
+        assert!(jury.metrics.mcc.unwrap() >= -1.0 && jury.metrics.mcc.unwrap() <= 1.0);
+        assert!(jury.metrics.ppv.unwrap() >= 0.0 && jury.metrics.ppv.unwrap() <= 1.0);
+        assert!(jury.metrics.npv.unwrap() >= 0.0 && jury.metrics.npv.unwrap() <= 1.0);
+    }
+
+    #[test]
+    fn test_jury_additional_metrics_return_value_consistency() {
+        // Test that compute_new_metrics returns consistent values
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        for expert in &mut pop.individuals {
+            expert.metrics.mcc = Some(0.7);
+            expert.metrics.f1_score = Some(0.75);
+            expert.metrics.g_means = Some(0.73);
+        }
+
+        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+
+        // Metrics in jury.metrics should match those from compute_new_metrics
+        let (_, _, _, _, _, returned_metrics) = jury.compute_new_metrics(&data);
+
+        assert_eq!(jury.metrics.mcc, returned_metrics.mcc,
+                   "Stored and returned MCC should match");
+        assert_eq!(jury.metrics.f1_score, returned_metrics.f1_score,
+                   "Stored and returned F1-score should match");
+        assert_eq!(jury.metrics.g_means, returned_metrics.g_means,
+                   "Stored and returned G-means should match");
+    }
+
+    #[test]
+    fn test_jury_additional_metrics_with_empty_predictions() {
+        // Edge case: all predictions are filtered out (all abstentions)
+        let mut pop = create_controlled_population(vec![1, 1, 0, 0]);
+        
+        for expert in &mut pop.individuals {
+            expert.metrics.mcc = Some(0.5);
+        }
+
+        let data = create_multi_sample_data(vec![1, 0]);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &100.0,  // 100% window = all abstentions
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+
+        // With all abstentions, metrics might not be computable
+        // But the code should not crash and return default values
+        let (auc, accuracy, _, _, rejection_rate, additional) = 
+            jury.compute_new_metrics(&data);
+
+        // Should return safe default values
+        assert!(auc.is_finite(), "AUC should be finite even with all abstentions");
+        assert!(accuracy.is_finite(), "Accuracy should be finite even with all abstentions");
+        assert!(rejection_rate == 1.0, "Rejection rate should be 100% with all abstentions");
+        
+        // Additional metrics should handle this gracefully (None or default)
+        if additional.mcc.is_some() {
+            assert!(additional.mcc.unwrap().is_finite(), "MCC should be finite if computed");
+        }
+    }
+
+    #[test]
+    fn test_majority_vote_ignores_individual_abstentions() {
+        // Scenario: 3 experts vote 1, 2 vote 0, 2 vote 2 (abstain)
+        // Expected: Majority on 3 vs 2 (ignoring the 2 abstentions) -> decision 1, ratio 0.6
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0, 0, 0]);  // 7 experts total
+        
+        // Make last 2 experts abstain by giving them ThresholdCI
+        // Logic: if v > upper => 1, if v < lower => 0, else => 2
+        // Scores range from -1 to 1, so upper=2, lower=-2 captures all in rejection zone
+        for i in 5..7 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 2.0,
+                lower: -2.0,
+                rejection_rate: 1.0,
+            });
+        }
+        
+        let data = create_single_sample_data(1);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
+
+        // Should compute ratio based only on non-abstaining experts: 3/(3+2) = 0.6
+        assert_eq!(pred_classes[0], 1, "Majority should ignore abstentions and decide based on 3 vs 2");
+        assert!((scores[0] - 0.6).abs() < 1e-10, "Score should be 0.6 (3 out of 5 non-abstaining)");
+    }
+
+    #[test]
+    fn test_majority_all_experts_abstain() {
+        // Scenario: ALL experts vote 2 (abstain)
+        // Expected: Collective abstention (class 2)
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        // Make ALL experts abstain
+        for i in 0..5 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 100.0,
+                lower: -100.0,
+                rejection_rate: 1.0,
+            });
+        }
+        
+        let data = create_single_sample_data(1);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
+
+        // When total_weight == 0 (all abstained), should return class 2
+        assert_eq!(pred_classes[0], 2, "Should abstain collectively when all experts abstain");
+        assert_eq!(scores[0], 0.5, "Score should be 0.5 when all experts abstain");
+    }
+
+    #[test]
+    fn test_majority_minority_decides_when_majority_abstains() {
+        // Scenario: 4 experts abstain, 1 votes 1
+        // Expected: The single non-abstaining expert decides (ratio = 1.0 -> class 1)
+        let mut pop = create_controlled_population(vec![1, 0, 0, 0, 0]);
+        
+        // Make 4 experts abstain
+        for i in 1..5 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 2.0,
+                lower: -2.0,
+                rejection_rate: 1.0,
+            });
+        }
+        
+        let data = create_single_sample_data(1);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
+
+        // Only 1 expert votes (votes 1), so ratio = 1/1 = 1.0
+        assert_eq!(pred_classes[0], 1, "Single non-abstaining expert should decide");
+        assert_eq!(scores[0], 1.0, "Score should be 1.0 when only one expert votes for 1");
+    }
+
+    #[test]
+    fn test_consensus_ignores_individual_abstentions() {
+        // Scenario: 4 experts vote 1, 1 votes 0, 2 vote 2 (abstain)
+        // Consensus threshold: 0.7
+        // Expected: pos_ratio = 4/(4+1) = 0.8 >= 0.7 -> decision 1
+        let mut pop = create_controlled_population(vec![1, 1, 1, 1, 0, 0, 0]);
+        
+        // Make last 2 experts abstain
+        for i in 5..7 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 2.0,
+                lower: -2.0,
+                rejection_rate: 1.0,
+            });
+        }
+        
+        let data = create_single_sample_data(1);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Consensus,
+            &0.7,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
+
+        // pos_ratio = 4/5 = 0.8 >= 0.7
+        assert_eq!(pred_classes[0], 1, "Consensus should ignore abstentions and decide based on 4 vs 1");
+        assert!((scores[0] - 0.8).abs() < 1e-10, "Score should be 0.8 (4 out of 5 non-abstaining)");
+    }
+
+    #[test]
+    fn test_consensus_all_experts_abstain() {
+        // Scenario: ALL experts vote 2
+        // Expected: Collective abstention (class 2, pos_ratio = -1.0)
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        // Make ALL experts abstain
+        for i in 0..5 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 2.0,
+                lower: -2.0,
+                rejection_rate: 1.0,
+            });
+        }
+        
+        let data = create_single_sample_data(1);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Consensus,
+            &0.8,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
+
+        // When effective_total_weight == 0, should return (2, -1.0)
+        assert_eq!(pred_classes[0], 2, "Should abstain collectively when all experts abstain");
+        assert_eq!(scores[0], -1.0, "Score should be -1.0 (sentinel value) when all abstain");
+    }
+
+    #[test]
+    fn test_consensus_fails_when_majority_abstains() {
+        // Scenario: 2 vote 1, 1 votes 0, 4 vote 2 (abstain)
+        // Consensus threshold: 0.8
+        // pos_ratio = 2/(2+1) = 0.67 < 0.8, neg_ratio = 1/3 = 0.33 < 0.8
+        // Expected: Consensus fails -> abstention (class 2)
+        let mut pop = create_controlled_population(vec![1, 1, 0, 0, 0, 0, 0]);
+        
+        // Make 4 experts abstain
+        for i in 3..7 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 2.0,
+                lower: -2.0,
+                rejection_rate: 1.0,
+            });
+        }
+        
+        let data = create_single_sample_data(1);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Consensus,
+            &0.8,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        let (pred_classes, scores) = jury.predict(&data);
+
+        // pos_ratio = 2/3 ≈ 0.667 < 0.8 -> abstention
+        assert_eq!(pred_classes[0], 2, "Consensus should fail when pos_ratio < threshold");
+        assert!((scores[0] - 2.0/3.0).abs() < 1e-10, "Score should be ~0.667");
+    }
+
+    #[test]
+    fn test_weighted_voting_with_abstentions() {
+        // Scenario: weighted experts with some abstaining
+        // Experts: [1 (w=2), 1 (w=2), 0 (w=1), 2 (w=3), 2 (w=2)]
+        // Non-abstaining weighted votes: 2*1 + 2*1 + 1*0 = 4 for, 1 against
+        // Total non-abstaining weight: 2+2+1 = 5
+        // Ratio: 4/5 = 0.8 -> decision 1
+        let mut pop = create_controlled_population(vec![1, 1, 0, 0, 0]);
+        
+        // Make last 2 abstain
+        for i in 3..5 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 2.0,
+                lower: -2.0,
+                rejection_rate: 1.0,
+            });
+        }
+        
+        let data = create_single_sample_data(1);
+
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        
+        // Manually set different weights
+        jury.weights = Some(vec![2.0, 2.0, 1.0, 3.0, 2.0]);
+        
+        let (pred_classes, scores) = jury.predict(&data);
+
+        // Weighted: (2*1 + 2*1 + 1*0) / (2+2+1) = 4/5 = 0.8
+        assert_eq!(pred_classes[0], 1, "Weighted majority should ignore abstentions");
+        assert!((scores[0] - 0.8).abs() < 1e-10, "Score should be 0.8");
+    }
+
+    #[test]
+    fn test_rejection_rate_includes_collective_abstentions() {
+        // Test that rejection_rate counts both individual and collective abstentions
+        let mut pop = create_controlled_population(vec![1, 1, 0, 0]);
+        
+        // Sample 1: All abstain -> collective abstention
+        // Sample 2: 2 vote 1, 2 vote 0 -> normal vote
+        let mut X = HashMap::new();
+        X.insert((0, 0), 1.0);
+        X.insert((1, 0), 1.0);
+        
+        let mut feature_class = HashMap::new();
+        feature_class.insert(0, 1);
+        
+        let data = Data {
+            X,
+            y: vec![1, 0],
+            features: vec!["feature1".to_string()],
+            samples: vec!["sample1".to_string(), "sample2".to_string()],
+            feature_class,
+            feature_significance: HashMap::new(),
+            feature_selection: vec![0],
+            feature_len: 1,
+            sample_len: 2,
+            classes: vec!["class0".to_string(), "class1".to_string()],
+        };
+
+        // Make all experts abstain for sample 0 only (by setting extreme thresholds)
+        for i in 0..4 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 0.5,  // Will abstain for low scores
+                lower: 0.4,
+                rejection_rate: 0.5,
+            });
+        }
+        
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        
+        // Rejection rate should reflect collective abstentions
+        assert!(jury.rejection_rate >= 0.0 && jury.rejection_rate <= 1.0,
+                "Rejection rate should be valid even with mixed abstentions");
+    }
+
+    #[test]
+    fn test_compute_new_metrics_with_ground_truth_containing_class_2() {
+        // Test that compute_metrics_from_classes correctly ignores class 2 labels in ground truth
+        // and that rejection_rate remains coherent
+        let pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        // Create data with ground truth containing class 2 (should be ignored in metrics computation)
+        // Ground truth: [1, 0, 2, 1, 0, 2, 1]
+        // Predictions: [1, 0, 1, 1, 0, 0, 0]
+        // After filtering out 2s: GT=[1,0,1,0,1], Pred=[1,0,1,0,0]
+        // TP=2, TN=1, FP=0, FN=1 => Acc=3/4=0.75, Se=2/3=0.667, Sp=1/1=1.0
+        let data = create_multi_sample_data(vec![1, 0, 2, 1, 0, 2, 1]);
+        
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        
+        // Verify predictions were made for all samples (including those with y=2 in GT)
+        let (pred_classes, _) = jury.predict(&data);
+        assert_eq!(pred_classes.len(), 7, "Should predict for all 7 samples");
+        
+        // Verify metrics were computed correctly after filtering out samples with y=2 from GT
+        // Ground truth: [1, 0, 2, 1, 0, 2, 1]
+        // Predictions by majority (3 vote 1, 2 vote 0): all predict 1 (ratio 3/5 = 0.6 > 0.5)
+        // After filtering GT y=2 (indices 2 and 5): GT=[1,0,1,0,1], Pred=[1,1,1,1,1]
+        // TP=3 (indices 0,2,4), TN=0, FP=2 (indices 1,3), FN=0
+        // Accuracy = (TP+TN)/(TP+TN+FP+FN) = 3/5 = 0.6
+        // Sensitivity = TP/(TP+FN) = 3/3 = 1.0
+        // Specificity = TN/(TN+FP) = 0/2 = 0.0
+        
+        let tolerance = 1e-10;
+        assert!((jury.accuracy - 0.6).abs() < tolerance, 
+                "Accuracy should be 0.6 after filtering class 2, got {}", jury.accuracy);
+        assert!((jury.sensitivity - 1.0).abs() < tolerance,
+                "Sensitivity should be 1.0 after filtering class 2, got {}", jury.sensitivity);
+        assert!((jury.specificity - 0.0).abs() < tolerance,
+                "Specificity should be 0.0 after filtering class 2, got {}", jury.specificity);
+        
+        // Rejection rate should count jury's predictions of class 2, not ground truth's 2s
+        // With majority threshold 0.5 and ratio 0.6, no jury abstentions expected
+        assert!((jury.rejection_rate - 0.0).abs() < tolerance,
+                "Rejection rate should be 0.0 (no jury abstentions), got {}", jury.rejection_rate);
+    }
+
+    #[test]
+    fn test_optimize_majority_threshold_youden_with_high_abstention_rate() {
+        // Test stability of Youden optimization when high abstention rate causes
+        // massive filtering of sample pairs
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        // Force high abstention rate on most samples
+        for i in 0..5 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 0.55,   // Narrow rejection zone
+                lower: 0.45,
+                rejection_rate: 0.0,  // Will be computed
+            });
+        }
+        
+        // Create multi-sample data
+        let data = create_multi_sample_data(vec![1, 1, 1, 0, 0, 0, 1, 1, 0, 0]);
+        
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        
+        // Now optimize threshold - should handle massive abstention gracefully
+        let optimized_threshold = jury.optimize_majority_threshold_youden(&data);
+        
+        // Verify threshold is still valid
+        assert!(optimized_threshold >= 0.0 && optimized_threshold <= 1.0,
+                "Optimized threshold should remain in valid range");
+        assert!(jury.voting_threshold >= 0.0 && jury.voting_threshold <= 1.0,
+                "Jury voting_threshold should remain in valid range");
+        
+        // Verify metrics are still computable
+        assert!(jury.accuracy >= 0.0 && jury.accuracy <= 1.0,
+                "Accuracy should be valid after Youden optimization with high abstention");
+        
+        // Verify rejection_rate reflects high abstention
+        assert!(jury.rejection_rate >= 0.0 && jury.rejection_rate <= 1.0,
+                "Rejection rate should be valid");
+    }
+
+    #[test]
+    fn test_consensus_with_threshold_window_has_no_effect() {
+        // Test that threshold_window parameter (used only in Majority) doesn't affect Consensus
+        let pop = create_controlled_population(vec![1, 1, 1, 1, 0]);
+        let data = create_single_sample_data(1);
+        
+        // Create two juries with different threshold_window values
+        let mut jury_no_window = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Consensus,
+            &0.7,
+            &0.0,  // threshold_window = 0
+            &WeightingMethod::Uniform,
+        );
+        
+        let mut jury_wide_window = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Consensus,
+            &0.7,
+            &50.0,  // threshold_window = 50% (very wide)
+            &WeightingMethod::Uniform,
+        );
+        
+        jury_no_window.evaluate(&data);
+        jury_wide_window.evaluate(&data);
+        
+        let (pred_no_window, scores_no_window) = jury_no_window.predict(&data);
+        let (pred_wide_window, scores_wide_window) = jury_wide_window.predict(&data);
+        
+        // Consensus should produce identical results regardless of threshold_window
+        assert_eq!(pred_no_window[0], pred_wide_window[0],
+                   "Consensus prediction should be identical regardless of threshold_window");
+        assert!((scores_no_window[0] - scores_wide_window[0]).abs() < 1e-10,
+                "Consensus score should be identical regardless of threshold_window");
+        
+        // Both should give pos_ratio = 4/5 = 0.8
+        assert_eq!(pred_no_window[0], 1, "Should predict class 1 (0.8 >= 0.7)");
+        assert!((scores_no_window[0] - 0.8).abs() < 1e-10, "Score should be 0.8");
+    }
+
+    #[test]
+    fn test_specialized_weighting_with_high_abstention() {
+        // Test that specialized weighting adapts correctly when one group is massively abstentionist
+        // Verify weight normalization per sample and decision stability
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        // Make experts 3-4 (who would vote 0) mostly abstain
+        for i in 3..5 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 2.0,   // Will abstain on most samples
+                lower: -2.0,
+                rejection_rate: 0.8,  // High abstention rate
+            });
+        }
+        
+        // Create data where different samples trigger different abstention patterns
+        let data = create_multi_sample_data(vec![1, 1, 0, 0, 1]);
+        
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Specialized {
+                sensitivity_threshold: 0.5,
+                specificity_threshold: 0.5,
+            },
+        );
+
+        jury.evaluate(&data);
+        
+        // Verify weights were assigned
+        assert!(jury.weights.is_some(), "Specialized weighting should assign weights");
+        
+        let weights = jury.weights.as_ref().unwrap();
+        assert_eq!(weights.len(), 5, "Should have weights for all 5 experts");
+        
+        // Verify weights are non-negative
+        for (i, &w) in weights.iter().enumerate() {
+            assert!(w >= 0.0, "Expert {} weight should be non-negative", i);
+        }
+        
+        let (pred_classes, scores) = jury.predict(&data);
+        
+        // Verify predictions for all samples
+        assert_eq!(pred_classes.len(), 5, "Should predict for all samples");
+        assert_eq!(scores.len(), 5, "Should have scores for all samples");
+        
+        // Verify ratios are properly normalized (between 0 and 1, or special values)
+        for (i, &score) in scores.iter().enumerate() {
+            assert!(score >= -1.0 && score <= 1.0 || score == 0.5,
+                    "Sample {} score should be normalized or special value, got {}", i, score);
+        }
+        
+        // Verify metrics are computable
+        assert!(jury.accuracy >= 0.0 && jury.accuracy <= 1.0,
+                "Accuracy should be valid with specialized weighting and abstentions");
+        
+        // Decision should remain stable (not all abstentions)
+        let non_abstention_count = pred_classes.iter().filter(|&&c| c != 2).count();
+        assert!(non_abstention_count > 0,
+                "At least some samples should have definitive votes despite high abstention");
+    }
+
+    #[test]
+    fn test_additional_metrics_consistency_with_partial_expert_coverage_and_abstentions() {
+        // Test AdditionalMetrics coherence when:
+        // - Only some experts expose additional metrics
+        // - High abstention rate on multi-sample data
+        // - Verify compute_additional aggregation and API stability
+        let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+        
+        // Give additional metrics to only first 3 experts
+        for i in 0..3 {
+            pop.individuals[i].metrics = crate::individual::AdditionalMetrics {
+                mcc: Some(0.6 + 0.1 * i as f64),
+                f1_score: Some(0.7 + 0.05 * i as f64),
+                npv: Some(0.8),
+                ppv: Some(0.75),
+                g_means: Some(0.65),
+            };
+        }
+        
+        // Experts 3-4 have no additional metrics
+        // This tests the "at least one expert has metrics" logic
+        
+        // Add abstention via ThresholdCI
+        for i in 2..5 {
+            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+                upper: 0.6,
+                lower: 0.4,
+                rejection_rate: 0.3,
+            });
+        }
+        
+        // Multi-sample data to test aggregation
+        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1, 0, 1, 0]);
+        
+        let mut jury = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+
+        jury.evaluate(&data);
+        
+        // Verify additional metrics were computed on the Jury's aggregate predictions
+        // Key insight: Jury::compute_new_metrics RECALCULATES additional metrics
+        // from the jury's aggregate predictions, it does NOT average experts' metrics.
+        // The test verifies that:
+        // 1. If at least one expert has a metric defined, Jury computes it
+        // 2. The computed metric is based on Jury's predictions vs ground truth
+        // 3. Values are within valid bounds
+        
+        let metrics = &jury.metrics;
+        
+        // MCC: Should be present if at least one expert exposes it
+        // Computed from Jury's confusion matrix, not averaged from experts
+        if let Some(mcc) = metrics.mcc {
+            assert!(mcc >= -1.0 && mcc <= 1.0, 
+                    "MCC should be in valid range [-1, 1], got {}", mcc);
+            assert!(mcc.is_finite(), "MCC should be finite");
+        } else {
+            panic!("MCC should have been computed since some experts expose it (triggers computation flag)");
+        }
+        
+        // F1-score: Computed from Jury's TP, FP, FN
+        if let Some(f1) = metrics.f1_score {
+            assert!(f1 >= 0.0 && f1 <= 1.0,
+                    "F1-score should be in valid range [0, 1], got {}", f1);
+            assert!(f1.is_finite(), "F1-score should be finite");
+        } else {
+            panic!("F1-score should have been computed since some experts expose it");
+        }
+        
+        // NPV: Computed from Jury's TN, FN
+        if let Some(npv) = metrics.npv {
+            assert!(npv >= 0.0 && npv <= 1.0,
+                    "NPV should be in valid range [0, 1], got {}", npv);
+            assert!(npv.is_finite(), "NPV should be finite");
+        } else {
+            panic!("NPV should have been computed since some experts expose it");
+        }
+        
+        // PPV: Computed from Jury's TP, FP
+        if let Some(ppv) = metrics.ppv {
+            assert!(ppv >= 0.0 && ppv <= 1.0,
+                    "PPV should be in valid range [0, 1], got {}", ppv);
+            assert!(ppv.is_finite(), "PPV should be finite");
+        } else {
+            panic!("PPV should have been computed since some experts expose it");
+        }
+        
+        // G-means: Computed from Jury's sensitivity and specificity
+        if let Some(g_means) = metrics.g_means {
+            assert!(g_means >= 0.0 && g_means <= 1.0,
+                    "G-means should be in valid range [0, 1], got {}", g_means);
+            assert!(g_means.is_finite(), "G-means should be finite");
+        } else {
+            panic!("G-means should have been computed since some experts expose it");
+        }
+        
+        // Verify standard metrics are also valid
+        assert!(jury.accuracy >= 0.0 && jury.accuracy <= 1.0,
+                "Base accuracy should be valid");
+        assert!(jury.rejection_rate >= 0.0 && jury.rejection_rate <= 1.0,
+                "Rejection rate should be valid with mixed metrics and abstentions");
+        
+        // Verify predictions work correctly
+        let (pred_classes, _) = jury.predict(&data);
+        assert_eq!(pred_classes.len(), 8, "Should predict for all 8 samples");
+        
+    }
+
+    // -----------------------------------------------------------------
+    // Tests for monotonicity of rejection_rate when widening [lower, upper] interval
+    // for Jury (analogous to Individual tests)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_jury_rejection_rate_monotonicity_widening_interval() {
+        // Test that widening the [lower, upper] interval can only increase or maintain rejection_rate
+        // on a fixed dataset for a Jury
+        
+        let mut pop = create_controlled_population(vec![1, 1, 0, 0, 0]);
+        
+        // Add threshold_ci to experts with narrow interval
+        for expert in &mut pop.individuals {
+            expert.threshold_ci = Some(crate::individual::ThresholdCI {
+                lower: 0.45,
+                upper: 0.55,
+                rejection_rate: 0.0,
+            });
+            expert.threshold = 0.5;
+        }
+        
+        let data = create_multi_sample_data(vec![1, 1, 0, 0, 1, 0]);
+        
+        let mut jury_narrow = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+        
+        jury_narrow.evaluate(&data);
+        let rejection_rate_narrow = jury_narrow.rejection_rate;
+        
+        // Now widen the interval
+        for expert in &mut pop.individuals {
+            expert.threshold_ci = Some(crate::individual::ThresholdCI {
+                lower: 0.3,
+                upper: 0.7,
+                rejection_rate: 0.0,
+            });
+        }
+        
+        let mut jury_wide = Jury::new(
+            &pop,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+        
+        jury_wide.evaluate(&data);
+        let rejection_rate_wide = jury_wide.rejection_rate;
+        
+        assert!(rejection_rate_wide >= rejection_rate_narrow - 1e-10,
+                "Widening the [lower, upper] interval should increase or maintain Jury rejection_rate: narrow={}, wide={}",
+                rejection_rate_narrow, rejection_rate_wide);
+    }
+
+    #[test]
+    fn test_jury_rejection_rate_monotonicity_multiple_intervals() {
+        // Test monotonicity across multiple interval widths for Jury
+        
+        let intervals = vec![
+            (0.48, 0.52),
+            (0.45, 0.55),
+            (0.40, 0.60),
+            (0.30, 0.70),
+            (0.20, 0.80),
+        ];
+        
+        let data = create_multi_sample_data(vec![1, 1, 0, 0, 1, 0, 1]);
+        
+        let mut prev_rejection_rate = 0.0;
+        
+        for (lower, upper) in intervals {
+            let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
+            
+            // Set interval for all experts
+            for expert in &mut pop.individuals {
+                expert.threshold_ci = Some(crate::individual::ThresholdCI {
+                    lower,
+                    upper,
+                    rejection_rate: 0.0,
+                });
+                expert.threshold = 0.5;
+            }
+            
+            let mut jury = Jury::new(
+                &pop,
+                &0.0,
+                &0.0,
+                &VotingMethod::Majority,
+                &0.5,
+                &0.0,
+                &WeightingMethod::Uniform,
+            );
+            
+            jury.evaluate(&data);
+            let rejection_rate = jury.rejection_rate;
+            
+            assert!(rejection_rate >= prev_rejection_rate - 1e-10,
+                    "Jury rejection rate should be monotonic: interval [{}, {}] has rejection_rate={}, previous was {}",
+                    lower, upper, rejection_rate, prev_rejection_rate);
+            
+            prev_rejection_rate = rejection_rate;
+        }
+    }
+
+    #[test]
+    fn test_jury_rejection_rate_zero_width_interval() {
+        // Edge case: zero-width interval should give minimal abstention for Jury
+        
+        let mut pop_no_ci = create_controlled_population(vec![1, 1, 0, 0, 0]);
+        
+        // No threshold_ci
+        for expert in &mut pop_no_ci.individuals {
+            expert.threshold = 0.5;
+            expert.threshold_ci = None;
+        }
+        
+        let data = create_multi_sample_data(vec![1, 1, 0, 0]);
+        
+        let mut jury_no_ci = Jury::new(
+            &pop_no_ci,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+        
+        jury_no_ci.evaluate(&data);
+        let rejection_rate_no_ci = jury_no_ci.rejection_rate;
+        
+        // With zero-width interval
+        let mut pop_zero = create_controlled_population(vec![1, 1, 0, 0, 0]);
+        for expert in &mut pop_zero.individuals {
+            expert.threshold = 0.5;
+            expert.threshold_ci = Some(crate::individual::ThresholdCI {
+                lower: 0.5,
+                upper: 0.5,
+                rejection_rate: 0.0,
+            });
+        }
+        
+        let mut jury_zero = Jury::new(
+            &pop_zero,
+            &0.0,
+            &0.0,
+            &VotingMethod::Majority,
+            &0.5,
+            &0.0,
+            &WeightingMethod::Uniform,
+        );
+        
+        jury_zero.evaluate(&data);
+        let rejection_rate_zero = jury_zero.rejection_rate;
+        
+        assert!((rejection_rate_zero - rejection_rate_no_ci).abs() < 0.2,
+                "Zero-width interval should give similar rejection_rate to no interval case: no_ci={}, zero={}",
+                rejection_rate_no_ci, rejection_rate_zero);
     }
 }

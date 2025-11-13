@@ -3,9 +3,9 @@ use crate::{data::Data, experiment::ImportanceAggregation};
 use crate::population::Population;
 use crate::param::Param;
 use crate::utils;
+use crate::cinfo;
 use std::sync::{Arc};
 use rand_chacha::ChaCha8Rng;
-use log::info;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
@@ -38,12 +38,7 @@ impl CV {
     /// * `outer_folds` - Number of validation folds to create
     /// * `rng` - Random number generator for stratified sampling
     pub fn new(data: &Data, outer_folds: usize, rng: &mut ChaCha8Rng) -> CV {
-        let mut indices_class0:Vec<usize> = Vec::new();
-        let mut indices_class1:Vec<usize> = Vec::new();
-
-        for (i,f) in data.y.iter().enumerate() {
-            if *f==0 { indices_class0.push(i) } else if *f==1 { indices_class1.push(i) }
-        }
+        let (indices_class1, indices_class0) = utils::stratify_indices_by_class(&data.y);
 
         let indices_class0_folds = utils::split_into_balanced_random_chunks(indices_class0, outer_folds, rng);
         let indices_class1_folds = utils::split_into_balanced_random_chunks(indices_class1, outer_folds, rng);
@@ -94,7 +89,7 @@ impl CV {
                     .zip(self.validation_folds.par_iter_mut())
                     .enumerate()
                     .filter_map(|(i, (train, valid))| {
-                        info!("\x1b[1;93mCompleting fold #{}...\x1b[0m", i+1);
+                        cinfo!(param.general.display_colorful, "\x1b[1;93mCompleting fold #{}...\x1b[0m", i+1);
 
                         let mut i_param = param.clone();
                         i_param.tag = format!("Fold {}", i+1);
@@ -109,7 +104,8 @@ impl CV {
                                 let train_auc = best_model.auc;
                                 let valid_auc = best_model.compute_new_auc(valid);
 
-                                info!(
+                                cinfo!(
+                                    param.general.display_colorful,
                                     "\x1b[1;93mFold #{} completed | Best train AUC: {:.3} | Associated validation fold AUC: {:.3}\x1b[0m",
                                     i+1, train_auc, valid_auc
                                 );
@@ -117,12 +113,12 @@ impl CV {
                                 Some(collection)
                                 
                             } else {
-                                info!("\x1b[1;93mFold #{} skipped - no individuals found\x1b[0m", i+1);
+                                cinfo!(param.general.display_colorful, "\x1b[1;93mFold #{} skipped - no individuals found\x1b[0m", i+1);
                                 Some(vec![])
                             }
                            
                         } else {
-                            info!("\x1b[1;93mFold #{} skipped - algorithm did not return any populations.\x1b[0m", i+1);
+                            cinfo!(param.general.display_colorful, "\x1b[1;93mFold #{} skipped - algorithm did not return any populations.\x1b[0m", i+1);
                             Some(vec![])
                         }
                     })
@@ -309,13 +305,13 @@ impl CV {
             if self.fold_collections[fold_idx].len() > 0 && self.fold_collections[fold_idx].last().unwrap().individuals.len() > 0 {
                 let fbm = self.extract_fold_fbm(fold_idx, &param);
 
-                info!("\x1b[1;93mFold #{}\x1b[0m", fold_idx+1);
-                info!("{}", fbm.clone().display(&self.training_sets[fold_idx], Some(&self.validation_folds[fold_idx]), &param));
+                cinfo!(param.general.display_colorful, "\x1b[1;93mFold #{}\x1b[0m", fold_idx+1);
+                cinfo!(param.general.display_colorful, "{}", fbm.clone().display(&self.training_sets[fold_idx], Some(&self.validation_folds[fold_idx]), &param));
 
                 fold_fbms.push(fbm);
             
             } else {
-                info!("\x1b[1;93mFold #{}: empty population\x1b[0m", fold_idx+1);
+                cinfo!(param.general.display_colorful, "\x1b[1;93mFold #{}: empty population\x1b[0m", fold_idx+1);
             }
         }
 
@@ -1079,9 +1075,9 @@ mod tests {
         let param = Param::default();
         let running = Arc::new(AtomicBool::new(true));
 
-        // Mock algorithm returing a test population
+        // Mock algorithm returing a test population compatible with Data::test() (only features 0 and 1)
         let mock_algo = |_train_data: &mut Data, _param: &Param, _running: Arc<AtomicBool>| -> Vec<Population> {
-            let mut pop = Population::test();
+            let mut pop = Population::test_with_these_features(&[0, 1]);
             pop.compute_hash();
             vec![pop]
         };

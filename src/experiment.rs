@@ -9,6 +9,7 @@ use log::{debug, info, error, warn};
 use rand_chacha::ChaCha8Rng;
 use rand::SeedableRng;
 use crate::voting::Jury;
+use crate::cinfo;
 
 //-----------------------------------------------------------------------------
 // Importance structures and methods 
@@ -228,8 +229,6 @@ impl Experiment {
                         debug!("Computing Intra-fold and Inter-fold importances...");
                         self.importance_collection = Some(cv.compute_cv_oob_feature_importance(&self.parameters, self.parameters.importance.n_permutations_oob,
                             &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true).expect("CV importance calculation failed."));
-                        
-                        info!("{}", self.importance_collection.as_ref().unwrap().display_feature_importance_terminal(&self.train_data, 30));
                     }
                     Err(e) => {
                         panic!("Failed to reconstruct CV structure: {}", e);
@@ -241,12 +240,15 @@ impl Experiment {
         }
     }
 
-    pub fn display_results(&mut self) {
-        info!("=== EXPERIMENT {} RESULTS ===", self.id);
-        info!("GPREDOMICS version: v{}", self.gpredomics_version);
-        info!("Timestamp: {}", self.timestamp);
-        info!("Algorithm: {}", self.parameters.general.algo);
-        info!("Execution time: {:.2}s", self.execution_time);
+    pub fn display_results(&self) -> String {
+        let mut text = String::new();
+        text.push_str(&format!("\n=============== Experiment {} ===============\n\n", self.id));
+        text.push_str(&format!("Gpredomics version: v{}\n", self.gpredomics_version));
+        text.push_str(&format!("Timestamp: {}\n", self.timestamp));
+        text.push_str(&format!("Algorithm: {}\n", self.parameters.general.algo));
+        text.push_str(&format!("Execution time: {:.2}s\n", self.execution_time));
+        text.push_str(&format!("Parameters: \x1b[2;97m{:?}\x1b[0m\n", &self.parameters));
+        text.push_str(&format!("Experiment results:\n\n"));
 
         // Reconstruct CV to print each fold FBM as original display
         if let Some(cv_folds_ids) = self.cv_folds_ids.clone() {
@@ -265,12 +267,14 @@ impl Experiment {
             let final_hashes: std::collections::HashSet<_> = final_pop.individuals.iter().map(|i| i.hash).collect();
 
             assert_eq!(fbm_hashes, final_hashes, "Something is wrong with the Experiment: reconstructed CV based FBM should be the same as final population");
-            info!("\x1b[1;93mDisplaying Family of best models across folds\x1b[0m");
+            text.push_str(&format!("{}\n", crate::utils::strip_ansi_if_needed("\x1b[1;93mDisplaying Family of best models across folds\x1b[0m", self.parameters.general.display_colorful)));
         }    
 
-        // Print final population
+        // Print final result
         if let Some(mut final_pop) = self.final_population.clone() {
-                info!("{}", final_pop.display(&self.train_data, self.test_data.as_ref(), &self.parameters));
+            text.push_str(&format!("{}\n", final_pop.display(&self.train_data, self.test_data.as_ref(), &self.parameters)));
+        } else if self.parameters.general.algo == "mcmc" {
+            text.push_str(&format!("{}\n", self.collections[0][0].clone().display(&self.train_data, self.test_data.as_ref(), &self.parameters)));
         } else {
             panic!("No final population available");
         }
@@ -297,19 +301,19 @@ impl Experiment {
                 }
             };
             
-            info!("Top 10%:{}", top_features.display_feature_importance_terminal(&self.train_data, top_features.importances.len()));
-
+            text.push_str(&format!("Top 10%:{}\n", top_features.display_feature_importance_terminal(&self.train_data, top_features.importances.len())));
         }
         
-        if let Some(ref mut metadata) = self.others {
+        if let Some(ref metadata) = self.others {
             match metadata {
                 ExperimentMetadata::Jury { jury } => {
-                    jury.display(&self.train_data, self.test_data.as_ref(), &self.parameters)
+                    text.push_str(&format!("{}\n", jury.display(&self.train_data, self.test_data.as_ref(), &self.parameters)));
                 },
                 _ => {}
             }
         }
         
+        text
     }
 
     pub fn evaluate_on_new_dataset(&mut self, X_path: &str, y_path: &str) {
@@ -335,12 +339,12 @@ impl Experiment {
 
         let display_param = self.parameters.clone();
 
-        info!("{}", final_pop.display(&self.train_data, Some(&new_data), &display_param));
+        crate::cinfo!(self.parameters.general.display_colorful, "{}", final_pop.display(&self.train_data, Some(&new_data), &display_param));
 
         if let Some(ref mut metadata) = self.others {
             match metadata {
                 ExperimentMetadata::Jury { jury } => {
-                    jury.display(&self.train_data, Some(&new_data), &self.parameters)
+                    cinfo!(self.parameters.general.display_colorful, "{}", jury.display(&self.train_data, Some(&new_data), &self.parameters));
                 },
                 _ => {}
             }
@@ -463,15 +467,14 @@ impl Experiment {
 
     pub fn compute_voting(&mut self) {
         let mut jury;
-        
         let mut voting_pop = self.final_population.clone().unwrap();
+        
         voting_pop.compute_all_metrics(&self.train_data, &self.parameters.general.fit);
 
-        jury = Jury::new_from_param(&voting_pop, &self.parameters);
-        
+        jury = Jury::new_from_param(&voting_pop, &self.train_data, &self.parameters);
+
         if jury.experts.individuals.len() > 1 {
             jury.evaluate(&self.train_data);
-            jury.display(&self.train_data, self.test_data.as_ref(), &self.parameters.clone());
             self.others = Some(ExperimentMetadata::Jury { jury: jury })
         } else {
             warn!("An informative vote is requiring more than one expert!")
@@ -912,12 +915,12 @@ mod tests {
         let temp_file = "test_complete_experiment_lifecycle.json";
         original.save_auto(temp_file).unwrap();
         
-        let mut reloaded = Experiment::load_auto(temp_file).unwrap();
+        let reloaded = Experiment::load_auto(temp_file).unwrap();
         
         assert_eq!(original, reloaded);
         assert!(reloaded.final_population.is_some());
         
-        reloaded.display_results();
+        cinfo!(reloaded.parameters.general.display_colorful, "{}", reloaded.display_results());
         std::fs::remove_file("test_complete_experiment_lifecycle.json").unwrap();
     }
 

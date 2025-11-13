@@ -81,14 +81,22 @@ pub struct General {
     pub k_penalty: f64,                       
     #[serde(default = "zero_default")] 
     pub fr_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub bias_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_alpha: f64,
+    #[serde(default = "uzero_default")] 
+    pub threshold_ci_n_bootstrap: usize,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_frac_bootstrap: f64,
     #[serde(default = "n_model_to_display_default")] 
     pub n_model_to_display: u32,
     #[serde(default = "false_default")] 
     pub gpu: bool,
     #[serde(default = "false_default")] 
     pub cv: bool,
-    #[serde(default = "display_level_default")] 
-    pub display_level: usize,
     #[serde(default = "true_default")] 
     pub display_colorful: bool,
     #[serde(default = "feature_keep_trace_default")]   
@@ -149,12 +157,12 @@ pub struct CV {
 pub struct Voting {
   #[serde(default = "false_default")]
   pub vote: bool,
-  #[serde(default = "true_default")]
-  pub use_fbm: bool,
   #[serde(default = "half_default")] 
   pub min_perf: f64,
   #[serde(default = "diversity_voting_default")] 
   pub min_diversity: f64,       
+  #[serde(default = "best_models_ci_alpha_default")]     
+  pub fbm_ci_alpha: f64,
   #[serde(default = "voting_default")]                      
   pub method: VotingMethod,   
   #[serde(default = "half_default")]                         
@@ -163,12 +171,8 @@ pub struct Voting {
   pub threshold_windows_pct: f64,
   #[serde(default = "false_default")]        
   pub complete_display: bool,
-  #[serde(default = "false_default")]                        
-  pub specialized: bool,                 
-  #[serde(default = "specialized_default")]            
-  pub specialized_pos_threshold: f64,
-  #[serde(default = "specialized_default")]                      
-  pub specialized_neg_threshold: f64                 
+  #[serde(default = "false_default")]     
+  pub prune_before_voting: bool
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -264,22 +268,7 @@ pub struct Importance {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Experimental {
-    #[serde(default = "false_default")] 
-    pub threshold_ci: bool,
-    #[serde(default = "zero_default")] 
-    pub threshold_ci_penalty: f64,
-    #[serde(default = "zero_default")] 
-    pub threshold_ci_alpha: f64,
-    #[serde(default = "uzero_default")] 
-    pub threshold_ci_n_bootstrap: usize,
-    #[serde(default = "zero_default")] 
-    pub threshold_ci_frac_bootstrap: f64,
-    #[serde(default = "zero_default")] 
-    pub bias_penalty: f64,
-    #[serde(default = "zero_default")] 
-    pub significance_penalty: f64,
-    #[serde(default = "zero_default")] 
-    pub significance_penalty_threshold: f64,
+
 }
 
 // Default section definitions
@@ -375,38 +364,64 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
 }
 
 pub fn validate(param: &mut Param) -> Result<(), String> {
-        if param.experimental.threshold_ci { validate_bootstrap(param)? } ;
+    if param.general.log_base.len() > 0 {
+        param.general.display_colorful = false;
+    }
+
+    if param.cv.fit_on_valid && param.data.Xtest == "".to_string() {
+        warn!("fit_on_valid=true without independent test set risks data leakage!");
+    }
+
+    if param.general.gpu {
+        warn!(
+            "GPU acceleration enabled: computations use f32 precision for performance.\n  \
+            CPU uses f64 precision. Minor numerical differences (order of 1e-7) are expected\n  \
+            between CPU and GPU runs, which may lead to slightly different model rankings\n  \
+            and final results. For perfect reproducibility, use the same backend (CPU or GPU)\n  \
+            across all runs."
+        );
+    }
+
+    if param.general.algo == "beam" && !param.general.keep_trace {
+        warn!("keep_trace is deactivated: only the last models will be kept in memory during BEAM runs. \
+        If you want to get the best models across all k size, please enable keep_trace.");
+    }
+
+    if param.general.threshold_ci_alpha > 0.0 && param.general.threshold_ci_alpha < 1.0 { validate_bootstrap(param)? };
         validate_penalties(param)?;
         Ok(())
     }
     
-    
     fn validate_bootstrap(param: &mut Param) -> Result<(), String> {
-        if param.experimental.threshold_ci_n_bootstrap == 0 {
+        if param.general.threshold_ci_n_bootstrap == 0 {
             return Ok(()); 
         }
             
-        if param.experimental.threshold_ci_alpha <= 0.0 || param.experimental.threshold_ci_alpha >= 1.0 {
-            return Err(format!("Invalid threshold_ci_alpha={:.3}. Must be in range (0, 1).", param.experimental.threshold_ci_alpha));
+        if param.general.threshold_ci_alpha <= 0.0 || param.general.threshold_ci_alpha >= 1.0 {
+            return Err(format!("Invalid threshold_ci_alpha={:.3}. Must be in range (0, 1).", param.general.threshold_ci_alpha));
+        }
+
+        if param.general.threshold_ci_frac_bootstrap <= 0.0 || param.general.threshold_ci_frac_bootstrap > 1.0 {
+            return Err(format!("Invalid threshold_ci_frac_bootstrap={:.3}. Must be in range (0, 1).", param.general.threshold_ci_frac_bootstrap));
         }
             
         const B_MIN: usize = 1000;   // CI (Efron & Tibshirani 1993)
         const B_REC: usize = 2000;   // Robustness (Rousselet et al. 2021)
         
-        let B = param.experimental.threshold_ci_n_bootstrap;
+        let B = param.general.threshold_ci_n_bootstrap;
         
         if B < B_MIN {
-            return Err(format!(
+            warn!(
                 "Bootstrap B={} < {} (Efron & Tibshirani 1993 minimum for percentile CI). \
                 Quantile estimates may be unstable. Increase B or disable (set to 0).",
                 B, B_MIN
-            ));
+            );
         } else if B < B_REC {
             warn!(
                 "Bootstrap B={} < {} (Rousselet et al. 2021 recommendation). \
                 Percentile CI may be too narrow for small samples. \
                 Consider B ≥ {} for {}% CI stability.",
-                B, B_REC, B_REC, (1.0 - param.experimental.threshold_ci_alpha) * 100.0
+                B, B_REC, B_REC, (1.0 - param.general.threshold_ci_alpha) * 100.0
             );
         }
         
@@ -422,12 +437,12 @@ pub fn validate(param: &mut Param) -> Result<(), String> {
             return Err(format!("Invalid fr_penalty={:.3}. Must be >= 0.", param.general.fr_penalty));
         }
 
-        if param.experimental.bias_penalty < 0.0 {
-            return Err(format!("Invalid bias_penalty={:.3}. Must be >= 0.", param.experimental.bias_penalty));
+        if param.general.bias_penalty < 0.0 {
+            return Err(format!("Invalid bias_penalty={:.3}. Must be >= 0.", param.general.bias_penalty));
         }
 
-        if param.experimental.threshold_ci_penalty < 0.0 {
-            return Err(format!("Invalid threshold_ci_penalty={:.3}. Must be >= 0.", param.experimental.threshold_ci_penalty));
+        if param.general.threshold_ci_penalty < 0.0 {
+            return Err(format!("Invalid threshold_ci_penalty={:.3}. Must be >= 0.", param.general.threshold_ci_penalty));
         }
 
         if param.general.algo == "ga".to_string() && param.ga.random_sampling_pct > 0.0 && param.cv.overfit_penalty > 0.0 {
@@ -464,7 +479,6 @@ fn fit_default() -> FitFunction { FitFunction::auc }
 fn n_model_to_display_default() -> u32 { 10 }
 fn false_default() -> bool { false }
 fn true_default() -> bool { true }
-fn display_level_default() -> usize { 2 }
 fn beam_method_default() -> BeamMethod { BeamMethod::LimitedExhaustive }
 fn best_models_ci_alpha_default() -> f64 { 0.05 }
 fn max_nb_of_models_default() -> usize { 10000 }
@@ -482,7 +496,6 @@ fn uzero_default() -> usize { 0 }
 fn half_default() -> f64 { 0.5 }
 fn one_default() -> usize { 1 }
 fn voting_default() -> VotingMethod { VotingMethod::Majority }
-fn specialized_default() -> f64 { 0.6 }
 fn diversity_voting_default() -> f64 { 5.0 }
 fn kmax_default() -> usize { 200 }
 fn pop_size_default() -> u32 { 5000 }

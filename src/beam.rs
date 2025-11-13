@@ -1,4 +1,5 @@
 // BE CAREFUL : the adaptation of the Predomics beam algorithm for Gpredomics is still under development
+use crate::cinfo;
 use crate::cv::CV;
 use crate::gpu::GpuAssay;
 use crate::individual::AdditionalMetrics;
@@ -243,7 +244,7 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
         sensitivity: 0.0,
         accuracy: 0.0,
         threshold: 0.0,
-        threshold_ci: if param.experimental.threshold_ci { Some(ThresholdCI { lower: 0.0, upper: 0.0, rejection_rate: 0.0 }) } else { None },
+        threshold_ci: if param.general.threshold_ci_n_bootstrap > 0 { Some(ThresholdCI { lower: 0.0, upper: 0.0, rejection_rate: 0.0 }) } else { None },
         k: features.len(),
         epoch: 0,
         language: language,
@@ -262,7 +263,9 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum BeamMethod {
+    #[serde(alias = "combinatorial")]
     LimitedExhaustive,
+    #[serde(alias = "incremental")]
     ParallelForward
 }
 
@@ -270,7 +273,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
     let time = Instant::now();
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
-    info!("\x1b[1;96mLaunching Beam algorithm for a feature interval [{}, {}]\x1b[0m", param.beam.kmin, param.beam.kmax);
+    cinfo!(param.general.display_colorful, "\x1b[1;96mLaunching Beam algorithm for a feature interval [{}, {}]\x1b[0m", param.beam.kmin, param.beam.kmax);
 
     data.select_features(param);
     debug!("FEATURES {:?}", data.feature_class);
@@ -281,7 +284,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
     // Initialize first population
     let base_pop = generate_pop(data, param);
 
-    display_epoch_legend(param);
+    cinfo!(param.general.display_colorful, "{}", display_epoch_legend(param));
     let populations = iterative_growth(&base_pop, &data, &gpu_assay, param, running, &mut rng);
 
     let elapsed = time.elapsed();
@@ -290,7 +293,7 @@ pub fn beam(data: &mut Data, _no_overfit_data: &mut Option<Data>, param: &Param,
     if populations.is_empty() {
         error!("Beam did not produce any results because the criteria for selecting the best features was too restrictive. Please lower best_models_ci_alpha to allow results.")
     }
-    
+
     populations
 }
 
@@ -331,10 +334,17 @@ pub fn iterative_growth(base_pop: &Population, data: &Data, gpu_assay: &Option<G
     pop.compute_hash();
     let _clone_number = pop.remove_clone();
 
+    // Create GPU assays once for CV (will be reused across all epochs)
+    let gpu_assays_per_fold = if let Some(ref cv) = cv {
+        create_gpu_assays_for_folds_beam(cv, &param)
+    } else {
+        vec![]
+    };
+
     // Fitting base population on data
     if let Some(ref cv) = cv {
         debug!("Fitting population on folds...");
-        pop.fit_on_folds(cv, &param, &vec![None; param.cv.inner_folds]);
+        pop.fit_on_folds(cv, &param, &gpu_assays_per_fold);
     } else {
         debug!("Fitting population...");
         pop.fit(&epoch_data, &mut None, gpu_assay, &None, param);
@@ -349,7 +359,7 @@ pub fn iterative_growth(base_pop: &Population, data: &Data, gpu_assay: &Option<G
 
         // Stop the loop to avoid a panic! if previous generation has not k features
         if epoch != 1 && pop.individuals[0].k < epoch-2  {
-            info!("\x1b[1;91mLimit reached: new models contain all pertinent features\x1b[0m");
+            cinfo!(param.general.display_colorful, "\x1b[1;91mLimit reached: new models contain all pertinent features\x1b[0m");
             
             if last_pop.individuals.len() > 0 {
                 if param.general.keep_trace { populations.push(pop); }
@@ -368,11 +378,11 @@ pub fn iterative_growth(base_pop: &Population, data: &Data, gpu_assay: &Option<G
         let best_pop = pop.select_best_population(param.beam.best_models_ci_alpha);
         debug!("Kept {:?} individuals from the family of best models", best_pop.individuals.len());
 
-        // Generate new population based on best one 
+        // Generate new population based on best one - reuse GPU assays
         last_pop = pop;
-        pop = grow(best_pop, data, &mut cv, param, gpu_assay, epoch);
+        pop = grow(best_pop, data, &mut cv, param, gpu_assay, &gpu_assays_per_fold, epoch);
         
-        display_epoch(&pop, param, epoch);
+        cinfo!(param.general.display_colorful, "{}", display_epoch(&pop, param, epoch));
 
         // Stop critera
         let mut need_to_break= false;
@@ -410,7 +420,7 @@ pub fn iterative_growth(base_pop: &Population, data: &Data, gpu_assay: &Option<G
     
 }
 
-pub fn grow(best_pop : Population, data: &Data, cv: &mut Option<CV>, param: &Param, gpu_assay: &Option<GpuAssay>, epoch: usize) -> Population {
+pub fn grow(best_pop : Population, data: &Data, cv: &mut Option<CV>, param: &Param, gpu_assay: &Option<GpuAssay>, gpu_assays_per_fold: &Vec<(Option<GpuAssay>, Option<GpuAssay>)>, epoch: usize) -> Population {
     let pattern_ind = generate_individual(data, TERNARY_LANG, RAW_TYPE, param);
 
     // Get pertinent features to use it for the new iteration
@@ -430,10 +440,10 @@ pub fn grow(best_pop : Population, data: &Data, cv: &mut Option<CV>, param: &Par
 
     let mut new_pop = pop_from_combinations(combinations, pattern_ind, epoch, param);
     
-    // Fit new population
+    // Fit new population - reuse GPU assays
     if let Some(ref cv) = cv {
         debug!("Fitting children on folds...");
-        new_pop.fit_on_folds(cv, &param,  &vec![None; param.cv.inner_folds]);
+        new_pop.fit_on_folds(cv, &param, gpu_assays_per_fold);
     }  else {
         debug!("Fitting children...");
         new_pop.fit(&data, &mut None, gpu_assay, &None, param);    
@@ -594,32 +604,74 @@ fn get_gpu_assay(data: &Data, param: &Param) -> Option<GpuAssay> {
     let lang_data_combinations = languages.len()*data_types.len();
 
     let gpu_assay = if param.general.gpu  {
-        if param.cv.overfit_penalty == 0.0 {
-            let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
-            let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
-            if param.beam.max_nb_of_models == 0 {
-                warn!("GPU requires a maximum number of models. Setting max_nb_of_models={} to prevent crashes.", 
-                    gpu_max_nb_models / lang_data_combinations);
-                None
-            } else if (param.beam.max_nb_of_models as usize) * lang_data_combinations > gpu_max_nb_models {
-                warn!("GPU requires a maximum number of models that you exceed (GPU max_nb_of_models = {}). \
-                \nAccording to the input parameters, please fix max_nb_of_models to {} \
-                \nIf your configuration supports it and you know what you're doing, consider alternatively increasing the size of the buffers to {:.0} MB (do not forget to adjust the total size accordingly) \
-                \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models,
-                gpu_max_nb_models/lang_data_combinations,
-                ((param.beam.max_nb_of_models*lang_data_combinations) as usize * data.sample_len * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0)+1.0);
-                None
-            } else {
-                let max_nb = (param.beam.max_nb_of_models as usize) * lang_data_combinations;
-                Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, max_nb, &param.gpu))
-            }
-        } else {
-            warn!("Beam algorithm cannot be started with GPU if overfit_penalty>0.0.");
+        let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
+        let gpu_max_nb_models = buffer_binding_size / (data.sample_len * std::mem::size_of::<f32>());
+        if param.beam.max_nb_of_models == 0 {
+            warn!("GPU requires a maximum number of models. Setting max_nb_of_models={} to prevent crashes.", 
+                gpu_max_nb_models / lang_data_combinations);
             None
+        } else if (param.beam.max_nb_of_models as usize) * lang_data_combinations > gpu_max_nb_models {
+            warn!("GPU requires a maximum number of models that you exceed (GPU max_nb_of_models = {}). \
+            \nAccording to the input parameters, please fix max_nb_of_models to {} \
+            \nIf your configuration supports it and you know what you're doing, consider alternatively increasing the size of the buffers to {:.0} MB (do not forget to adjust the total size accordingly) \
+            \nThis Gpredomics session will therefore be launched without a GPU.", gpu_max_nb_models,
+            gpu_max_nb_models/lang_data_combinations,
+            ((param.beam.max_nb_of_models*lang_data_combinations) as usize * data.sample_len * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0)+1.0);
+            None
+        } else {
+            let max_nb = (param.beam.max_nb_of_models as usize) * lang_data_combinations;
+            Some(GpuAssay::new(&data.X, &data.feature_selection, data.sample_len, max_nb, &param.gpu))
         }
     } else { None };
 
     gpu_assay
+}
+
+/// Create GPU assays for each fold when inner CV is enabled with GPU for beam algorithm
+/// Returns a vector of tuples (validation_assay, training_assay) for each fold
+fn create_gpu_assays_for_folds_beam(cv: &CV, param: &Param) -> Vec<(Option<GpuAssay>, Option<GpuAssay>)> {
+    if !param.general.gpu {
+        return vec![(None, None); cv.validation_folds.len()];
+    }
+
+    let languages: Vec<u8> = param.general.language.split(",").map(language).filter(|x| *x != POW2_LANG).collect();
+    let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
+    let lang_data_combinations = languages.len() * data_types.len();
+    
+    cv.validation_folds.iter().enumerate().map(|(idx, fold)| {
+        let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
+        
+        // GPU assay for validation fold
+        let gpu_max_nb_models_val = buffer_binding_size / (fold.sample_len * std::mem::size_of::<f32>());
+        let val_assay = if param.beam.max_nb_of_models == 0 {
+            warn!("GPU cannot be used for validation fold {}: max_nb_of_models is 0", idx);
+            None
+        } else if (param.beam.max_nb_of_models as usize) * lang_data_combinations > gpu_max_nb_models_val {
+            warn!("GPU cannot be used for validation fold {}: requires max {} models but {} requested",
+                idx, gpu_max_nb_models_val, param.beam.max_nb_of_models * lang_data_combinations as usize);
+            None
+        } else {
+            let max_nb = (param.beam.max_nb_of_models as usize) * lang_data_combinations;
+            Some(GpuAssay::new(&fold.X, &fold.feature_selection, fold.sample_len, max_nb, &param.gpu))
+        };
+        
+        // GPU assay for training set
+        let training_set = &cv.training_sets[idx];
+        let gpu_max_nb_models_train = buffer_binding_size / (training_set.sample_len * std::mem::size_of::<f32>());
+        let train_assay = if param.beam.max_nb_of_models == 0 {
+            warn!("GPU cannot be used for training set {}: max_nb_of_models is 0", idx);
+            None
+        } else if (param.beam.max_nb_of_models as usize) * lang_data_combinations > gpu_max_nb_models_train {
+            warn!("GPU cannot be used for training set {}: requires max {} models but {} requested",
+                idx, gpu_max_nb_models_train, param.beam.max_nb_of_models * lang_data_combinations as usize);
+            None
+        } else {
+            let max_nb = (param.beam.max_nb_of_models as usize) * lang_data_combinations;
+            Some(GpuAssay::new(&training_set.X, &training_set.feature_selection, training_set.sample_len, max_nb, &param.gpu))
+        };
+        
+        (val_assay, train_assay)
+    }).collect()
 }
 
 // still have to write unit-tests to confirm every function behavior in any situation
@@ -845,13 +897,13 @@ mod tests {
 
         assert!(!generated.individuals.is_empty(), "Should generate individuals");
 
-        let mut ternary_count = 0;
-        let mut binary_count = 0;
+        let mut _ternary_count = 0;
+        let mut _binary_count = 0;
 
         for individual in &generated.individuals {
             match individual.language {
-                TERNARY_LANG => ternary_count += 1,
-                BINARY_LANG => binary_count += 1,
+                TERNARY_LANG => _ternary_count += 1,
+                BINARY_LANG => _binary_count += 1,
                 _ => panic!("Unexpected language"),
             }
 
@@ -949,5 +1001,332 @@ mod tests {
             assert_eq!(pop.individuals.len(), 0);
             
         }
+    }
+
+    #[test]
+    fn test_binomial_coefficient_basic() {
+        assert_eq!(binomial_coefficient(5, 2), 10);
+        assert_eq!(binomial_coefficient(10, 3), 120);
+        assert_eq!(binomial_coefficient(5, 0), 1);
+        assert_eq!(binomial_coefficient(5, 5), 1);
+        assert_eq!(binomial_coefficient(1, 0), 1);
+        assert_eq!(binomial_coefficient(0, 0), 1);
+    }
+
+    #[test]
+    fn test_binomial_coefficient_edge_cases() {
+        // k > n should return 0
+        assert_eq!(binomial_coefficient(3, 5), 0);
+        
+        // Large but valid combinations
+        assert_eq!(binomial_coefficient(20, 10), 184756);
+        assert_eq!(binomial_coefficient(15, 5), 3003);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_binomial_coefficient_overflow() {
+        // Should panic on overflow (too many combinations)
+        binomial_coefficient(1000, 500);
+    }
+
+    #[test]
+    fn test_max_n_for_combinations_basic() {
+        // For k=2, target=10
+        // C(4,2) = 6, C(5,2) = 10, C(6,2) = 15
+        let n = max_n_for_combinations(2, 10);
+        assert_eq!(n, 5, "For k=2 and target=10, max n should be 5");
+        
+        // Verify boundaries
+        assert!(binomial_coefficient(n, 2) <= 10);
+        assert!(binomial_coefficient(n + 1, 2) > 10);
+    }
+
+    #[test]
+    fn test_max_n_for_combinations_various() {
+        // k=3, target=35
+        // C(6,3) = 20, C(7,3) = 35, C(8,3) = 56
+        let n = max_n_for_combinations(3, 35);
+        assert_eq!(n, 7);
+        
+        // k=1, target=10
+        let n = max_n_for_combinations(1, 10);
+        assert_eq!(n, 10);
+        
+        // k=2, target=1
+        let n = max_n_for_combinations(2, 1);
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn test_select_features_from_best() {
+        let mut pop = Population::new();
+        
+        let mut ind1 = Individual::new();
+        ind1.features = vec![(0, 1), (1, -1), (2, 1)].into_iter().collect();
+        ind1.auc = 0.9;
+        
+        let mut ind2 = Individual::new();
+        ind2.features = vec![(1, 1), (3, 1), (5, -1)].into_iter().collect();
+        ind2.auc = 0.85;
+        
+        let mut ind3 = Individual::new();
+        ind3.features = vec![(2, 1), (4, 1)].into_iter().collect();
+        ind3.auc = 0.88;
+        
+        pop.individuals = vec![ind1, ind2, ind3];
+        
+        let features = select_features_from_best(&pop);
+        
+        // Should contain all unique features
+        assert!(features.contains(&0), "Should contain feature 0");
+        assert!(features.contains(&1), "Should contain feature 1");
+        assert!(features.contains(&2), "Should contain feature 2");
+        assert!(features.contains(&3), "Should contain feature 3");
+        assert!(features.contains(&4), "Should contain feature 4");
+        assert!(features.contains(&5), "Should contain feature 5");
+        assert_eq!(features.len(), 6, "Should have 6 unique features");
+    }
+
+    #[test]
+    fn test_select_features_from_best_empty() {
+        let pop = Population::new();
+        let features = select_features_from_best(&pop);
+        assert!(features.is_empty(), "Empty population should return no features");
+    }
+
+    #[test]
+    fn test_select_features_from_best_single() {
+        let mut pop = Population::new();
+        let mut ind = Individual::new();
+        ind.features = vec![(10, 1), (20, -1)].into_iter().collect();
+        pop.individuals = vec![ind];
+        
+        let features = select_features_from_best(&pop);
+        assert_eq!(features.len(), 2);
+        assert!(features.contains(&10));
+        assert!(features.contains(&20));
+    }
+
+    #[test]
+    fn test_keep_n_best_model_within_collection() {
+        let mut pop1 = Population::new();
+        let mut ind1 = Individual::new();
+        ind1.auc = 0.9;
+        ind1.fit = 0.9;
+        pop1.individuals = vec![ind1];
+        
+        let mut pop2 = Population::new();
+        let mut ind2 = Individual::new();
+        ind2.auc = 0.95;
+        ind2.fit = 0.95;
+        let mut ind3 = Individual::new();
+        ind3.auc = 0.85;
+        ind3.fit = 0.85;
+        pop2.individuals = vec![ind2, ind3];
+        
+        let mut pop3 = Population::new();
+        let mut ind4 = Individual::new();
+        ind4.auc = 0.92;
+        ind4.fit = 0.92;
+        pop3.individuals = vec![ind4];
+        
+        let collection = vec![pop1, pop2, pop3];
+        let best = keep_n_best_model_within_collection(&collection, 2);
+        
+        assert_eq!(best.individuals.len(), 2, "Should keep only 2 best");
+        assert_eq!(best.individuals[0].auc, 0.95, "First should have highest AUC");
+        assert_eq!(best.individuals[1].auc, 0.92, "Second should have second highest AUC");
+    }
+
+    #[test]
+    fn test_keep_n_best_model_within_collection_request_more_than_available() {
+        let mut pop1 = Population::new();
+        let mut ind1 = Individual::new();
+        ind1.auc = 0.9;
+        ind1.fit = 0.9;
+        pop1.individuals = vec![ind1];
+        
+        let collection = vec![pop1];
+        let best = keep_n_best_model_within_collection(&collection, 10);
+        
+        // Should return all available (1) even though we asked for 10
+        assert_eq!(best.individuals.len(), 1);
+    }
+
+    #[test]
+    fn test_keep_n_best_model_within_collection_empty() {
+        let collection: Vec<Population> = vec![];
+        let best = keep_n_best_model_within_collection(&collection, 5);
+        assert_eq!(best.individuals.len(), 0);
+    }
+
+    #[test]
+    fn test_get_gpu_assay_disabled() {
+        // Create minimal data
+        let mut data = Data::new();
+        data.samples = vec!["s1".to_string(), "s2".to_string(), "s3".to_string()];
+        data.sample_len = 3;
+        data.feature_len = 5;
+        
+        let mut param = Param::default();
+        param.general.gpu = false;
+        
+        let gpu_assay = get_gpu_assay(&data, &param);
+        assert!(gpu_assay.is_none(), "GPU assay should be None when disabled");
+    }
+
+    #[test]
+    fn test_get_gpu_assay_enabled() {
+        // Create minimal data with some X values
+        let mut data = Data::new();
+        data.samples = vec!["s1".to_string(), "s2".to_string()];
+        data.sample_len = 2;
+        data.feature_len = 2;
+        data.feature_selection = vec![0, 1];
+        data.X.insert((0, 0), 1.0);
+        data.X.insert((0, 1), 0.5);
+        data.X.insert((1, 0), 0.3);
+        data.X.insert((1, 1), 0.8);
+        
+        let mut param = Param::default();
+        param.general.gpu = true;
+        param.gpu.fallback_to_cpu = true;
+        param.beam.max_nb_of_models = 10;
+        
+        let gpu_assay = get_gpu_assay(&data, &param);
+        assert!(gpu_assay.is_some(), "GPU assay should be created when enabled with fallback");
+    }
+
+    #[test]
+    fn test_increment_basic() {
+        // Create a population with one individual with k=2
+        let mut best_pop = Population::new();
+        let mut ind = Individual::new();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.k = 2;
+        best_pop.individuals = vec![ind];
+        
+        let features_to_keep = vec![0, 1, 2, 3];
+        let param = Param::default();
+        
+        let combinations = increment(best_pop, features_to_keep, &param);
+        
+        // Should generate combinations of size k+1 = 3
+        assert!(!combinations.is_empty(), "Should generate combinations");
+        for combo in &combinations {
+            assert_eq!(combo.len(), 3, "All combinations should have size k+1=3");
+        }
+        
+        // Combinations should include features from original + new features
+        // [0,1] + one of [2,3] → [0,1,2] or [0,1,3]
+        assert!(combinations.iter().any(|c| c.contains(&0) && c.contains(&1) && c.contains(&2)));
+        assert!(combinations.iter().any(|c| c.contains(&0) && c.contains(&1) && c.contains(&3)));
+    }
+
+    #[test]
+    fn test_combine_basic() {
+        let features = vec![0, 1, 2];
+        let k = 2;
+        
+        // Create minimal data
+        let mut data = Data::new();
+        data.samples = vec!["s1".to_string()];
+        data.sample_len = 1;
+        data.feature_len = 3;
+        
+        let mut param = Param::default();
+        param.beam.max_nb_of_models = 1000;
+        
+        let combinations = combine(features.clone(), k, &data, &param);
+        
+        // C(3,2) = 3 combinations expected
+        assert_eq!(combinations.len(), 3, "Should generate C(3,2)=3 combinations");
+        
+        // Check all expected combinations exist
+        let contains_01 = combinations.iter().any(|c| c.len() == 2 && c.contains(&0) && c.contains(&1));
+        let contains_02 = combinations.iter().any(|c| c.len() == 2 && c.contains(&0) && c.contains(&2));
+        let contains_12 = combinations.iter().any(|c| c.len() == 2 && c.contains(&1) && c.contains(&2));
+        
+        assert!(contains_01, "Should contain [0,1]");
+        assert!(contains_02, "Should contain [0,2]");
+        assert!(contains_12, "Should contain [1,2]");
+    }
+
+    #[test]
+    fn test_combine_with_limit() {
+        let features: Vec<usize> = (0..20).collect();
+        let k = 3;
+        
+        // Create minimal data with feature_class and feature_significance
+        let mut data = Data::new();
+        data.samples = vec!["s1".to_string()];
+        data.sample_len = 1;
+        data.feature_len = 20;
+        data.feature_selection = features.clone();
+        data.classes = vec!["class0".to_string(), "class1".to_string()];
+        
+        // Add feature classes and significance for the selection logic
+        for i in 0..20 {
+            data.feature_class.insert(i, if i % 2 == 0 { 0 } else { 1 });
+            data.feature_significance.insert(i, (20 - i) as f64); // Higher significance for lower indices
+        }
+        
+        let mut param = Param::default();
+        param.beam.max_nb_of_models = 100; // Limit to 100 models
+        
+        let combinations = combine(features.clone(), k, &data, &param);
+        
+        // C(20,3) = 1140, but we limited to 100
+        // The function should reduce the number of features considered
+        assert!(combinations.len() <= 1140, "Should not exceed total possible combinations");
+        
+        // May generate fewer combinations due to filtering, which is OK
+        // The important thing is it doesn't crash and respects some limit
+        if !combinations.is_empty() {
+            // All should have size k
+            for combo in &combinations {
+                assert_eq!(combo.len(), k, "All combinations should have size k");
+            }
+        }
+    }
+
+    #[test]
+    fn test_combine_k_equals_n() {
+        let features = vec![0, 1, 2];
+        let k = 3;
+        
+        let mut data = Data::new();
+        data.samples = vec!["s1".to_string()];
+        data.sample_len = 1;
+        data.feature_len = 3;
+        
+        let mut param = Param::default();
+        param.beam.max_nb_of_models = 1000;
+        
+        let combinations = combine(features.clone(), k, &data, &param);
+        
+        // C(3,3) = 1
+        assert_eq!(combinations.len(), 1);
+        assert_eq!(combinations[0].len(), 3);
+    }
+
+    #[test]
+    fn test_combine_k_greater_than_n() {
+        let features = vec![0, 1];
+        let k = 3;
+        
+        let mut data = Data::new();
+        data.samples = vec!["s1".to_string(), "s2".to_string()];
+        data.sample_len = 2;
+        data.feature_len = 2;
+        
+        let mut param = Param::default();
+        param.beam.max_nb_of_models = 1000;
+        
+        let combinations = combine(features.clone(), k, &data, &param);
+        
+        // C(2,3) = 0, impossible
+        assert!(combinations.is_empty(), "Should return empty when k > n");
     }
 }

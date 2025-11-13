@@ -44,7 +44,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let M = params.M;
     let threshold = params.threshold;
     let epsilon = params.epsilon;
-    let logCorrection = log(1/threshold);
+    let logCorrection = log(1.0/epsilon);  
 
     // Out-of-bounds => skip
     if (row >= S || col >= M) {

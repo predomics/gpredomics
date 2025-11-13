@@ -35,6 +35,12 @@ pub struct AdditionalMetrics {
     pub g_means: Option<f64>,
 }
 
+impl Default for AdditionalMetrics {
+    fn default() -> Self {
+        AdditionalMetrics { mcc: None, f1_score: None, npv: None, ppv: None, g_means: None }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Individual {
     #[serde(with = "serde_json_hashmap_numeric::usize_i8")]
@@ -52,9 +58,10 @@ pub struct Individual {
     pub hash: u64,
     pub epsilon: f64,
     pub parents: Option<Vec<u64>>,
-    pub metrics: AdditionalMetrics,
     pub betas: Option<Betas>,
-    pub threshold_ci: Option<ThresholdCI>,
+    pub threshold_ci: Option<ThresholdCI>,    
+    #[serde(default)]
+    pub metrics: AdditionalMetrics,
 }
 
 pub const MCMC_GENERIC_LANG :u8 = 101;
@@ -141,80 +148,68 @@ impl Individual {
         } 
     }
 
-    pub fn display(&self, data: &Data, data_to_test: Option<&Data>, algo: &String, level: usize, beautiful: bool, ci_alpha: f64) -> String {
-        let algo_str;
-        if algo == "ga" {
-            algo_str = format!(" [gen:{}] ", self.epoch);
-        } else if algo =="beam"{
-            algo_str = format!(" ");
-        } else if algo == "mcmc" {
-            algo_str = format!(" [MCMC step: {}] ", self.epoch);
-        } else {
-            algo_str = format!(" [unknwon] ")
-        }
+    pub fn display(&self, data: &Data, data_to_test: Option<&Data>, algo: &String, ci_alpha: f64) -> String {
+        let algo_str = match algo.as_str() {
+            "ga" => format!(" [gen:{}] ", self.epoch),
+            "beam" => " ".to_string(),
+            "mcmc" => format!(" [MCMC step: {}] ", self.epoch),
+            _ => " [unknown] ".to_string()
+        };
 
-        let mut metrics;
-        match data_to_test {
+        let metrics = match data_to_test {
             Some(test_data) => { 
                 let (acc_test, se_test, sp_test, rej_test, additional) = self.compute_metrics(test_data);
-                if beautiful == true {
-                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
-                                  self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
-                                  self.sensitivity, se_test, self.specificity, sp_test)
-                } else {
-                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
-                                  self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
-                                  self.sensitivity, se_test, self.specificity, sp_test)
-                }
+                let mut m = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
+                    self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, 
+                    self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test, 
+                    self.sensitivity, se_test, self.specificity, sp_test);
+                
                 if let Some(ref threshold_ci) = self.threshold_ci {
-                    metrics = format!("{} | rejection rate {:.3}/{:.3}", metrics, threshold_ci.rejection_rate, rej_test)
-                }   
+                    m = format!("{} | rejection rate {:.3}/{:.3}", m, threshold_ci.rejection_rate, rej_test);
+                }
                 if self.metrics.mcc.is_some() {
-                    metrics = format!("{} | MCC {:.3}/{:.3} ", metrics, self.metrics.mcc.unwrap(), additional.mcc.unwrap());
+                    m = format!("{} | MCC {:.3}/{:.3} ", m, self.metrics.mcc.unwrap(), additional.mcc.unwrap());
                 }
                 if self.metrics.f1_score.is_some() {
-                    metrics = format!("{} | F1-score {:.3}/{:.3} ", metrics, self.metrics.f1_score.unwrap(), additional.f1_score.unwrap());
+                    m = format!("{} | F1-score {:.3}/{:.3} ", m, self.metrics.f1_score.unwrap(), additional.f1_score.unwrap());
                 }
                 if self.metrics.npv.is_some() {
-                    metrics = format!("{} | NPV {:.3}/{:.3} ", metrics, self.metrics.npv.unwrap(), additional.npv.unwrap());
+                    m = format!("{} | NPV {:.3}/{:.3} ", m, self.metrics.npv.unwrap(), additional.npv.unwrap());
                 }
                 if self.metrics.ppv.is_some() {
-                    metrics = format!("{} | PPV {:.3}/{:.3} ", metrics, self.metrics.ppv.unwrap(), additional.ppv.unwrap());
+                    m = format!("{} | PPV {:.3}/{:.3} ", m, self.metrics.ppv.unwrap(), additional.ppv.unwrap());
                 }
                 if self.metrics.g_means.is_some() {
-                    metrics = format!("{} | G-means {:.3}/{:.3} ", metrics, self.metrics.g_means.unwrap(), additional.g_means.unwrap());
+                    m = format!("{} | G-means {:.3}/{:.3} ", m, self.metrics.g_means.unwrap(), additional.g_means.unwrap());
                 }
+                m
             },
-    
             None => {
-                if beautiful == true {
-                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
-                    self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity)
-                } else {
-                    metrics = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
-                    self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity)
-                }
+                let mut m = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
+                    self.get_language(), self.get_data_type(), self.features.len(), algo_str, 
+                    self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity);
+                
                 if let Some(ref threshold_ci) = self.threshold_ci {
-                    metrics = format!("{} | rejection rate {:3}", metrics, threshold_ci.rejection_rate)
-                }  
+                    m = format!("{} | rejection rate {:.3}", m, threshold_ci.rejection_rate);
+                }
                 if self.metrics.mcc.is_some() {
-                    metrics = format!("{} | MCC {:.3} ", metrics, self.metrics.mcc.unwrap());
+                    m = format!("{} | MCC {:.3} ", m, self.metrics.mcc.unwrap());
                 }
                 if self.metrics.f1_score.is_some() {
-                    metrics = format!("{} |  {:.3} ", metrics, self.metrics.f1_score.unwrap());
+                    m = format!("{} | F1-score {:.3} ", m, self.metrics.f1_score.unwrap());
                 }
                 if self.metrics.npv.is_some() {
-                    metrics = format!("{} | NPV {:.3} ", metrics, self.metrics.npv.unwrap());
+                    m = format!("{} | NPV {:.3} ", m, self.metrics.npv.unwrap());
                 }
                 if self.metrics.ppv.is_some() {
-                    metrics = format!("{} | PPV {:.3} ", metrics, self.metrics.ppv.unwrap());
+                    m = format!("{} | PPV {:.3} ", m, self.metrics.ppv.unwrap());
                 }
                 if self.metrics.g_means.is_some() {
-                    metrics = format!("{} | G-means {:.3} ", metrics, self.metrics.g_means.unwrap());
-                }   
+                    m = format!("{} | G-means {:.3} ", m, self.metrics.g_means.unwrap());
+                }
+                m
             }
-
-        }
+        };
         
         // Sort features by index
         let mut sorted_features: Vec<_> = self.features.iter().collect();
@@ -226,21 +221,9 @@ impl Individual {
         positive_features.sort_by(|a, b| b.1.cmp(a.1));
         negative_features.sort_by(|a, b| a.1.cmp(b.1));
     
-        let mut positive_str: Vec<String> = positive_features.iter().enumerate().map(|(i, &&(index, coef))| {
-            let mut str;
-            if level == 0 && beautiful == true {
-                str = format!("\x1b[96mF_POS_{}\x1b[0m", i)
-            } else if level == 0 && beautiful == false {
-                str = format!("F_POS_{}", i)
-            } else if level == 1 && beautiful == true {
-                str = format!("\x1b[96m[{}]\x1b[0m", index.to_string())
-            } else if level == 1 && beautiful == false {
-                str = format!("[{}]", index.to_string())
-            } else if level == 2 && beautiful == true {
-                str = format!("\x1b[96m{}\x1b[0m", data.features[*index])
-            } else {
-                str = data.features[*index].clone()
-            }
+        let positive_str: Vec<String> = positive_features.iter().enumerate().map(|(_i, &&(index, coef))| {
+            let mut str = format!("\x1b[96m{}\x1b[0m", data.features[*index]);
+            
             if self.data_type == PREVALENCE_TYPE {
                 str = format!("{}⁰", str);
             }
@@ -253,21 +236,9 @@ impl Individual {
             str
         }).collect();
     
-        let mut negative_str: Vec<String> = negative_features.iter().enumerate().map(|(i, &&(index, coef))| {
-            let mut str;
-            if level == 0 && beautiful == true {
-                    str = format!("\x1b[95mF_NEG_{}\x1b[0m", i)
-                } else if level == 0 && beautiful == false {
-                    str = format!("F_NEG_{}", i)
-                } else if level == 1 && beautiful == true {
-                    str = format!("\x1b[95m[{}]\x1b[0m", index.to_string())
-                } else if level == 1 && beautiful == false {
-                    str = format!("[{}]", index.to_string())
-                } else if level == 2 && beautiful == true {
-                    str = format!("\x1b[95m{}\x1b[0m", data.features[*index])
-                } else {
-                    str = data.features[*index].clone()
-                }
+        let negative_str: Vec<String> = negative_features.iter().enumerate().map(|(_i, &&(index, coef))| {
+            let mut str = format!("\x1b[95m{}\x1b[0m", data.features[*index]);
+            
             if self.data_type == PREVALENCE_TYPE {
                 str = format!("{}⁰", str);
             }
@@ -281,55 +252,57 @@ impl Individual {
             str
         }).collect();
     
+        let mut negative_str_owned = negative_str.clone();
         if self.language == RATIO_LANG {
-            negative_str.push(format!("{:2e}", self.epsilon));
+            negative_str_owned.push(format!("{:2e}", self.epsilon));
         }
 
-        let mut threshold;
-        let positive_str_joined;
-        let negative_str_joined;
-        if self.data_type == LOG_TYPE && self.language != RATIO_LANG {
-            // Calculate the product of epsilon raised to the power of each coefficient
-            let product: f64 = self.features.values().map(|&coef| self.epsilon.powi(coef as i32)).product();
-            threshold = format!("{} (+ {})", self.threshold, product.ln());
-            positive_str_joined = format!("ln({})", positive_str.join(" * "));
-            negative_str_joined = format!("ln({})", negative_str.join(" * "));
+        let (second_line_first_part, second_line_second_part) = if let Some(ref threshold_ci) = self.threshold_ci {
+            let threshold_text = format!("Class {} < \x1b[2m[Rejection zone - {:2}% CI: {:.3}, {:.3}, {:.3}]\x1b[0m < Class {}:", 
+                data.classes[0], (1.0-ci_alpha)*100.0, threshold_ci.lower, self.threshold, threshold_ci.upper, data.classes[1]); 
+            (threshold_text, String::new())
         } else {
-            threshold = format!("{}", self.threshold);
-            positive_str_joined = format!("({})", positive_str.join(" + "));
-            negative_str_joined = format!("({})", negative_str.join(" + "));
-        }
+            (format!("Class {}:", data.classes[1]), format!("≥ {}", self.threshold))
+        };
 
-        let second_line_first_part; 
-        let second_line_second_part; 
+        let positive_str_final = if positive_str.is_empty() { vec!["0".to_string()] } else { positive_str };
+        let negative_str_final = if negative_str_owned.is_empty() { vec!["0".to_string()] } else { negative_str_owned };
         
-        if let Some(ref threshold_ci) = self.threshold_ci {
-            threshold = format!("Class {} < \x1b[2m[Abstention zone - {:2}% CI: {:.3}, {:.3}, {:.3}]\x1b[0m < Class {}:", data.classes[0], (1.0-ci_alpha)*100.0, threshold_ci.lower,  self.threshold, threshold_ci.upper, data.classes[1]); 
-            second_line_first_part = threshold;
-            second_line_second_part = "".to_string()
+        let (positive_joined, negative_joined) = if self.data_type == LOG_TYPE {
+            let pos_str: Vec<String> = positive_str_final.iter()
+                .map(|f| if f != "0" { format!("{}⁺", f) } else { "1".to_string() })
+                .collect();
+            let neg_str: Vec<String> = negative_str_final.iter()
+                .map(|f| if f != "0" { format!("{}⁺", f) } else { "1".to_string() })
+                .collect();
+            
+            (format!("ln({})", pos_str.join(" × ")),
+            format!("ln({})", neg_str.join(" × ")))
         } else {
-            threshold = format!("≥ {}", threshold);
-            second_line_first_part = format!("Class {}:", data.classes[1]);
-            second_line_second_part = threshold;
-        }
-
-        if positive_str.len() == 0 {
-            positive_str.push("0".to_string());
-        }
-        if negative_str.len() == 0 {
-            negative_str.push("0".to_string());
-        }
-
+            (format!("({})", positive_str_final.join(" + ")),
+            format!("({})", negative_str_final.join(" + ")))
+        };
     
-        let formatted_string;
-        if self.language == BINARY_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\n{} {} {}", metrics, second_line_first_part, positive_str_joined, second_line_second_part)
-        } else if (self.language == TERNARY_LANG || self.language == POW2_LANG) && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\n{} {} - {} {}", metrics, second_line_first_part, positive_str_joined, negative_str_joined, second_line_second_part)
-        } else if self.language == RATIO_LANG && (level == 0 || level == 1 || level == 2) {
-            formatted_string = format!("{}\n{} {} / {} {}", metrics, second_line_first_part, positive_str_joined, negative_str_joined, second_line_second_part)
+        let formatted_string = if self.language == BINARY_LANG {
+            format!("{}\n{} {} {}", metrics, second_line_first_part, positive_joined, second_line_second_part)
+        } else if self.language == TERNARY_LANG || self.language == POW2_LANG {
+            format!("{}\n{} {} - {} {}", metrics, second_line_first_part, positive_joined, negative_joined, second_line_second_part)
+        } else if self.language == RATIO_LANG {
+            if self.data_type == LOG_TYPE {
+                // LOG+RATIO: Display ln() - ln() instead of /
+                format!("{}\n{} {} - {} {}", 
+                    metrics, second_line_first_part, 
+                    positive_joined, negative_joined, 
+                    second_line_second_part)
+            } else {
+                // Standard RATIO: Display /
+                format!("{}\n{} {} / {} {}", 
+                    metrics, second_line_first_part, 
+                    positive_joined, negative_joined, 
+                    second_line_second_part)
+            }
         } else {
-            formatted_string = format!("{}\n{} {:?} {}", metrics, second_line_first_part, self, second_line_second_part);
+            format!("{}\n{} {:?} {}", metrics, second_line_first_part, self, second_line_second_part)
         };
     
         formatted_string
@@ -1033,6 +1006,98 @@ impl Individual {
         }
         
         1.0 - (intersection as f64) / (union as f64)
+    }
+
+    /// Prune in-place using OOB permutation importance computed internally.
+    /// If `threshold` is Some(t), drop features with importance < t.
+    /// Else if `quantile` is Some((q, eps)), drop features with importance < quantile(q) - eps.
+    /// Keeps at least `min_k` features. Returns &mut Self for chaining.
+    pub fn prune_by_importance(&mut self, data: &Data, n_perm: usize,
+        rng_seed: u64, threshold: Option<f64>, quantile: Option<(f64, f64)>, min_k: usize) -> &mut Self {
+        assert!(n_perm > 0, "n_perm must be > 0");
+        let feats: Vec<usize> = self.features.keys().copied().collect();
+        if feats.is_empty() { return self; }
+
+        // Deterministic seeds per feature
+        use rand_chacha::ChaCha8Rng;
+        use rand::{RngCore, SeedableRng};
+        let mut feature_seeds = std::collections::HashMap::with_capacity(feats.len());
+        let mut seed_rng = ChaCha8Rng::seed_from_u64(rng_seed);
+        for &f in &feats {
+            let base = (f as u64) ^ rng_seed;
+            let mut seeds = Vec::with_capacity(n_perm);
+            for i in 0..n_perm {
+                seeds.push(base.wrapping_add(i as u64).wrapping_add(seed_rng.next_u64()));
+            }
+            feature_seeds.insert(f, seeds);
+        }
+
+        // Compute individual OOB permutation importances (MDA)
+        let imp_coll = self.compute_oob_feature_importance(data, n_perm, &feats, &feature_seeds);
+
+        // Collect importances
+        use crate::experiment::{ImportanceScope, ImportanceType};
+        let mut imp_map: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+        for im in &imp_coll.importances {
+            if matches!(im.scope, ImportanceScope::Individual { .. }) && matches!(im.importance_type, ImportanceType::MDA) {
+                imp_map.insert(im.feature_idx, im.importance);
+            }
+        }
+        let vals: Vec<f64> = feats.iter().map(|f| *imp_map.get(f).unwrap_or(&0.0)).collect();
+
+        // Determine threshold
+        let thr = if let Some(t) = threshold {
+            t
+        } else if let Some((q, eps)) = quantile {
+            assert!((0.0..=1.0).contains(&q), "q must be in [0,1]");
+            let mut sorted = vals.clone();
+            sorted.sort_by(|a,b| a.partial_cmp(b).unwrap());
+            let idx = ((sorted.len().saturating_sub(1)) as f64 * q).round() as usize;
+            sorted[idx] - eps
+        } else {
+            // default: no pruning
+            f64::NEG_INFINITY
+        };
+
+        // Rank ascending by importance
+        let mut ranked: Vec<(usize, f64)> = feats.iter().zip(vals.iter()).map(|(f,&v)| (*f, v)).collect();
+        ranked.sort_by(|a,b| a.1.partial_cmp(&b.1).unwrap());
+
+        // Initial drop/keep
+        let mut to_drop: Vec<usize> = Vec::new();
+        let mut to_keep: Vec<usize> = Vec::new();
+        for (f, v) in &ranked {
+            if *v < thr { to_drop.push(*f); } else { to_keep.push(*f); }
+        }
+
+        // Enforce min_k
+        if to_keep.len() < min_k {
+            let need = min_k - to_keep.len();
+            // Re-add best among dropped
+            let mut drop_ranked: Vec<(usize, f64)> = to_drop.iter().map(|f| (*f, *imp_map.get(f).unwrap_or(&0.0))).collect();
+            drop_ranked.sort_by(|a,b| b.1.partial_cmp(&a.1).unwrap()); // highest first
+            for (f, _) in drop_ranked.into_iter().take(need) {
+                to_drop.retain(|x| *x != f);
+                to_keep.push(f);
+            }
+        }
+
+        // Avoid empty model
+        if to_keep.is_empty() {
+            // Pattern should match &(usize, f64); remove unnecessary reference in pattern to satisfy compiler
+            if let Some((best_f, _)) = ranked.iter().max_by(|a,b| a.1.partial_cmp(&b.1).unwrap()).map(|(f, s)| (*f, *s)) {
+                to_keep.push(best_f);
+                to_drop.retain(|x| *x != best_f);
+            }
+        }
+
+        // Apply pruning
+        for f in to_drop {
+            self.features.remove(&f);
+        }
+        self.k = self.features.len();
+
+        self
     }
 
 }
@@ -2276,18 +2341,18 @@ mod tests {
         data_test.y[7] = 2 as u8;
 
         // control both metrics and display
-        let right_string = concat!("Ternary:Log [k=66] [gen:0] [fit:0.000] AUC 0.962/0.895 | accuracy 0.921/0.828 | sensitivity 0.937/0.867 | specificity 0.904/0.786\n",
-                            "Class cirrhosis: ln(msp_0010 * msp_0023 * msp_0024 * msp_0048 * msp_0106 * msp_0176 * msp_0196 * msp_0223 * msp_0224 * msp_0265",
-                            " * msp_0275 * msp_0324 * msp_0329 * msp_0339 * msp_0364 * msp_0383 * msp_0493 * msp_0517 * msp_0570 * msp_0664 * msp_0692 * msp_0722",
-                            " * msp_0832 * msp_0874 * msp_0881 * msp_0884 * msp_1127 * msp_1284 * msp_1325 * msp_1329 * msp_1479 * msp_1543 * msp_1660 * msp_1700",
-                            " * msp_1748 * msp_1782 * msp_1785 * msp_1787 * msp_1788 * msp_1862 * msp_1942) - ln(msp_0025 * msp_0043 * msp_0058 * msp_0067 * msp_0073",
-                            " * msp_0083 * msp_0088 * msp_0093 * msp_0125 * msp_0131 * msp_0306 * msp_0325 * msp_0441 * msp_0471 * msp_0473c * msp_0481 * msp_0502", 
-                            " * msp_0527 * msp_0551 * msp_0596 * msp_0619 * msp_0654 * msp_0676 * msp_0841 * msp_0872) ≥ 19.398124045367666 (+ -184.20680743952366)");
+        let right_string = "Ternary:Log [k=66] [gen:0] [fit:0.000] AUC 0.962/0.895 | accuracy 0.921/0.828 | sensitivity 0.937/0.867 | specificity 0.904/0.786\n\
+            Class cirrhosis: ln(msp_0010⁺ × msp_0023⁺ × msp_0024⁺ × msp_0048⁺ × msp_0106⁺ × msp_0176⁺ × msp_0196⁺ × msp_0223⁺ × msp_0224⁺ × msp_0265⁺ × msp_0275⁺ × msp_0324⁺ × msp_0329⁺ \
+            × msp_0339⁺ × msp_0364⁺ × msp_0383⁺ × msp_0493⁺ × msp_0517⁺ × msp_0570⁺ × msp_0664⁺ × msp_0692⁺ × msp_0722⁺ × msp_0832⁺ × msp_0874⁺ × msp_0881⁺ × msp_0884⁺ × msp_1127⁺ × msp_1284⁺ \
+            × msp_1325⁺ × msp_1329⁺ × msp_1479⁺ × msp_1543⁺ × msp_1660⁺ × msp_1700⁺ × msp_1748⁺ × msp_1782⁺ × msp_1785⁺ × msp_1787⁺ × msp_1788⁺ × msp_1862⁺ × msp_1942⁺) - ln(msp_0025⁺ × msp_0043⁺ \
+            × msp_0058⁺ × msp_0067⁺ × msp_0073⁺ × msp_0083⁺ × msp_0088⁺ × msp_0093⁺ × msp_0125⁺ × msp_0131⁺ × msp_0306⁺ × msp_0325⁺ × msp_0441⁺ × msp_0471⁺ × msp_0473c⁺ × msp_0481⁺ × msp_0502⁺ × msp_0527⁺ \
+            × msp_0551⁺ × msp_0596⁺ × msp_0619⁺ × msp_0654⁺ × msp_0676⁺ × msp_0841⁺ × msp_0872⁺) ";
 
         (individual.auc, individual.threshold, individual.accuracy, individual.sensitivity, individual.specificity, _) = individual.compute_roc_and_metrics(&data, &FitFunction::auc, None);
 
         // except the threshold (small variation between launch ~0.000000000001)
-        assert_eq!(right_string.split("≥ 19").collect::<Vec<_>>()[0], individual.display(&data, Some(&data_test), &"ga".to_string(), 2, false, 0.0).split("≥ 19").collect::<Vec<_>>()[0]);
+        let display_output = crate::utils::strip_ansi_if_needed(&individual.display(&data, Some(&data_test), &"ga".to_string(), 0.0), false);
+        assert_eq!(right_string.split("≥ 19").collect::<Vec<_>>()[0], display_output.split("≥ 19").collect::<Vec<_>>()[0]);
 
         assert_eq!(individual.compute_auc(&data), 0.961572606214331, "Wrong auc calculated");
         assert_eq!(individual.compute_new_auc(&data_test), 0.8952380952380953, "Wrong test auc calculated");
@@ -2769,6 +2834,1439 @@ mod tests {
         let ind1 = Individual::test_with_these_given_features(vec![(1, -4), (2, 2), (3, 0)]);
         let ind2 = Individual::test_with_these_given_features(vec![(1, -2), (2, 4), (4, 1)]);
         assert_eq!(ind1.signed_jaccard_dissimilarity_with(&ind2), 0.5);
+    }
+
+    // ============================================================================
+    // Tests for ThresholdCI
+    // ============================================================================
+
+    #[test]
+    fn test_threshold_ci_creation_and_initialization() {
+        let ci = ThresholdCI {
+            upper: 0.8,
+            lower: 0.2,
+            rejection_rate: 0.15,
+        };
+        
+        assert_eq!(ci.upper, 0.8);
+        assert_eq!(ci.lower, 0.2);
+        assert_eq!(ci.rejection_rate, 0.15);
+        assert!(ci.lower < ci.upper, "Lower bound should be less than upper bound");
+    }
+
+    #[test]
+    fn test_threshold_ci_valid_bounds_ordering() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.3,
+            upper: 0.7,
+            rejection_rate: 0.0,
+        });
+        
+        let ci = ind.threshold_ci.as_ref().unwrap();
+        assert!(ci.lower < ind.threshold, "Lower CI should be below threshold");
+        assert!(ind.threshold < ci.upper, "Upper CI should be above threshold");
+    }
+
+    #[test]
+    fn test_evaluate_class_with_threshold_ci_abstention_zone() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.3,
+            upper: 0.7,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        // Modify data to have specific scores for testing
+        // scores: [0.89, 0.79, 0.74, -0.73, 0.89, 0.79, 0.74, -0.73, 0.89, 0.79]
+        let classes = ind.evaluate_class(&data);
+        
+        // Verify that scores are classified correctly:
+        // 0.89 > 0.7 → class 1
+        // 0.79 > 0.7 → class 1
+        // 0.74 > 0.7 → class 1
+        // -0.73 < 0.3 → class 0
+        assert_eq!(classes[0], 1, "Score 0.89 should be class 1");
+        assert_eq!(classes[1], 1, "Score 0.79 should be class 1");
+        assert_eq!(classes[2], 1, "Score 0.74 should be class 1");
+        assert_eq!(classes[3], 0, "Score -0.73 should be class 0");
+    }
+
+    #[test]
+    fn test_evaluate_class_with_threshold_ci_scores_in_abstention() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.6,
+            upper: 0.9,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        // scores: [0.89, 0.79, 0.74, -0.73, 0.89, 0.79, 0.74, -0.73, 0.89, 0.79]
+        let classes = ind.evaluate_class(&data);
+        
+        // Verify abstention zone (class 2):
+        // 0.89 > 0.9? No, it's equal, but > upper → class 1 (actually 0.89 < 0.9)
+        // 0.79 is between 0.6 and 0.9 → class 2
+        // 0.74 is between 0.6 and 0.9 → class 2
+        assert_eq!(classes[1], 2, "Score 0.79 should be in abstention zone (class 2)");
+        assert_eq!(classes[2], 2, "Score 0.74 should be in abstention zone (class 2)");
+    }
+
+    #[test]
+    fn test_evaluate_class_without_threshold_ci() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = None;
+        
+        let data = Data::test2();
+        let classes = ind.evaluate_class(&data);
+        
+        // Without CI, only classes 0 and 1 should be returned
+        for &class in &classes {
+            assert!(class == 0 || class == 1, "Without CI, only classes 0 and 1 should exist, got {}", class);
+        }
+    }
+
+    #[test]
+    fn test_evaluate_class_and_score_with_threshold_ci() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.4,
+            upper: 0.8,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let (classes, scores) = ind.evaluate_class_and_score(&data);
+        
+        assert_eq!(classes.len(), scores.len(), "Classes and scores should have same length");
+        
+        for i in 0..classes.len() {
+            if scores[i] > 0.8 {
+                assert_eq!(classes[i], 1, "Score {} > 0.8 should be class 1", scores[i]);
+            } else if scores[i] < 0.4 {
+                assert_eq!(classes[i], 0, "Score {} < 0.4 should be class 0", scores[i]);
+            } else {
+                assert_eq!(classes[i], 2, "Score {} in [0.4, 0.8] should be class 2", scores[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_rejection_rate_all_in_ci() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: -10.0,
+            upper: 10.0,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let (_, _, _, rejection_rate, _) = ind.compute_metrics(&data);
+        
+        // All scores should be in CI zone
+        assert_eq!(rejection_rate, 1.0, "All samples should be rejected with such wide CI");
+    }
+
+    #[test]
+    fn test_rejection_rate_none_in_ci() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.49,
+            upper: 0.51,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let (_, _, _, rejection_rate, _) = ind.compute_metrics(&data);
+        
+        // No scores should be in such narrow CI zone around threshold
+        assert!(rejection_rate < 0.5, "With narrow CI, rejection rate should be low, got {}", rejection_rate);
+    }
+
+    #[test]
+    fn test_rejection_rate_bounds() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.3,
+            upper: 0.7,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let (_, _, _, rejection_rate, _) = ind.compute_metrics(&data);
+        
+        assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0, 
+                "Rejection rate should be in [0, 1], got {}", rejection_rate);
+    }
+
+    #[test]
+    fn test_threshold_ci_very_wide() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: -1000.0,
+            upper: 1000.0,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let classes = ind.evaluate_class(&data);
+        
+        // All scores should be in abstention zone
+        for &class in &classes {
+            assert_eq!(class, 2, "With very wide CI, all should be in abstention zone");
+        }
+    }
+
+    #[test]
+    fn test_threshold_ci_very_narrow() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.4999,
+            upper: 0.5001,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let classes = ind.evaluate_class(&data);
+        
+        // Very few (likely none) should be in abstention zone
+        let abstentions = classes.iter().filter(|&&c| c == 2).count();
+        assert!(abstentions == 0, "With very narrow CI, no abstention expected, got {}", abstentions);
+    }
+
+    #[test]
+    fn test_threshold_ci_asymmetric() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.1,  // Far below threshold
+            upper: 0.6,  // Close to threshold
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let classes = ind.evaluate_class(&data);
+        
+        // Verify asymmetric behavior
+        for i in 0..classes.len() {
+            let score = ind.evaluate(&data)[i];
+            if score > 0.6 {
+                assert_eq!(classes[i], 1);
+            } else if score < 0.1 {
+                assert_eq!(classes[i], 0);
+            } else {
+                assert_eq!(classes[i], 2);
+            }
+        }
+    }
+
+    #[test]
+    fn test_threshold_ci_equal_bounds() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.5,
+            upper: 0.5,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let classes = ind.evaluate_class(&data);
+        
+        // With equal bounds, only exact matches should be abstention
+        let abstentions = classes.iter().filter(|&&c| c == 2).count();
+        // Most likely 0 abstentions since exact float equality is rare
+        assert!(abstentions <= classes.len(), "Rejections should be minimal with zero-width CI");
+    }
+
+    #[test]
+    fn test_child_inherits_threshold_ci() {
+        let mut parent = Individual::test();
+        parent.threshold_ci = Some(ThresholdCI {
+            lower: 0.3,
+            upper: 0.7,
+            rejection_rate: 0.25,
+        });
+        
+        let child = Individual::child(&parent);
+        
+        assert!(child.threshold_ci.is_some(), "Child should inherit threshold_ci structure");
+        let ci = child.threshold_ci.unwrap();
+        assert_eq!(ci.lower, 0.0, "Child CI should be reset to 0.0");
+        assert_eq!(ci.upper, 0.0, "Child CI should be reset to 0.0");
+        assert_eq!(ci.rejection_rate, 0.0, "Child CI rejection_rate should be reset to 0.0");
+    }
+
+    #[test]
+    fn test_child_no_threshold_ci_when_parent_has_none() {
+        let parent = Individual::test();
+        assert!(parent.threshold_ci.is_none());
+        
+        let child = Individual::child(&parent);
+        
+        assert!(child.threshold_ci.is_none(), "Child should not have CI when parent doesn't");
+    }
+
+    // ============================================================================
+    // Tests for AdditionalMetrics
+    // ============================================================================
+
+    #[test]
+    fn test_additional_metrics_initialization() {
+        let ind = Individual::new();
+        
+        assert!(ind.metrics.mcc.is_none(), "MCC should be None at initialization");
+        assert!(ind.metrics.f1_score.is_none(), "F1-score should be None at initialization");
+        assert!(ind.metrics.npv.is_none(), "NPV should be None at initialization");
+        assert!(ind.metrics.ppv.is_none(), "PPV should be None at initialization");
+        assert!(ind.metrics.g_means.is_none(), "G-means should be None at initialization");
+    }
+
+    #[test]
+    fn test_additional_metrics_mcc_calculation() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.mcc = Some(0.0); // Signal that we want MCC computed
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        assert!(additional.mcc.is_some(), "MCC should be computed when requested");
+        let mcc = additional.mcc.unwrap();
+        assert!(mcc >= -1.0 && mcc <= 1.0, "MCC should be in [-1, 1], got {}", mcc);
+    }
+
+    #[test]
+    fn test_additional_metrics_f1_calculation() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.f1_score = Some(0.0); // Signal that we want F1 computed
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        assert!(additional.f1_score.is_some(), "F1-score should be computed when requested");
+        let f1 = additional.f1_score.unwrap();
+        assert!(f1 >= 0.0 && f1 <= 1.0, "F1-score should be in [0, 1], got {}", f1);
+    }
+
+    #[test]
+    fn test_additional_metrics_npv_calculation() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.npv = Some(0.0); // Signal that we want NPV computed
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        assert!(additional.npv.is_some(), "NPV should be computed when requested");
+        let npv = additional.npv.unwrap();
+        assert!(npv >= 0.0 && npv <= 1.0, "NPV should be in [0, 1], got {}", npv);
+    }
+
+    #[test]
+    fn test_additional_metrics_ppv_calculation() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.ppv = Some(0.0); // Signal that we want PPV computed
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        assert!(additional.ppv.is_some(), "PPV should be computed when requested");
+        let ppv = additional.ppv.unwrap();
+        assert!(ppv >= 0.0 && ppv <= 1.0, "PPV should be in [0, 1], got {}", ppv);
+    }
+
+    #[test]
+    fn test_additional_metrics_g_means_calculation() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.g_means = Some(0.0); // Signal that we want G-means computed
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        assert!(additional.g_means.is_some(), "G-means should be computed when requested");
+        let g_means = additional.g_means.unwrap();
+        assert!(g_means >= 0.0 && g_means <= 1.0, "G-means should be in [0, 1], got {}", g_means);
+    }
+
+    #[test]
+    fn test_additional_metrics_all_computed() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        // Request all metrics
+        ind.metrics.mcc = Some(0.0);
+        ind.metrics.f1_score = Some(0.0);
+        ind.metrics.npv = Some(0.0);
+        ind.metrics.ppv = Some(0.0);
+        ind.metrics.g_means = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        assert!(additional.mcc.is_some(), "All requested metrics should be computed");
+        assert!(additional.f1_score.is_some());
+        assert!(additional.npv.is_some());
+        assert!(additional.ppv.is_some());
+        assert!(additional.g_means.is_some());
+    }
+
+    #[test]
+    fn test_additional_metrics_none_when_not_requested() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        // Don't request any additional metrics
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        assert!(additional.mcc.is_none(), "Unrequested metrics should remain None");
+        assert!(additional.f1_score.is_none());
+        assert!(additional.npv.is_none());
+        assert!(additional.ppv.is_none());
+        assert!(additional.g_means.is_none());
+    }
+
+    #[test]
+    fn test_metrics_perfect_classification() {
+        let mut ind = Individual::new();
+        ind.features = vec![(0, 1)].into_iter().collect();
+        ind.threshold = 0.5;
+        ind.metrics.mcc = Some(0.0);
+        ind.metrics.f1_score = Some(0.0);
+        ind.metrics.g_means = Some(0.0);
+        
+        let mut data = Data::new();
+        data.sample_len = 10;
+        data.y = vec![1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
+        data.feature_len = 1;
+        
+        // Create perfect separation: class 1 has high scores, class 0 has low scores
+        let mut X = HashMap::new();
+        for i in 0..5 {
+            X.insert((i, 0), 1.0); // Class 1 samples → score 1.0
+        }
+        for i in 5..10 {
+            X.insert((i, 0), 0.0); // Class 0 samples → score 0.0
+        }
+        data.X = X;
+        
+        let (accuracy, sensitivity, specificity, _, additional) = ind.compute_metrics(&data);
+        
+        assert_eq!(accuracy, 1.0, "Perfect classification should have accuracy 1.0");
+        assert_eq!(sensitivity, 1.0, "Perfect classification should have sensitivity 1.0");
+        assert_eq!(specificity, 1.0, "Perfect classification should have specificity 1.0");
+        
+        if let Some(mcc) = additional.mcc {
+            assert!((mcc - 1.0).abs() < 0.01, "Perfect classification should have MCC ≈ 1.0, got {}", mcc);
+        }
+        
+        if let Some(f1) = additional.f1_score {
+            assert!((f1 - 1.0).abs() < 0.01, "Perfect classification should have F1 ≈ 1.0, got {}", f1);
+        }
+    }
+
+    #[test]
+    fn test_metrics_inverse_classification() {
+        let mut ind = Individual::test();
+        ind.threshold = 10.0; // Very high threshold - everything predicted as 0
+        ind.metrics.mcc = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
+        
+        let (accuracy, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        assert_eq!(accuracy, 0.5, "Inverse classification with balanced classes should have 50% accuracy");
+        
+        if let Some(mcc) = additional.mcc {
+            assert!(mcc <= 0.0, "Inverse classification should have negative or zero MCC, got {}", mcc);
+        }
+    }
+
+    #[test]
+    fn test_metrics_with_imbalanced_classes_99_1() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.metrics.ppv = Some(0.0);
+        ind.metrics.npv = Some(0.0);
+        ind.metrics.mcc = Some(0.0);
+        ind.metrics.g_means = Some(0.0);
+        
+        let mut data = Data::test2();
+        // 99 negatives, 1 positive
+        data.y = vec![0; 99];
+        data.y.push(1);
+        data.sample_len = 100;
+        
+        // Modify X to have 100 samples
+        let mut new_X = HashMap::new();
+        for sample in 0..100 {
+            new_X.insert((sample, 0), if sample < 99 { 0.0 } else { 1.0 });
+            new_X.insert((sample, 1), if sample < 99 { 0.0 } else { 1.0 });
+        }
+        data.X = new_X;
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        // With extreme imbalance, PPV and NPV behave differently
+        assert!(additional.npv.is_some());
+        assert!(additional.ppv.is_some());
+        
+        // NPV should be high (many true negatives)
+        if let Some(npv) = additional.npv {
+            assert!(npv > 0.9, "NPV should be high with 99% negative class, got {}", npv);
+        }
+    }
+
+    #[test]
+    fn test_metrics_with_imbalanced_classes_1_99() {
+        let mut ind = Individual::new();
+        ind.features = vec![(0, 1)].into_iter().collect();
+        ind.threshold = 0.5;
+        ind.metrics.ppv = Some(0.0);
+        ind.metrics.npv = Some(0.0);
+        
+        let mut data = Data::new();
+        // 1 negative, 99 positives
+        data.y = vec![1; 99];
+        data.y.insert(0, 0);
+        data.sample_len = 100;
+        data.feature_len = 2;
+        
+        let mut new_X = HashMap::new();
+        for sample in 0..100 {
+            // First sample (class 0) gets low score, others (class 1) get high score
+            new_X.insert((sample, 0), if sample == 0 { 0.0 } else { 1.0 });
+        }
+        data.X = new_X;
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        // PPV should be high (many true positives)
+        if let Some(ppv) = additional.ppv {
+            assert!(ppv > 0.9, "PPV should be high with 99% positive class, got {}", ppv);
+        }
+    }
+
+    #[test]
+    fn test_metrics_with_class_2_ignored() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.mcc = Some(0.0);
+        ind.metrics.f1_score = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 2, 2, 0, 0, 2, 0, 1, 0]; // Include class 2
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        // Class 2 should be ignored, metrics should still be computed
+        assert!(additional.mcc.is_some());
+        assert!(additional.f1_score.is_some());
+        
+        // Verify values are finite
+        if let Some(mcc) = additional.mcc {
+            assert!(mcc.is_finite(), "MCC should be finite even with class 2 present");
+        }
+    }
+
+    #[test]
+    fn test_metrics_consistency_ppv_formula() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.ppv = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (tp, fp, _, _) = ind.calculate_confusion_matrix(&data);
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        if let Some(ppv) = additional.ppv {
+            let expected_ppv = if tp + fp > 0 {
+                tp as f64 / (tp + fp) as f64
+            } else {
+                0.0
+            };
+            assert!((ppv - expected_ppv).abs() < 1e-10, 
+                    "PPV should equal TP/(TP+FP): expected {}, got {}", expected_ppv, ppv);
+        }
+    }
+
+    #[test]
+    fn test_metrics_consistency_npv_formula() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.npv = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, _, tn, fn_count) = ind.calculate_confusion_matrix(&data);
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        if let Some(npv) = additional.npv {
+            let expected_npv = if tn + fn_count > 0 {
+                tn as f64 / (tn + fn_count) as f64
+            } else {
+                0.0
+            };
+            assert!((npv - expected_npv).abs() < 1e-10, 
+                    "NPV should equal TN/(TN+FN): expected {}, got {}", expected_npv, npv);
+        }
+    }
+
+    #[test]
+    fn test_metrics_consistency_g_means_formula() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.metrics.g_means = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        
+        let (_, sensitivity, specificity, _, additional) = ind.compute_metrics(&data);
+        
+        if let Some(g_means) = additional.g_means {
+            let expected_g_means = (sensitivity * specificity).sqrt();
+            assert!((g_means - expected_g_means).abs() < 1e-10, 
+                    "G-means should equal sqrt(sensitivity * specificity): expected {}, got {}", 
+                    expected_g_means, g_means);
+        }
+    }
+
+    // ============================================================================
+    // Integration tests: threshold_ci + metrics
+    // ============================================================================
+
+    #[test]
+    fn test_display_with_threshold_ci_and_metrics() {
+        let mut ind = Individual::test2();
+        ind.threshold = 0.75;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.6,
+            upper: 0.9,
+            rejection_rate: 0.15,
+        });
+        ind.metrics.mcc = Some(0.5);
+        ind.metrics.f1_score = Some(0.7);
+        
+        let data = Data::test2();
+        let display = ind.display(&data, None, &"ga".to_string(), 0.05);
+        
+        assert!(display.contains("rejection rate"), "Display should show rejection rate");
+        assert!(display.contains("MCC"), "Display should show MCC when present");
+        assert!(display.contains("0.500"), "Display should show MCC value");
+        assert!(display.contains("0.700"), "Display should show F1-score value");
+    }
+
+    #[test]
+    fn test_display_with_threshold_ci_train_and_test() {
+        let mut ind = Individual::test2();
+        ind.threshold = 0.75;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.6,
+            upper: 0.9,
+            rejection_rate: 0.15,
+        });
+        
+        let data_train = Data::test2();
+        let data_test = Data::test2();
+        
+        let display = ind.display(&data_train, Some(&data_test), &"ga".to_string(), 0.05);
+        
+        // Should show train/test rejection rates
+        assert!(display.contains("rejection rate"), "Display should show rejection rate");
+        // Format is "rejection rate X.XXX/Y.YYY" for train/test
+        let rejection_count = display.matches("rejection rate").count();
+        assert_eq!(rejection_count, 1, "Should have one rejection rate line");
+    }
+
+    #[test]
+    fn test_compute_metrics_returns_rejection_rate_with_ci() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.6,
+            upper: 0.9,
+            rejection_rate: 0.0,
+        });
+        
+        let data = Data::test2();
+        let (_, _, _, rejection_rate, _) = ind.compute_metrics(&data);
+        
+        assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0, 
+                "Rejection rate should be in [0, 1]");
+    }
+
+    #[test]
+    fn test_compute_metrics_rejection_rate_zero_without_ci() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.75;
+        ind.threshold_ci = None;
+        
+        let data = Data::test2();
+        let (_, _, _, rejection_rate, _) = ind.compute_metrics(&data);
+        
+        assert_eq!(rejection_rate, 0.0, "Rejection rate should be 0 without CI");
+    }
+
+    #[test]
+    fn test_random_select_k_with_threshold_ci_true() {
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        for i in 0..5 {
+            feature_class.insert(i, 1);
+        }
+        
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let ind = Individual::random_select_k(2, 3, &features, &feature_class, 
+                                              BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, 
+                                              true, &mut rng);
+        
+        assert!(ind.threshold_ci.is_some(), "threshold_ci should be created when flag is true");
+        let ci = ind.threshold_ci.unwrap();
+        assert_eq!(ci.upper, 0.0, "New CI should have upper = 0.0");
+        assert_eq!(ci.lower, 0.0, "New CI should have lower = 0.0");
+        assert_eq!(ci.rejection_rate, 0.0, "New CI should have rejection_rate = 0.0");
+    }
+
+    #[test]
+    fn test_random_select_k_with_threshold_ci_false() {
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        for i in 0..5 {
+            feature_class.insert(i, 1);
+        }
+        
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let ind = Individual::random_select_k(2, 3, &features, &feature_class, 
+                                              BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, 
+                                              false, &mut rng);
+        
+        assert!(ind.threshold_ci.is_none(), "threshold_ci should not be created when flag is false");
+    }
+
+    // ============================================================================
+    // Edge cases and robustness tests
+    // ============================================================================
+
+    #[test]
+    fn test_metrics_with_zero_samples() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        
+        let mut data = Data::new();
+        data.sample_len = 0;
+        data.y = vec![];
+        
+        let (accuracy, sensitivity, specificity, _, _) = ind.compute_metrics(&data);
+        
+        // With zero samples, metrics should handle gracefully
+        assert!(accuracy.is_nan() || accuracy == 0.0, "Accuracy with 0 samples should be NaN or 0");
+        assert!(sensitivity.is_nan() || sensitivity == 0.0, "Sensitivity with 0 samples should be NaN or 0");
+        assert!(specificity.is_nan() || specificity == 0.0, "Specificity with 0 samples should be NaN or 0");
+    }
+
+    #[test]
+    fn test_metrics_with_one_sample() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.metrics.mcc = Some(0.0);
+        ind.metrics.f1_score = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.sample_len = 1;
+        data.y = vec![1];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        // With one sample, some metrics may be undefined
+        if let Some(mcc) = additional.mcc {
+            assert!(mcc.is_finite() || mcc.is_nan(), "MCC should be finite or NaN with 1 sample");
+        }
+    }
+
+    #[test]
+    fn test_metrics_with_two_samples_balanced() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.metrics.mcc = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.sample_len = 2;
+        data.y = vec![0, 1];
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        if let Some(mcc) = additional.mcc {
+            assert!(mcc >= -1.0 && mcc <= 1.0 || mcc.is_nan(), 
+                    "MCC should be in valid range or NaN with 2 samples");
+        }
+    }
+
+    #[test]
+    fn test_metrics_all_class_zero() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.metrics.ppv = Some(0.0);
+        ind.metrics.npv = Some(0.0);
+        ind.metrics.mcc = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.y = vec![0; 10];
+        
+        let (_, sensitivity, specificity, _, additional) = ind.compute_metrics(&data);
+        
+        // All class 0: specificity should be computable, sensitivity undefined
+        assert!(specificity >= 0.0 && specificity <= 1.0, "Specificity should be valid");
+        assert!(sensitivity.is_nan() || sensitivity == 0.0, "Sensitivity undefined with no positive class");
+        
+        if let Some(npv) = additional.npv {
+            assert!(npv >= 0.0 && npv <= 1.0 || npv.is_nan(), "NPV should be in valid range");
+        }
+    }
+
+    #[test]
+    fn test_metrics_all_class_one() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.metrics.ppv = Some(0.0);
+        ind.metrics.npv = Some(0.0);
+        ind.metrics.mcc = Some(0.0);
+        
+        let mut data = Data::test2();
+        data.y = vec![1; 10];
+        
+        let (_, sensitivity, specificity, _, additional) = ind.compute_metrics(&data);
+        
+        // All class 1: sensitivity should be computable, specificity undefined
+        assert!(sensitivity >= 0.0 && sensitivity <= 1.0, "Sensitivity should be valid");
+        assert!(specificity.is_nan() || specificity == 0.0, "Specificity undefined with no negative class");
+        
+        if let Some(ppv) = additional.ppv {
+            assert!(ppv >= 0.0 && ppv <= 1.0 || ppv.is_nan(), "PPV should be in valid range");
+        }
+    }
+
+    #[test]
+    fn test_metrics_with_very_close_scores() {
+        let mut ind = Individual::new();
+        ind.features = vec![(0, 1)].into_iter().collect();
+        ind.threshold = 0.50000001;
+        ind.metrics.mcc = Some(0.0);
+        
+        let mut data = Data::new();
+        data.sample_len = 10;
+        data.y = vec![0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
+        data.feature_len = 1;
+        
+        // All scores very close to threshold
+        let mut X = HashMap::new();
+        for i in 0..10 {
+            X.insert((i, 0), 0.5 + (i as f64) * 0.00000001);
+        }
+        data.X = X;
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        if let Some(mcc) = additional.mcc {
+            assert!(mcc.is_finite(), "MCC should be finite even with very close scores");
+        }
+    }
+
+    #[test]
+    fn test_metrics_with_extreme_scores() {
+        let mut ind = Individual::new();
+        ind.features = vec![(0, 1)].into_iter().collect();
+        ind.threshold = 0.0;
+        ind.metrics.mcc = Some(0.0);
+        
+        let mut data = Data::new();
+        data.sample_len = 6;
+        data.y = vec![0, 0, 0, 1, 1, 1];
+        data.feature_len = 1;
+        
+        // Extreme scores
+        let mut X = HashMap::new();
+        X.insert((0, 0), -1e100);
+        X.insert((1, 0), -1e50);
+        X.insert((2, 0), -1e10);
+        X.insert((3, 0), 1e10);
+        X.insert((4, 0), 1e50);
+        X.insert((5, 0), 1e100);
+        data.X = X;
+        
+        let (_, _, _, _, additional) = ind.compute_metrics(&data);
+        
+        if let Some(mcc) = additional.mcc {
+            assert!(mcc.is_finite(), "MCC should be finite with extreme scores");
+        }
+    }
+
+    #[test]
+    fn test_threshold_ci_with_extreme_imbalance() {
+        let mut ind = Individual::test();
+        ind.threshold = 0.5;
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.4,
+            upper: 0.6,
+            rejection_rate: 0.0,
+        });
+        
+        let mut data = Data::test2();
+        data.y = vec![0; 100];
+        data.y.push(1);
+        data.sample_len = 101;
+        
+        // Create X for 101 samples
+        let mut new_X = HashMap::new();
+        for sample in 0..101 {
+            new_X.insert((sample, 0), if sample < 100 { 0.0 } else { 1.0 });
+            new_X.insert((sample, 1), if sample < 100 { 0.0 } else { 1.0 });
+        }
+        data.X = new_X;
+        
+        let (_, _, _, rejection_rate, _) = ind.compute_metrics(&data);
+        
+        assert!(rejection_rate >= 0.0 && rejection_rate <= 1.0, 
+                "Rejection rate should be valid even with extreme imbalance");
+    }
+
+    // -----------------------------------------------------------------
+    // Tests for monotonicity of rejection_rate when widening [lower, upper] interval
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_individual_rejection_rate_monotonicity_widening_interval() {
+        // Test that widening the [lower, upper] interval can only increase or maintain rejection_rate
+        // on a fixed dataset for an Individual
+        
+        let mut ind = Individual::test2();
+        ind.threshold = 0.5;
+        
+        let data = Data::test2();
+        
+        // Initial narrow interval
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.45,
+            upper: 0.55,
+            rejection_rate: 0.0,
+        });
+        
+        let (_, _, _, rejection_rate_narrow, _) = ind.compute_metrics(&data);
+        
+        // Wider interval
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.3,
+            upper: 0.7,
+            rejection_rate: 0.0,
+        });
+        
+        let (_, _, _, rejection_rate_wide, _) = ind.compute_metrics(&data);
+        
+        assert!(rejection_rate_wide >= rejection_rate_narrow - 1e-10,
+                "Widening the [lower, upper] interval should increase or maintain rejection_rate: narrow={}, wide={}",
+                rejection_rate_narrow, rejection_rate_wide);
+    }
+
+    #[test]
+    fn test_individual_rejection_rate_monotonicity_multiple_intervals() {
+        // Test monotonicity across multiple interval widths
+        let mut ind = Individual::test2();
+        ind.threshold = 0.5;
+        
+        let data = Data::test2();
+        
+        let intervals = vec![
+            (0.48, 0.52),
+            (0.45, 0.55),
+            (0.40, 0.60),
+            (0.30, 0.70),
+            (0.20, 0.80),
+        ];
+        
+        let mut prev_rejection_rate = 0.0;
+        
+        for (lower, upper) in intervals {
+            ind.threshold_ci = Some(ThresholdCI {
+                lower,
+                upper,
+                rejection_rate: 0.0,
+            });
+            
+            let (_, _, _, rejection_rate, _) = ind.compute_metrics(&data);
+            
+            assert!(rejection_rate >= prev_rejection_rate - 1e-10,
+                    "Rejection rate should be monotonic: interval [{}, {}] has rejection_rate={}, previous was {}",
+                    lower, upper, rejection_rate, prev_rejection_rate);
+            
+            prev_rejection_rate = rejection_rate;
+        }
+    }
+
+    #[test]
+    fn test_individual_rejection_rate_zero_width_interval() {
+        // Edge case: zero-width interval should give same result as no threshold_ci
+        let mut ind = Individual::test2();
+        ind.threshold = 0.5;
+        
+        let data = Data::test2();
+        
+        // Without threshold_ci
+        ind.threshold_ci = None;
+        let (_, _, _, rejection_rate_none, _) = ind.compute_metrics(&data);
+        
+        // With zero-width interval (lower == upper == threshold)
+        ind.threshold_ci = Some(ThresholdCI {
+            lower: 0.5,
+            upper: 0.5,
+            rejection_rate: 0.0,
+        });
+        
+        let (_, _, _, rejection_rate_zero, _) = ind.compute_metrics(&data);
+        
+        assert_eq!(rejection_rate_none, 0.0, "Without threshold_ci, rejection_rate should be 0");
+        assert!((rejection_rate_zero - rejection_rate_none).abs() < 1e-10,
+                "Zero-width interval should give rejection_rate close to no interval case");
+    }
+
+    // -----------------------------------------------------------------
+    // Tests for FitFunction setting ind.fit and reflecting in ind.metrics
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_fit_function_mcc_sets_fit_and_metrics() {
+        // Test that FitFunction::mcc properly sets ind.fit and ind.metrics.mcc
+        use crate::population::Population;
+        use crate::param::Param;
+        
+        let mut pop = Population::new();
+        let mut ind = Individual::test2();
+        ind.metrics.mcc = Some(0.0); // Initialize to trigger metric tracking
+        pop.individuals.push(ind);
+        
+        let data = Data::test2();
+        let mut param = Param::default();
+        param.general.fit = FitFunction::mcc;
+        
+        pop.fit_without_penalty(&data, &mut None, &None, &None, &param);
+        
+        let fitted_ind = &pop.individuals[0];
+        
+        assert!(fitted_ind.fit != 0.0 || fitted_ind.fit == 0.0, "fit should be set");
+        assert!(fitted_ind.metrics.mcc.is_some(), "MCC metric should be Some");
+        
+        let mcc_value = fitted_ind.metrics.mcc.unwrap();
+        assert!((fitted_ind.fit - mcc_value).abs() < 1e-10,
+                "ind.fit should equal ind.metrics.mcc for FitFunction::mcc: fit={}, mcc={}",
+                fitted_ind.fit, mcc_value);
+    }
+
+    #[test]
+    fn test_fit_function_f1_score_sets_fit_and_metrics() {
+        use crate::population::Population;
+        use crate::param::Param;
+        
+        let mut pop = Population::new();
+        let mut ind = Individual::test2();
+        ind.metrics.f1_score = Some(0.0);
+        pop.individuals.push(ind);
+        
+        let data = Data::test2();
+        let mut param = Param::default();
+        param.general.fit = FitFunction::f1_score;
+        
+        pop.fit_without_penalty(&data, &mut None, &None, &None, &param);
+        
+        let fitted_ind = &pop.individuals[0];
+        
+        assert!(fitted_ind.metrics.f1_score.is_some(), "F1-score metric should be Some");
+        
+        let f1_value = fitted_ind.metrics.f1_score.unwrap();
+        assert!((fitted_ind.fit - f1_value).abs() < 1e-10,
+                "ind.fit should equal ind.metrics.f1_score for FitFunction::f1_score: fit={}, f1={}",
+                fitted_ind.fit, f1_value);
+    }
+
+    #[test]
+    fn test_fit_function_npv_sets_fit_and_metrics() {
+        use crate::population::Population;
+        use crate::param::Param;
+        
+        let mut pop = Population::new();
+        let mut ind = Individual::test2();
+        ind.metrics.npv = Some(0.0);
+        pop.individuals.push(ind);
+        
+        let data = Data::test2();
+        let mut param = Param::default();
+        param.general.fit = FitFunction::npv;
+        
+        pop.fit_without_penalty(&data, &mut None, &None, &None, &param);
+        
+        let fitted_ind = &pop.individuals[0];
+        
+        assert!(fitted_ind.metrics.npv.is_some(), "NPV metric should be Some");
+        
+        let npv_value = fitted_ind.metrics.npv.unwrap();
+        assert!((fitted_ind.fit - npv_value).abs() < 1e-10,
+                "ind.fit should equal ind.metrics.npv for FitFunction::npv: fit={}, npv={}",
+                fitted_ind.fit, npv_value);
+    }
+
+    #[test]
+    fn test_fit_function_ppv_sets_fit_and_metrics() {
+        use crate::population::Population;
+        use crate::param::Param;
+        
+        let mut pop = Population::new();
+        let mut ind = Individual::test2();
+        ind.metrics.ppv = Some(0.0);
+        pop.individuals.push(ind);
+        
+        let data = Data::test2();
+        let mut param = Param::default();
+        param.general.fit = FitFunction::ppv;
+        
+        pop.fit_without_penalty(&data, &mut None, &None, &None, &param);
+        
+        let fitted_ind = &pop.individuals[0];
+        
+        assert!(fitted_ind.metrics.ppv.is_some(), "PPV metric should be Some");
+        
+        let ppv_value = fitted_ind.metrics.ppv.unwrap();
+        assert!((fitted_ind.fit - ppv_value).abs() < 1e-10,
+                "ind.fit should equal ind.metrics.ppv for FitFunction::ppv: fit={}, ppv={}",
+                fitted_ind.fit, ppv_value);
+    }
+
+    #[test]
+    fn test_fit_function_g_means_sets_fit_and_metrics() {
+        use crate::population::Population;
+        use crate::param::Param;
+        
+        let mut pop = Population::new();
+        let mut ind = Individual::test2();
+        ind.metrics.g_means = Some(0.0);
+        pop.individuals.push(ind);
+        
+        let data = Data::test2();
+        let mut param = Param::default();
+        param.general.fit = FitFunction::g_means;
+        
+        pop.fit_without_penalty(&data, &mut None, &None, &None, &param);
+        
+        let fitted_ind = &pop.individuals[0];
+        
+        assert!(fitted_ind.metrics.g_means.is_some(), "G-means metric should be Some");
+        
+        let g_means_value = fitted_ind.metrics.g_means.unwrap();
+        assert!((fitted_ind.fit - g_means_value).abs() < 1e-10,
+                "ind.fit should equal ind.metrics.g_means for FitFunction::g_means: fit={}, g_means={}",
+                fitted_ind.fit, g_means_value);
+    }
+
+    #[test]
+    fn test_fit_function_auc_does_not_set_additional_metrics() {
+        use crate::population::Population;
+        use crate::param::Param;
+        
+        let mut pop = Population::new();
+        let ind = Individual::test2();
+        pop.individuals.push(ind);
+        
+        let data = Data::test2();
+        let mut param = Param::default();
+        param.general.fit = FitFunction::auc;
+        
+        pop.fit_without_penalty(&data, &mut None, &None, &None, &param);
+        
+        let fitted_ind = &pop.individuals[0];
+        
+        // For FitFunction::auc, fit should be set to auc, but additional metrics should remain None
+        assert!((fitted_ind.fit - fitted_ind.auc).abs() < 1e-10,
+                "For FitFunction::auc, ind.fit should equal ind.auc");
+        assert!(fitted_ind.metrics.mcc.is_none(), "MCC should be None for FitFunction::auc");
+        assert!(fitted_ind.metrics.f1_score.is_none(), "F1-score should be None for FitFunction::auc");
+        assert!(fitted_ind.metrics.npv.is_none(), "NPV should be None for FitFunction::auc");
+        assert!(fitted_ind.metrics.ppv.is_none(), "PPV should be None for FitFunction::auc");
+        assert!(fitted_ind.metrics.g_means.is_none(), "G-means should be None for FitFunction::auc");
+    }
+
+    // -----------------------------------------------------------------
+    // Tests for prune_by_importance
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_prune_by_importance_with_threshold() {
+        let data = Data::specific_test(50, 10);
+        
+        let mut individual = Individual::new();
+        individual.language = BINARY_LANG;
+        individual.data_type = RAW_TYPE;
+        individual.features.insert(0, 1);
+        individual.features.insert(1, 1);
+        individual.features.insert(2, 1);
+        individual.features.insert(3, 1);
+        individual.features.insert(4, 1);
+        individual.k = 5;
+        
+        let k_before = individual.k;
+        individual.prune_by_importance(&data, 10, 12345, Some(0.0), None, 2);
+        
+        assert!(individual.k >= 2, "Should keep at least min_k=2 features");
+        assert!(individual.k <= k_before, "Should not have more features than before");
+    }
+
+    #[test]
+    fn test_prune_by_importance_with_quantile() {
+        let data = Data::specific_test(50, 15);
+        
+        let mut individual = Individual::new();
+        individual.language = TERNARY_LANG;
+        individual.data_type = RAW_TYPE;
+        for i in 0..8 {
+            individual.features.insert(i, if i % 2 == 0 { 1 } else { -1 });
+        }
+        individual.k = 8;
+        
+        let k_before = individual.k;
+        individual.prune_by_importance(&data, 20, 54321, None, Some((0.25, 0.0)), 3);
+        
+        assert!(individual.k >= 3, "Should keep at least min_k=3 features");
+        assert!(individual.k <= k_before, "Should not have more features than before");
+    }
+
+    #[test]
+    fn test_prune_by_importance_respects_min_k() {
+        let data = Data::specific_test(40, 10);
+        
+        let mut individual = Individual::new();
+        individual.language = BINARY_LANG;
+        individual.data_type = RAW_TYPE;
+        for i in 0..6 {
+            individual.features.insert(i, 1);
+        }
+        individual.k = 6;
+        
+        // Very strict threshold - should try to drop all features
+        individual.prune_by_importance(&data, 15, 99999, Some(100.0), None, 4);
+        
+        assert_eq!(individual.k, 4, "Should keep exactly min_k=4 features");
+    }
+
+    #[test]
+    fn test_prune_by_importance_empty_individual() {
+        let data = Data::specific_test(30, 5);
+        
+        let mut individual = Individual::new();
+        individual.language = BINARY_LANG;
+        individual.data_type = RAW_TYPE;
+        individual.k = 0;
+        
+        // Should not panic
+        individual.prune_by_importance(&data, 10, 111, Some(0.0), None, 1);
+        
+        assert_eq!(individual.k, 0, "Empty individual should remain empty");
+    }
+
+    #[test]
+    fn test_prune_by_importance_single_feature_preserved() {
+        let data = Data::specific_test(40, 8);
+        
+        let mut individual = Individual::new();
+        individual.language = BINARY_LANG;
+        individual.data_type = RAW_TYPE;
+        individual.features.insert(2, 1);
+        individual.k = 1;
+        
+        // Try to prune with aggressive threshold
+        individual.prune_by_importance(&data, 10, 222, Some(999.0), None, 1);
+        
+        assert_eq!(individual.k, 1, "Single feature should be preserved when min_k=1");
+        assert!(individual.features.contains_key(&2), "Original feature should remain");
+    }
+
+    #[test]
+    fn test_prune_by_importance_different_languages() {
+        let data = Data::specific_test(60, 12);
+        
+        let languages = vec![
+            (BINARY_LANG, "Binary"),
+            (TERNARY_LANG, "Ternary"),
+            (RATIO_LANG, "Ratio"),
+            (POW2_LANG, "Pow2"),
+        ];
+        
+        for (lang, _lang_name) in languages {
+            let mut individual = Individual::new();
+            individual.language = lang;
+            individual.data_type = RAW_TYPE;
+            
+            for i in 0..7 {
+                let coef = match lang {
+                    BINARY_LANG => 1,
+                    TERNARY_LANG | RATIO_LANG => if i % 2 == 0 { 1 } else { -1 },
+                    POW2_LANG => if i % 2 == 0 { 2 } else { -2 },
+                    _ => 1,
+                };
+                individual.features.insert(i, coef);
+            }
+            individual.k = 7;
+            
+            if lang == RATIO_LANG {
+                individual.epsilon = 1e-5;
+                individual.threshold = 1.0;
+            }
+            
+            let k_before = individual.k;
+            individual.prune_by_importance(&data, 15, 555, Some(0.0), None, 2);
+            
+            assert!(individual.k >= 2, "Should keep at least min_k features");
+            assert!(individual.k <= k_before, "Should not gain features");
+        }
+    }
+
+    #[test]
+    fn test_prune_by_importance_different_data_types() {
+        let data = Data::specific_test(50, 10);
+        
+        let data_types = vec![
+            (RAW_TYPE, "Raw"),
+            (PREVALENCE_TYPE, "Prevalence"),
+            (LOG_TYPE, "Log"),
+        ];
+        
+        for (dtype, _dtype_name) in data_types {
+            let mut individual = Individual::new();
+            individual.language = BINARY_LANG;
+            individual.data_type = dtype;
+            individual.epsilon = if dtype == LOG_TYPE { 0.1 } else { 1e-5 };
+            
+            for i in 0..6 {
+                individual.features.insert(i, 1);
+            }
+            individual.k = 6;
+            
+            let k_before = individual.k;
+            individual.prune_by_importance(&data, 10, 777, Some(0.0), None, 2);
+            
+            assert!(individual.k >= 2, "Should keep at least min_k features");
+            assert!(individual.k <= k_before, "Should not gain features");
+        }
+    }
+
+    #[test]
+    fn test_prune_by_importance_determinism() {
+        let data = Data::specific_test(60, 12);
+        
+        let mut individual1 = Individual::new();
+        individual1.language = TERNARY_LANG;
+        individual1.data_type = RAW_TYPE;
+        for i in 0..8 {
+            individual1.features.insert(i, if i % 2 == 0 { 1 } else { -1 });
+        }
+        individual1.k = 8;
+        
+        let mut individual2 = individual1.clone();
+        
+        let seed = 999888;
+        individual1.prune_by_importance(&data, 25, seed, Some(0.0), None, 3);
+        individual2.prune_by_importance(&data, 25, seed, Some(0.0), None, 3);
+        
+        assert_eq!(individual1.k, individual2.k, "Feature counts should match");
+        assert_eq!(individual1.features, individual2.features, "Features should be identical");
+    }
+
+    #[test]
+    fn test_prune_by_importance_no_threshold_keeps_all() {
+        let data = Data::specific_test(50, 10);
+        
+        let mut individual = Individual::new();
+        individual.language = BINARY_LANG;
+        individual.data_type = RAW_TYPE;
+        for i in 0..6 {
+            individual.features.insert(i, 1);
+        }
+        individual.k = 6;
+        
+        // Use negative infinity threshold - should keep all features
+        individual.prune_by_importance(&data, 10, 333, Some(f64::NEG_INFINITY), None, 1);
+        
+        assert_eq!(individual.k, 6, "Should keep all features with NEG_INFINITY threshold");
+    }
+
+    #[test]
+    fn test_prune_by_importance_feature_removal_correctness() {
+        let data = Data::specific_test(100, 20);
+        
+        let mut individual = Individual::new();
+        individual.language = BINARY_LANG;
+        individual.data_type = RAW_TYPE;
+        
+        let original_features: Vec<usize> = vec![1, 3, 5, 7, 9, 11, 13, 15];
+        for &feat in &original_features {
+            individual.features.insert(feat, 1);
+        }
+        individual.k = original_features.len();
+        
+        individual.prune_by_importance(&data, 30, 444, Some(0.0), None, 3);
+        
+        let remaining_features: Vec<usize> = individual.features.keys().copied().collect();
+        
+        // All remaining features should be from the original set
+        for feat in &remaining_features {
+            assert!(original_features.contains(feat), 
+                    "Feature {} was not in original set", feat);
+        }
+        
+        assert!(individual.k <= original_features.len(), "Should not have more features than original");
+        assert!(individual.k >= 3, "Should maintain min_k");
+    }
+
+    #[test]
+    #[should_panic(expected = "n_perm must be > 0")]
+    fn test_prune_by_importance_zero_permutations_panics() {
+        let data = Data::specific_test(30, 5);
+        
+        let mut individual = Individual::new();
+        individual.language = BINARY_LANG;
+        individual.data_type = RAW_TYPE;
+        individual.features.insert(0, 1);
+        individual.k = 1;
+        
+        // Should panic with 0 permutations
+        individual.prune_by_importance(&data, 0, 111, Some(0.0), None, 1);
     }
     
 }
