@@ -1,97 +1,104 @@
-# unless specifically indicated all field accept a single value
+# Unless specifically indicated, all fields accept a single value.
 general:
-  seed: 42                                    # used in parent selection, child conception (cross over) and mutation, all of which is single thread
-  algo: ga                                    # ga for genetic algorithm, beam for beam algorithm and mcmc for MCMC-based algorithm
-  cv: false                                   # should cross-validation be enabled?
-  thread_number: 8                            # the number of thread used in feature selection and fit computation
-  gpu: true                                   # should Gpredomics use GPU ? (ga and beam only)
-  language: bin,ter,pow2,ratio                # possible values are ter,bin,ratio,pow2, see README.md for detail. A comma separated list (no spaces) is accepted, which means the initial population will be split 
-  data_type: raw,log,prev                     # possible values are raw,prev,log, see README.md for detail. Same as above, comma separated list is fine.
-  epsilon: 1e-5                               # this is only usefull for data_type prevalence (where it is a threshold) or log (where it replaces values below)
-  fit: auc                                    # possible values are auc,specificity,sensitivity (classification), see README.md for details
-  k_penalty: 0.0001                           # this penalty is deduced from fit function multiplied by k, the number of variables used in the model
-  fr_penalty: 0.0                             # used only when fit is specificity or sensitivity, deduce (1 - symetrical metrics) x fr_penalty to fit   
-  n_model_to_display: 30                      # n models to display in the last generation (default to 10, 0 means all models)
-  #log_base: ""                               # uncomment to print log and results in log_file_name
-  log_level: info                             # possible values are trace, debug, info, warning or error 
-  display_level: 2                            # precision in variable display (0=anonymized features, 1=feature line index, 2=feature names (default))
-  display_colorful: true                      # should the terminal results be coloured to make them easier to read?  
-  keep_trace: false                           # keep this setting to false when using gpredomics as a binary
-  #save_exp: exp.mp                           # uncomment to save experiment in timestamp-save_exp, which can be reloaded with --load timestamp-save_exp. Extention should be .json, .mp/.msgpack or .bin
+  seed: 42                                    # Used in parent selection, child conception (crossover) and mutation. All of these are single-threaded.
+  algo: ga                                    # GA for genetic algorithm, beam for the beam algorithm, and MCMC for a MCMC-based algorithm.
+  cv: false                                   # Should cross-validation be enabled?
+  thread_number: 8                            # The number of threads used in feature selection and fit computation.
+  gpu: false                                  # Should Gpredomics use the GPU? (GA and beam only)
+  language: bin,ratio,pow2,ter                # Possible values are ter, bin, ratio, pow2. See README.md for details. A comma-separated list (no spaces) is accepted; the initial population will be split among the listed languages.
+  data_type: raw,prev,log                     # Possible values are raw, prev, log. See README.md for details. A comma-separated list is accepted.
+  epsilon: 1e-5                               # This is only useful for data_type 'prevalence' (where it is a threshold) or 'log' (where it replaces values below the threshold).
+  fit: auc                                    # Possible values are auc, specificity, sensitivity, mcc, f1_score, g_means (classification). See README.md for details.
+  k_penalty: 0.0001                           # This penalty is derived from the fit function and multiplied by k (the number of variables used in the model).
+  fr_penalty: 0.0                             # Used only when fit is specificity or sensitivity. Subtract (1 - symmetrical_metrics) × fr_penalty from the fit during threshold optimization.
+  bias_penalty: 0.00                          # Penalize model fit with specificity/sensitivity < 0.5: fit - (1.0 - bad_metrics) * bias_penalty.
+  threshold_ci_n_bootstrap: 0                 # Number of bootstrap samples to compute the threshold confidence interval (0 = disable CI).
+  threshold_ci_penalty: 0.5                   # If a threshold confidence interval exists (see above), penalize evolution according to rejection_rate * penalty.
+  threshold_ci_alpha: 0.05                    # If a threshold confidence interval exists (see above), alpha to construct the CI around the threshold (allows models to reject a sample).
+  threshold_ci_frac_bootstrap: 1.0            # Should the bootstrap be based on random draw with replacement (on the whole dataset, frac=1, Efron method) or a random draw without replacement on a random subset (0<frac<1, Politis & Romano method)?
+  #log_base:                                  # Uncomment to print log and results in log_base.txt
+  log_level: info                             # Possible values are trace, debug, info, warning, or error.
+  n_model_to_display: 30                      # Number of models to display in the last generation (default 10, 0 means all models).
+  display_colorful: true                      # Should the terminal results be colored to make them easier to read?
+  keep_trace: true                            # Should every metrics be kept in memory.
+  #save_exp: exp.mp                           # Uncomment to save experiment in timestamp-save_exp, which can be reloaded with --load timestamp-save_exp. Extension should be .json, .mp/.msgpack or .bin
 
 data:
-  X: "samples/Qin2014/Xtrain.tsv"             # the features of the train data set 
-  y: "samples/Qin2014/Ytrain.tsv"             # the class description of the train data set (0=class 0, 1=class 1 (the class to be predicted), 2=unknown status)
-  Xtest: "samples/Qin2014/Xtest.tsv"          # the features of the test data set
-  ytest: "samples/Qin2014/Ytest.tsv"          # the class description of the test data set 
-  features_maximal_number_per_class: 0        # 0: all significant features ; else first X significant features (per class!) sorted according to their pvalue/log_abs_bayes_factor
-  feature_minimal_prevalence_pct: 10          # per class, e.g. features are retained if any of the class reaches this level
-  feature_minimal_feature_value: 1e-4         # features which mean is below that value are discarded
-  feature_selection_method: wilcoxon          # possible values are wilcoxon, studentt and bayesian_fisher. wilcoxon is recommanded in most cases.
-  feature_maximal_pvalue: 0.05                # features with differences less significant (p value above that threshold) than this will be removed
-  feature_minimal_log_abs_bayes_factor: 2     # features with a fewer log absolute bayes factor will be removed (bayesian method only)
-  inverse_classes: false                      # if true, negative class becomes the objective
+  X: "samples/Qin2014/Xtrain.tsv"             # The features of the training dataset.
+  y: "samples/Qin2014/Ytrain.tsv"             # The class labels of the training dataset (0 = class 0, 1 = class 1 (positive), 2 = unknown).
+  Xtest: "samples/Qin2014/Xtest.tsv"          # The features of the test dataset.
+  ytest: "samples/Qin2014/Ytest.tsv"          # The class labels of the test dataset.
+  features_in_rows: true                      # Are the features arranged in rows (legacy Predomics) or columns (standard in ML)?
+  max_features_per_class: 0                   # 0: all significant features; otherwise take the first X significant features sorted by p-value/log_abs_bayes_factor.
+  feature_minimal_prevalence_pct: 10          # Per class: features are retained if any class reaches this prevalence (percentage).
+  feature_minimal_feature_value: 1e-4         # Features whose mean is below this value are discarded.
+  feature_selection_method: wilcoxon          # Possible values are wilcoxon, student_t (Student's t-test), and bayesian_fisher. Wilcoxon is recommended in most cases.
+  feature_maximal_adj_pvalue: 1               # Features with a corrected p-value (BH) above this threshold will be removed.
+  feature_minimal_log_abs_bayes_factor: 2     # Features with a lower log absolute Bayes factor will be removed (Bayesian method only).
+  inverse_classes: false                      # If true, the negative class becomes the objective.
   classes:
     - "healthy"
     - "cirrhosis"
     - "unknown"
 
 cv:
-  inner_folds: 5                              # number of folds used to penalize overfit if overfit_penalty > 0
-  overfit_penalty: 0                          # this penalty is deduced from fit function (fit = fit on k-1 - abs(delta with last fold) * overfit_penalty)
-  outer_folds: 5                              # number of folds used for cross-validation (launch algorithm on each k-1 folds then merge Families of Best Models).
-  fit_on_valid: true                          # if true, FBM is based on validation fold fit favouring generalisation, else on k-1 folds ; DO NOT fit on valid without external validation data
-  cv_best_models_ci_alpha: 0.05               # alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha, larger best_model range.
+  inner_folds: 5                              # Number of folds used to penalize overfitting if overfit_penalty > 0.
+  overfit_penalty: 0                          # This penalty is derived from the fit function (fit -= mean(fit on k-1 - abs(delta with last fold) * overfit_penalty)).
+  resampling_inner_folds_epochs: 0            # To avoid learning about inner folds, resplit them every x epochs.
+  outer_folds: 5                              # Number of folds used for outer cross-validation (run the algorithm on each set of k-1 folds then merge Families of Best Models).
+  fit_on_valid: true                          # If true, FBM is based on validation fold fit (favoring generalization); otherwise on k-1 folds. DO NOT enable without external validation data.
+  cv_best_models_ci_alpha: 0.05               # Alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha -> larger best_model range.
 
 importance:
-  compute_importance: false                   # should importance be computed ?  
-  n_permutations_oob: 100                     # number of permutations per feature for OOB importance.
-  scaled_importance: true                     # scale importance by feature prevalence inside folds.
-  importance_aggregation: mean                # aggregation method for importances: "mean" or "median".   
+  compute_importance: false                   # Should importance be computed?
+  n_permutations_oob: 100                     # Number of permutations per feature for OOB importance.
+  scaled_importance: true                     # Scale importance by feature prevalence inside folds.
+  importance_aggregation: mean                # Aggregation method for importances: "mean" or "median".
 
 voting:
-  vote: false                                 # should voting be activated ?
-  use_fbm: true                               # should only "Family of Best Models" be kept (alpha = 0.05) ?
-  min_perf: 0.5                               # required sensitivity AND specificity to be judge ; >=0.5 avoid "single-choice oriented" judges 
-  min_diversity: 10                           # required diversity between judges
-  method: Majority                            # Majority: class 1 if > threshold, else class 0 (if = no classification) VS Consensus: non-classification (rejection) if the threshold is not reached
-  method_threshold: 0.5                       # typically 0.5 for majority (for equal distribution | if set to 0, optimisation via Youden's maximum) and typically 1 for consensus, classifing samples on which all experts agree
-  threshold_windows_pct: 5                    # majority only: if provided, samples with votes within threshold±threshold_windows_pct% (absolute) are not classified (ex: 10% -> votes in the intervals [40% ; 60%] are unclassified)
-  complete_display: false                     # if true, display complete results
+  vote: false                                 # Should voting be activated?
+  fbm_ci_alpha: 0.05                          # Alpha for the Family of Best Models confidence interval (>0 and <1). Smaller alpha -> larger best_model range.
+  prune_before_voting: false                  # Should models be pruned before voting according to feature importances (MDA < 0)?
+  min_perf: 0.50                              # Required sensitivity AND specificity to be judged; >=0.5 avoids "single-choice oriented" judges.
+  min_diversity: 10                           # Required diversity between judges.
+  method: Majority                            # Majority: class 1 if votes > threshold, else class 0 (if equal, no classification). Consensus: no classification (rejection) if threshold is not reached.
+  method_threshold: 0.5                       # Typically 0.5 for majority (for equal distribution). If set to 0, optimize via Youden's maximum. Typically 1 for consensus (classify samples only when all experts agree).
+  threshold_windows_pct: 5                    # Majority only: if provided, samples with votes within threshold ± threshold_windows_pct% are not classified (e.g., 10% -> votes in [40%, 60%] are unclassified).
+  complete_display: false                     # If true, display complete results.
 
 ga:
-  population_size: 5000                       # the target number of models per generation (NB the real number may be below because of clone removal) 
-  max_epochs: 100                             # the maximum number of generation before stopping (note that you can stop manually before sending a kill -1 to the process)
-  min_epochs: 1                               # the minimum number of generation to do
-  max_age_best_model: 100                     # stoping after min_epochs and before max_epochs will occur only if the best model reaches this age
-  kmin: 1                                     # the minimal number of variables used in the initial population
-  kmax: 200                                   # the maximum number of variables used in the initial population (setting to 0 will remove any maximum) 
-  select_elite_pct: 2                         # the % of best models of previous generation retained: the lower the figure the more elitist you are
-  select_niche_pct: 20                        # (optional default to 0) the % of best models of previous generation retained but split per language / data type (enable to maintain competition between language/data types)
-  select_random_pct: 10                       # the % of opportunistic models of previous generation retained: this is split between all the languages/data_types present in the previous generation
-  mutated_children_pct: 80                    # the % of children submitted to mutation
-  mutated_features_pct: 20                    # the % of mutation per "gene" (e.g. potential variable), keep it mind that most mutation are "non sense", e.g. remove a variable
-  mutation_non_null_chance_pct: 20            # the % of "sense" mutation (e.g. the likeliness that a mutation may add a new variable)
-  forced_diversity_pct: 0                     # if >0%, population is filtered every forced_diversity_epochs according to this value. A feature is considered different if it is present WITH SUCH A SIGN in individual A but not in B.
-  forced_diversity_epochs : 10                # if forced_diversity_pct > 0%, the epoch gap between two diversity filters
-  random_sampling_pct: 0                      # if >0%, each generation is only fitted on a % of random samples reducing overfitting
-  random_sampling_epochs: 0                   # if random_samples>0, the number of epoch during a same randomized dataset is kept 
+  population_size: 5000                       # The target number of models per generation (NB: the real number may be lower because of clone removal).
+  max_epochs: 100                             # The maximum number of generations before stopping (you can stop manually as well).
+  min_epochs: 1                               # The minimum number of generations to run.
+  max_age_best_model: 100                     # Stopping before max_epochs (after min_epochs) occurs only if the best model reaches this age.
+  kmin: 1                                     # The minimal number of variables used in the initial population.
+  kmax: 200                                   # The maximum number of variables used in the initial population (0 removes any maximum).
+  select_elite_pct: 2                         # Percentage of best models from previous generation retained: lower values are more elitist.
+  select_niche_pct: 20                        # (optional, default 0) Percentage of best models retained but split per language/data type (helps maintain competition between languages/data types).
+  select_random_pct: 10                       # Percentage of opportunistic models retained from the previous generation; split among all languages/data_types present.
+  mutated_children_pct: 80                    # Percentage of children submitted to mutation.
+  mutated_features_pct: 20                    # Percentage of mutation per "gene" (potential variable). Note: most mutations are nonsensical (e.g., removing a variable).
+  mutation_non_null_chance_pct: 20            # Percentage of "meaningful" mutations (likelihood that a mutation may add a new variable).
+  forced_diversity_pct: 0                     # If >0%, the population is filtered every forced_diversity_epochs according to this value. A feature is considered different if it is present with a given sign in individual A but not in B.
+  forced_diversity_epochs: 10                 # If forced_diversity_pct > 0%, the epoch gap between two diversity filters.
+  random_sampling_pct: 0                      # If >0%, each generation is fitted on only a percentage of random samples to reduce overfitting.
+  random_sampling_epochs: 1                   # If random_sampling_pct > 0, number of epochs during which the same randomized dataset is kept.
 
 beam:
-  method: combinatorial                       # combinatorial: generate all combinations (k out of features_to_keep). incremental: increment each extendable_models of each 1 feature from features_to_keep.
-  kmin: 1                                     # the number of variables used in the initial population
-  kmax: 100                                   # the maximum number of variables to considere in a single model, the variable count limit for beam algorithm
-  best_models_ci_alpha: 1e-5                  # alpha for the family of best model confidence interval based on the best fit. Smaller alpha, larger best_model range.
-  max_nb_of_models: 20000                     # (combinatorial mode) limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to the significiance)
+  method: LimitedExhaustive                   # LimitedExhaustive: generate all combinations (k out of features_to_keep). ParallelForward: extend each extendable model by one feature chosen from features_to_keep.
+  kmin: 2                                     # Number of variables used in the initial population.
+  kmax: 100                                   # Maximum number of variables to consider in a single model (variable count limit for beam algorithm).
+  best_models_ci_alpha: 1e-5                  # Alpha for the family of best models confidence interval based on the best fit. Smaller alpha -> larger best_model range.
+  max_nb_of_models: 20000                     # Limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to significance).
 
 mcmc:
-  n_iter: 10000                               # number of MCMC (Markov Chain Monte Carlo) iterations
-  n_burn: 5000                                # number of MCMC iterations ignored (typically first half of all iterations)
-  lambda: 0.001                               # bayesian prior parameter for coefficients a, b, c 
-  nmin: 10                                    # minimum number of features in a model after feature elimination | 0 : keep all features (deactivate SBS search)
+  n_iter: 10000                               # Number of MCMC (Markov Chain Monte Carlo) iterations.
+  n_burn: 5000                                # Number of MCMC iterations ignored (typically the first half).
+  lambda: 0.001                               # Bayesian prior parameter for coefficients a, b, c.
+  nmin: 10                                    # Minimum number of features in a model after feature elimination | 0: keep all features (disable SBS search).
 
 gpu:
-  fallback_to_cpu: true                       # executes the code on the CPU (integrated graphics) if there is no GPU available (recommanded)
-  memory_policy: Strict                       # [Strict: panic if below limits are not available | Adaptive: adjusts below limits if not available | Performance: uses all the available GPU memory regardless of below limits
-  max_total_memory_mb: 256                    # limit in mb defining the maximum amount of GPU memory used by all buffers
-  max_buffer_size_mb: 128                     # limit in mb defining the maximum amount of GPU memory used by one buffer
+  fallback_to_cpu: true                       # Execute the code on the CPU (integrated graphics) if there is no GPU available (recommended).
+  memory_policy: Strict                       # [Strict: panic if limits are not available | Adaptive: adapt if limits are not available | Performance: use all available GPU memory regardless of limits]
+  max_total_memory_mb: 256                    # Limit in MB defining the maximum amount of GPU memory used by all buffers.
+  max_buffer_size_mb: 128                     # Limit in MB defining the maximum amount of GPU memory used by a single buffer.

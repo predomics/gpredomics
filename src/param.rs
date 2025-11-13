@@ -2,9 +2,10 @@ use std::fs::File;
 use std::io::BufReader;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use crate::experiment::VotingMethod;
+use crate::{beam::BeamMethod, voting::VotingMethod};
 use crate::experiment::ImportanceAggregation;
-
+use crate::data::PreselectionMethod;
+use log::{warn};
 
 #[derive(Debug,Serialize,Deserialize,Clone, PartialEq)]
 #[allow(non_camel_case_types)]
@@ -12,7 +13,11 @@ pub enum FitFunction {
     auc,
     specificity,
     sensitivity,  
-    mcc
+    mcc,
+    f1_score,
+    npv,
+    ppv,
+    g_means,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -44,6 +49,10 @@ pub struct Param {
     pub importance: Importance,
     #[serde(default)]
     pub gpu: GPU,
+    #[serde(default)]
+    pub experimental: Experimental,
+    #[serde(skip)]
+    pub tag: String
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -72,14 +81,22 @@ pub struct General {
     pub k_penalty: f64,                       
     #[serde(default = "zero_default")] 
     pub fr_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub bias_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_penalty: f64,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_alpha: f64,
+    #[serde(default = "uzero_default")] 
+    pub threshold_ci_n_bootstrap: usize,
+    #[serde(default = "zero_default")] 
+    pub threshold_ci_frac_bootstrap: f64,
     #[serde(default = "n_model_to_display_default")] 
     pub n_model_to_display: u32,
     #[serde(default = "false_default")] 
     pub gpu: bool,
     #[serde(default = "false_default")] 
     pub cv: bool,
-    #[serde(default = "display_level_default")] 
-    pub display_level: usize,
     #[serde(default = "true_default")] 
     pub display_colorful: bool,
     #[serde(default = "feature_keep_trace_default")]   
@@ -98,15 +115,17 @@ pub struct Data {
     pub Xtest: String,
     #[serde(default = "empty_string")]                     
     pub ytest: String,
+    #[serde(default = "false_default")]  
+    pub features_in_rows: bool,                     
     #[serde(default = "uzero_default")]                      
-    pub feature_maximal_number_per_class: usize,
+    pub max_features_per_class: usize,
     #[serde(default = "feature_selection_method_default")]                      
-    pub feature_selection_method: String,
+    pub feature_selection_method: PreselectionMethod,
     #[serde(default = "feature_minimal_prevalence_pct_default")]                     
     pub feature_minimal_prevalence_pct: f64, 
-    #[serde(default = "feature_maximal_pvalue_default")]                     
-    pub feature_maximal_pvalue: f64, 
-    #[serde(default = "zero_default")]                      
+    #[serde(default = "feature_maximal_adj_pvalue_default")]                     
+    pub feature_maximal_adj_pvalue: f64,  
+    #[serde(default = "zero_default")]                 
     pub feature_minimal_feature_value: f64, 
     #[serde(default = "feature_minimal_log_abs_bayes_factor_default")]                      
     pub feature_minimal_log_abs_bayes_factor: f64, 
@@ -124,6 +143,8 @@ pub struct CV {
     pub inner_folds: usize,
     #[serde(default = "zero_default")] 
     pub overfit_penalty: f64,
+    #[serde(default = "uzero_default")]  
+    pub resampling_inner_folds_epochs: usize,
     #[serde(default = "folds_default")]  
     pub outer_folds: usize,
     #[serde(default = "false_default")] 
@@ -136,12 +157,12 @@ pub struct CV {
 pub struct Voting {
   #[serde(default = "false_default")]
   pub vote: bool,
-  #[serde(default = "true_default")]
-  pub use_fbm: bool,
   #[serde(default = "half_default")] 
   pub min_perf: f64,
   #[serde(default = "diversity_voting_default")] 
   pub min_diversity: f64,       
+  #[serde(default = "best_models_ci_alpha_default")]     
+  pub fbm_ci_alpha: f64,
   #[serde(default = "voting_default")]                      
   pub method: VotingMethod,   
   #[serde(default = "half_default")]                         
@@ -150,12 +171,8 @@ pub struct Voting {
   pub threshold_windows_pct: f64,
   #[serde(default = "false_default")]        
   pub complete_display: bool,
-  #[serde(default = "false_default")]                        
-  pub specialized: bool,                 
-  #[serde(default = "specialized_default")]            
-  pub specialized_pos_threshold: f64,
-  #[serde(default = "specialized_default")]                      
-  pub specialized_neg_threshold: f64                 
+  #[serde(default = "false_default")]     
+  pub prune_before_voting: bool
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -199,7 +216,7 @@ pub struct GA {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct BEAM {
     #[serde(default = "beam_method_default")]  
-    pub method: String,
+    pub method: BeamMethod,
     #[serde(default = "one_default")]  
     pub kmin: usize,                           
     #[serde(default = "kmax_default")]  
@@ -247,6 +264,11 @@ pub struct Importance {
     pub scaled_importance: bool,
     #[serde(default = "importance_aggregation_default")]  
     pub importance_aggregation: ImportanceAggregation,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct Experimental {
+
 }
 
 // Default section definitions
@@ -299,6 +321,12 @@ impl Default for MCMC {
     }
 }
 
+impl Default for Experimental {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
 impl Default for GPU {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap_or_else(|_| {
@@ -328,9 +356,100 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     let param_file_reader = File::open(param_file)?;
     let param_reader = BufReader::new(param_file_reader);
     
-    let config:Param = serde_yaml::from_reader(param_reader)?;
+    let mut config:Param = serde_yaml::from_reader(param_reader)?;
+
+    let _ = validate(&mut config)?;
 
     Ok(config)
+}
+
+pub fn validate(param: &mut Param) -> Result<(), String> {
+    if param.general.log_base.len() > 0 {
+        param.general.display_colorful = false;
+    }
+
+    if param.cv.fit_on_valid && param.data.Xtest == "".to_string() {
+        warn!("fit_on_valid=true without independent test set risks data leakage!");
+    }
+
+    if param.general.gpu {
+        warn!(
+            "GPU acceleration enabled: computations use f32 precision for performance.\n  \
+            CPU uses f64 precision. Minor numerical differences (order of 1e-7) are expected\n  \
+            between CPU and GPU runs, which may lead to slightly different model rankings\n  \
+            and final results. For perfect reproducibility, use the same backend (CPU or GPU)\n  \
+            across all runs."
+        );
+    }
+
+    if param.general.algo == "beam" && !param.general.keep_trace {
+        warn!("keep_trace is deactivated: only the last models will be kept in memory during BEAM runs. \
+        If you want to get the best models across all k size, please enable keep_trace.");
+    }
+
+    if param.general.threshold_ci_alpha > 0.0 && param.general.threshold_ci_alpha < 1.0 { validate_bootstrap(param)? };
+        validate_penalties(param)?;
+        Ok(())
+    }
+    
+    fn validate_bootstrap(param: &mut Param) -> Result<(), String> {
+        if param.general.threshold_ci_n_bootstrap == 0 {
+            return Ok(()); 
+        }
+            
+        if param.general.threshold_ci_alpha <= 0.0 || param.general.threshold_ci_alpha >= 1.0 {
+            return Err(format!("Invalid threshold_ci_alpha={:.3}. Must be in range (0, 1).", param.general.threshold_ci_alpha));
+        }
+
+        if param.general.threshold_ci_frac_bootstrap <= 0.0 || param.general.threshold_ci_frac_bootstrap > 1.0 {
+            return Err(format!("Invalid threshold_ci_frac_bootstrap={:.3}. Must be in range (0, 1).", param.general.threshold_ci_frac_bootstrap));
+        }
+            
+        const B_MIN: usize = 1000;   // CI (Efron & Tibshirani 1993)
+        const B_REC: usize = 2000;   // Robustness (Rousselet et al. 2021)
+        
+        let B = param.general.threshold_ci_n_bootstrap;
+        
+        if B < B_MIN {
+            warn!(
+                "Bootstrap B={} < {} (Efron & Tibshirani 1993 minimum for percentile CI). \
+                Quantile estimates may be unstable. Increase B or disable (set to 0).",
+                B, B_MIN
+            );
+        } else if B < B_REC {
+            warn!(
+                "Bootstrap B={} < {} (Rousselet et al. 2021 recommendation). \
+                Percentile CI may be too narrow for small samples. \
+                Consider B ≥ {} for {}% CI stability.",
+                B, B_REC, B_REC, (1.0 - param.general.threshold_ci_alpha) * 100.0
+            );
+        }
+        
+        Ok(())
+    }
+    
+    fn validate_penalties(param: &mut Param) -> Result<(), String> {
+        if param.general.k_penalty < 0.0 {
+            return Err(format!("Invalid k_penalty={:.3}. Must be >= 0.", param.general.k_penalty));
+        }
+
+        if param.general.fr_penalty < 0.0 {
+            return Err(format!("Invalid fr_penalty={:.3}. Must be >= 0.", param.general.fr_penalty));
+        }
+
+        if param.general.bias_penalty < 0.0 {
+            return Err(format!("Invalid bias_penalty={:.3}. Must be >= 0.", param.general.bias_penalty));
+        }
+
+        if param.general.threshold_ci_penalty < 0.0 {
+            return Err(format!("Invalid threshold_ci_penalty={:.3}. Must be >= 0.", param.general.threshold_ci_penalty));
+        }
+
+        if param.general.algo == "ga".to_string() && param.ga.random_sampling_pct > 0.0 && param.cv.overfit_penalty > 0.0 {
+            return Err(format!("Randomized samples and overfit penalty cannot be used together. If you want to resample the folds of the cross-validation used to penalise overfitting, you can use the parameter random_sampling_epochs."));
+        }
+
+        Ok(())
 }
 
 // Default value definitions
@@ -341,9 +460,9 @@ fn min_epochs_default() -> usize { 10 }
 fn max_epochs_default() -> usize { 200 }
 fn max_age_best_model_default() -> usize { 10 }
 fn algorithm_default() -> String { "ga".to_string() }
-fn feature_selection_method_default() -> String { "wilcoxon".to_string() }
+fn feature_selection_method_default() -> PreselectionMethod { PreselectionMethod::wilcoxon }
 fn feature_minimal_prevalence_pct_default() -> f64 { 10.0 }
-fn feature_maximal_pvalue_default() -> f64 { 0.5 }
+fn feature_maximal_adj_pvalue_default() -> f64 { 0.5 }
 fn feature_minimal_log_abs_bayes_factor_default() -> f64 { 2.0 }
 fn language_default() -> String { "binary".to_string() }
 fn data_type_default() -> String { "raw".to_string() }
@@ -360,8 +479,7 @@ fn fit_default() -> FitFunction { FitFunction::auc }
 fn n_model_to_display_default() -> u32 { 10 }
 fn false_default() -> bool { false }
 fn true_default() -> bool { true }
-fn display_level_default() -> usize { 2 }
-fn beam_method_default() -> String { "combinatorial".to_string() }
+fn beam_method_default() -> BeamMethod { BeamMethod::LimitedExhaustive }
 fn best_models_ci_alpha_default() -> f64 { 0.05 }
 fn max_nb_of_models_default() -> usize { 10000 }
 fn class_names_default() -> Vec<String> { Vec::new() }
@@ -378,7 +496,6 @@ fn uzero_default() -> usize { 0 }
 fn half_default() -> f64 { 0.5 }
 fn one_default() -> usize { 1 }
 fn voting_default() -> VotingMethod { VotingMethod::Majority }
-fn specialized_default() -> f64 { 0.6 }
 fn diversity_voting_default() -> f64 { 5.0 }
 fn kmax_default() -> usize { 200 }
 fn pop_size_default() -> u32 { 5000 }

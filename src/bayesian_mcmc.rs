@@ -10,6 +10,8 @@ use std::collections::{HashMap};
 use statrs::function::logistic::logistic;
 use statrs::function::erf::{erf, erf_inv};
 use serde::{Serialize, Deserialize};
+use rand::SeedableRng;
+use crate::experiment::ExperimentMetadata;
 use crate::individual::{RAW_TYPE, PREVALENCE_TYPE, LOG_TYPE};
 use argmin::{
     core::{CostFunction, Error as ArgminError, Executor},  
@@ -25,6 +27,8 @@ use crate::Population;
 use crate::param::Param;
 
 use serde;
+use crate::cinfo;
+
 
 const BIG_NUMBER: f64 = 100.0;
 
@@ -779,6 +783,63 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
     res_mcmc
 }
 
+pub fn mcmc(data: &mut Data, param: &Param, running: Arc<AtomicBool>) -> (Vec<Population>, Option<ExperimentMetadata>) {
+    let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+
+    warn!("MCMC algorithm is still in beta!");
+    warn!(" - results cannot be guaranteed,");
+    warn!(" - isn't GPU-compatible,");
+    warn!(" - isn't multi-threaded,");
+    warn!(" - contains only one 'GENERIC' language.");
+
+    // Each Gpredomics function currently handles class 2 as unknown
+    // As MCMC does not, remove unknown sample before analysis
+    let mut data = data.remove_class(2);
+
+    // Selecting features
+    data.select_features(param);
+
+    if data.feature_selection.len() < param.mcmc.nmin as usize {
+        warn!("SBS can not be launched according to required parameters: {} pre-selected features < {} minimum features to keep after SBS",
+                data.feature_selection.len(), param.mcmc.nmin as usize)
+    }
+        
+    let mut mcmc_result;
+    if param.mcmc.nmin != 0 && data.feature_selection.len() > param.mcmc.nmin as usize {
+        // Executing SBS
+        cinfo!(param.general.display_colorful, "Launching MCMC with SBS (λ={}, {}<->{} features...)", 
+            param.mcmc.lambda, data.feature_selection.len(), param.mcmc.nmin);
+        let results = run_mcmc_sbs(&data, param, &mut rng, running);
+        
+        // Displaying summary of SBS traces
+        for (nfeat, post_mean, _, log_evidence, feature_idx, _) in &results {
+            cinfo!(param.general.display_colorful, "Features: {}, Posterior: {:.4e}, Log Evid: {:.4}, Removed: {}", nfeat, post_mean, log_evidence, data.features[*feature_idx]);
+        }
+    
+        // Extract best MCMC trace
+        cinfo!(param.general.display_colorful, "Computing full posterior for optimal feature subset...");
+        mcmc_result = get_best_mcmc_sbs(&data, &results, &param);
+        
+        
+    } else {
+        cinfo!(param.general.display_colorful, "Launching MCMC without SBS (λ={}, using all {} features...)", 
+            param.mcmc.lambda, data.feature_selection.len());
+
+        let data_types: Vec<&str> = param.general.data_type.split(",").collect();
+        let data_type = data_types[0];
+        if data_types.len() > 1 { warn!("MCMC allows only one datatype per launch currently. Keeping: {}", data_type)}
+
+        let bp: BayesPred = BayesPred::new(&data, param.mcmc.lambda, individual::data_type(data_type), param.general.data_type_epsilon);
+        mcmc_result = compute_mcmc(&bp, param, &mut rng);
+    }
+
+    // Building complete posterior distribution
+    let pop: Population = mcmc_result.population;
+    mcmc_result.population = Population::new(); 
+
+    (vec![pop], Some(ExperimentMetadata::MCMC { trace: mcmc_result }) )
+
+}
 
 // Identifies and returns the best model from sequential backward selection results.
 // Selects based on log evidence and filters out unnecessary features.

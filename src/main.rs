@@ -1,10 +1,11 @@
 use log::{info, error};
-use gpredomics::{param, run_ga, run_beam, run_mcmc};
+use gpredomics::{param, cinfo};
 use flexi_logger::{Logger, WriteMode, FileSpec};
 use chrono::Local;
 use gpredomics::experiment::Experiment;
 use clap::Parser;
 use std::env;
+use std::process::Command;
 
 use std::thread;
 use signal_hook::{iterator::Signals, consts::signal::*};
@@ -30,17 +31,22 @@ fn custom_format(
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
-
-    let param = param::get("param.yaml".to_string()).unwrap();
-
-    // if param.cv.overfit_penalty != 0.0 {
-    //     error!("overfit_penalty parameter is deprecated, please set it to 0.");
-    //     panic!("overfit_penalty parameter is deprecated, please set it to 0.");
-    // }
+    let git_hash = Command::new("git")
+        .args(&["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.chars().take(7).collect::<String>())
+        .unwrap_or_else(|| "unknown".to_string());
 
     let args = Cli::parse();
 
+    println!("GPREDOMICS v{} [#{}]", version, git_hash);
+
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+
+    println!("Loading configuration from: {}", args.config);
+    let param = param::get(args.config).unwrap();
 
     // Initialize the logger
     let logger = if param.general.log_base.len()>0 {
@@ -81,7 +87,7 @@ fn main() {
                     experiment.evaluate_on_new_dataset(&x_path, &y_path);
                 } else {
                     // Display mode
-                    experiment.display_results();
+                    cinfo!(experiment.parameters.general.display_colorful, "{}", experiment.display_results());
                 }
                 return;
             }
@@ -92,14 +98,17 @@ fn main() {
         }
     }
 
-    info!("GPREDOMICS v{}", version);
-    info!("Loading param.yaml");
-    info!("\x1b[2;97m{:?}\x1b[0m", &param);
+    cinfo!(param.general.display_colorful, "\x1b[2;97m{:?}\x1b[0m", &param);
 
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
     let running_clone_for_signal = Arc::clone(&running);
     let mut signals = Signals::new(&[SIGTERM, SIGHUP, SIGINT]).expect("Failed to set up signal handler");
+
+    rayon::ThreadPoolBuilder::new()
+    .num_threads(param.general.thread_number as usize)
+    .build_global()
+    .expect("Rayon global pool already set");
 
     // Main thread now monitors the signal
     let mut soft_kill = false;
@@ -128,41 +137,17 @@ fn main() {
 
     let thread_param = param.clone();
     let handle = thread::spawn(move || {
-        match thread_param.general.algo.as_str() {
-            "ga" => run_ga(&thread_param, running_clone),
-            "beam" => run_beam(&thread_param, running_clone),
-            "mcmc" => run_mcmc(&thread_param, running_clone),
-            other => {
-                panic!("ERROR! No such algorithm {}", other);
-            }
-        }
+        gpredomics::run(&thread_param, running_clone)
     });
 
-    let mut exp = handle.join().expect("Thread panicked!");
+    let exp = handle.join().expect("Thread panicked!");
 
-    if param.importance.compute_importance {
-        info!("Computing feature importance...");
-        let start_importance = std::time::Instant::now();
-        
-        exp.compute_importance();
-        
-        let importance_time = start_importance.elapsed().as_secs_f64();
-        info!("Importance calculation completed in {:.2}s", importance_time);
-    } else {
-        info!("Skipping importance calculation (disabled in parameters)");
-    }
-
-    // Voting
-    if param.voting.vote {
-        exp.compute_voting();
-    } else {
-        info!("Voting stage ignored (disabled in parameters)");
-    }
+    cinfo!(param.general.display_colorful, "{}", exp.display_results());
 
     if param.general.save_exp != "".to_string() {
         info!("Saving experiment...");
         exp.save_auto(format!("{}_{}", timestamp, &param.general.save_exp)).expect("Error while exporting experiment");
-    }
+    } 
 
     logger.flush();
 }
@@ -170,6 +155,10 @@ fn main() {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
+   /// Path to configuration file
+    #[arg(short, long, default_value = "param.yaml")]
+    config: String,
+    
     /// Load experiment from file
     #[arg(short, long)]
     load: Option<String>,

@@ -1,4 +1,5 @@
 target/
+tests/consistency/v*
 *.log
 *.tsv
 out/
@@ -7,3 +8,4 @@ out/
 *.msgpack
 *.mp
 *.DS_Store
+*.svg
