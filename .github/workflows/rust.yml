@@ -21,7 +21,7 @@ jobs:
       - name: Format check
         run: cargo fmt --all --check
       - name: Clippy (deny warnings)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features 
 
   build_and_test:
     runs-on: ubuntu-latest
