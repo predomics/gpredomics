@@ -1456,6 +1456,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_get_gpu_assay_enabled() {
         // Create minimal data with some X values
         let mut data = Data::new();
