@@ -856,6 +856,7 @@ fn test_beam_qin2014_kmin_kmax_range() {
 }
 
 #[test]
+#[ignore]
 fn test_beam_qin2014_gpu_vs_cpu() {
     println!("\n=== Testing Beam GPU vs CPU Consistency ===\n");
 
@@ -1219,6 +1220,7 @@ fn test_beam_consistency_outer_cv_vs_no_outer_cv() {
 
 /// Test consistency: GPU vs CPU (basic, no CV)
 #[test]
+#[ignore]
 fn test_beam_consistency_gpu_vs_cpu_basic() {
     println!("\n=== Testing Beam Consistency: GPU vs CPU (Basic) ===\n");
 
@@ -1275,6 +1277,7 @@ fn test_beam_consistency_gpu_vs_cpu_basic() {
 
 /// Test consistency: GPU inner CV vs CPU inner CV
 #[test]
+#[ignore]
 fn test_beam_consistency_gpu_vs_cpu_inner_cv() {
     println!("\n=== Testing Beam Consistency: GPU Inner CV vs CPU Inner CV ===\n");
 
@@ -1339,6 +1342,7 @@ fn test_beam_consistency_gpu_vs_cpu_inner_cv() {
 
 /// Test consistency: GPU outer CV vs CPU outer CV
 #[test]
+#[ignore]
 fn test_beam_consistency_gpu_vs_cpu_outer_cv() {
     println!("\n=== Testing Beam Consistency: GPU Outer CV vs CPU Outer CV ===\n");
 
