@@ -1,43 +1,42 @@
-use serde::{Deserialize, Serialize};
-use crate::data::Data;
-use crate::utils::{display_feature_importance_terminal};
-use crate::population::Population;
-use crate::cv::CV;
-use crate::param::Param;
 use crate::bayesian_mcmc::MCMCAnalysisTrace;
-use log::{debug, info, error, warn};
-use rand_chacha::ChaCha8Rng;
-use rand::SeedableRng;
-use crate::voting::Jury;
 use crate::cinfo;
+use crate::cv::CV;
+use crate::data::Data;
+use crate::param::Param;
+use crate::population::Population;
+use crate::utils::display_feature_importance_terminal;
+use crate::voting::Jury;
+use log::{debug, error, info, warn};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use serde::{Deserialize, Serialize};
 
 //-----------------------------------------------------------------------------
-// Importance structures and methods 
+// Importance structures and methods
 //-----------------------------------------------------------------------------
-
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ImportanceScope {
     // Importance can be computed on : an individual (oob), a population (FBM), a collection of population (between folds)
-    Collection, // Collection of populations <=> Inter-folds FBM
-    Population { id: usize }, // Intra-fold FBM (ID = Fold number)
+    Collection,                     // Collection of populations <=> Inter-folds FBM
+    Population { id: usize },       // Intra-fold FBM (ID = Fold number)
     Individual { model_hash: u64 }, // Individual
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ImportanceType {
-    MDA, 
+    MDA,
     PrevalencePop,
     PrevalenceCV,
-    Coefficient, 
-    PosteriorProbability 
+    Coefficient,
+    PosteriorProbability,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
 pub enum ImportanceAggregation {
     mean,
-    median
+    median,
 }
 
 // pub struct FeatureImportance {
@@ -61,14 +60,13 @@ pub enum ImportanceAggregation {
 //     pub prevalence_cv_pct: Vec<Importance>,  // cv level
 // }
 
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Importance {
     pub importance_type: ImportanceType,
-    pub feature_idx: usize, 
+    pub feature_idx: usize,
     pub scope: ImportanceScope,
     pub aggreg_method: Option<ImportanceAggregation>,
-    pub importance: f64, 
+    pub importance: f64,
     pub is_scaled: bool,
     pub dispersion: f64,
     pub scope_pct: f64,
@@ -77,13 +75,13 @@ pub struct Importance {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ImportanceCollection {
-    pub importances: Vec<Importance>
+    pub importances: Vec<Importance>,
 }
 
 impl ImportanceCollection {
     pub fn new() -> ImportanceCollection {
         ImportanceCollection {
-            importances: Vec::new()
+            importances: Vec::new(),
         }
     }
 
@@ -100,23 +98,31 @@ impl ImportanceCollection {
     }
 
     // Return importances associated with a scope and/or type
-    pub fn filter(&self, scope: Option<ImportanceScope>, imp_type: Option<ImportanceType>,) -> ImportanceCollection {
-
-        let importances = self.importances
+    pub fn filter(
+        &self,
+        scope: Option<ImportanceScope>,
+        imp_type: Option<ImportanceType>,
+    ) -> ImportanceCollection {
+        let importances = self
+            .importances
             .iter()
             .filter(|imp| {
-
                 let scope_ok = match &scope {
-                    None => true,                                      
-                    Some(ImportanceScope::Individual { .. })  =>
-                        matches!(imp.scope, ImportanceScope::Individual { .. }),
-                    Some(ImportanceScope::Population { .. })  =>
-                        matches!(imp.scope, ImportanceScope::Population { .. }),
-                    Some(ImportanceScope::Collection)        =>
-                        matches!(imp.scope, ImportanceScope::Collection),
+                    None => true,
+                    Some(ImportanceScope::Individual { .. }) => {
+                        matches!(imp.scope, ImportanceScope::Individual { .. })
+                    }
+                    Some(ImportanceScope::Population { .. }) => {
+                        matches!(imp.scope, ImportanceScope::Population { .. })
+                    }
+                    Some(ImportanceScope::Collection) => {
+                        matches!(imp.scope, ImportanceScope::Collection)
+                    }
                 };
 
-                let type_ok  = imp_type.as_ref().map_or(true, |t| imp.importance_type == *t);
+                let type_ok = imp_type
+                    .as_ref()
+                    .map_or(true, |t| imp.importance_type == *t);
                 scope_ok && type_ok
             })
             .cloned()
@@ -131,17 +137,20 @@ impl ImportanceCollection {
         subset.sort_unstable_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap());
         let keep = ((subset.len() as f64 * pct).ceil() as usize).max(1);
         subset.truncate(keep);
-        ImportanceCollection { importances: subset }
+        ImportanceCollection {
+            importances: subset,
+        }
     }
 
     pub fn display_feature_importance_terminal(&self, data: &Data, nb_features: usize) -> String {
-        let mut map: std::collections::HashMap<usize, (f64, f64)> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<usize, (f64, f64)> =
+            std::collections::HashMap::new();
         let mut agg = ImportanceAggregation::mean;
-        
+
         let mut collection_importances = Vec::new();
         let mut population_importances = Vec::new();
         let mut individual_importances = Vec::new();
-        
+
         for imp in &self.importances {
             match imp.scope {
                 ImportanceScope::Collection => collection_importances.push(imp),
@@ -149,7 +158,7 @@ impl ImportanceCollection {
                 ImportanceScope::Individual { .. } => individual_importances.push(imp),
             }
         }
-        
+
         let importances_to_use = if !collection_importances.is_empty() {
             collection_importances
         } else if !population_importances.is_empty() {
@@ -157,33 +166,28 @@ impl ImportanceCollection {
         } else {
             individual_importances
         };
-        
+
         for imp in importances_to_use {
             map.insert(imp.feature_idx, (imp.importance, imp.dispersion));
             if let Some(a) = &imp.aggreg_method {
                 agg = a.clone();
             }
         }
-        
+
         //let consistent_directions = self.check_direction_consistency();
-        
-        display_feature_importance_terminal(
-            data, 
-            &map, 
-            nb_features, 
-            &agg
-        )
+
+        display_feature_importance_terminal(data, &map, nb_features, &agg)
     }
 }
 
 //-----------------------------------------------------------------------------
-// Experiment structures and methods 
+// Experiment structures and methods
 //-----------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ExperimentMetadata {
     MCMC { trace: MCMCAnalysisTrace },
-    Jury { jury: Jury }
+    Jury { jury: Jury },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -197,38 +201,70 @@ pub struct Experiment {
     pub train_data: Data,
     pub test_data: Option<Data>,
 
-    // Results 
+    // Results
     // In CV-mode, Vec<Vec<Population>>.len() = outer_folds, in non-CV mode Vec<Vec<Population>>.len() = 1
-    pub collections: Vec<Vec<Population>>, 
+    pub collections: Vec<Vec<Population>>,
     pub final_population: Option<Population>,
     pub importance_collection: Option<ImportanceCollection>,
 
     pub cv_folds_ids: Option<Vec<(Vec<String>, Vec<String>)>>,
-    
+
     // Metadata
     pub execution_time: f64,
-    pub others: Option<ExperimentMetadata>
+    pub others: Option<ExperimentMetadata>,
 }
-
 
 impl Experiment {
     pub fn compute_importance(&mut self) {
         let mut rng = ChaCha8Rng::seed_from_u64(self.parameters.general.seed);
-        if matches!(self.cv_folds_ids, None)  {
+        if matches!(self.cv_folds_ids, None) {
             info!("Computing importance on final population's FBM (non-CV mode)");
-            self.importance_collection = Some(self.final_population.as_ref().unwrap().select_best_population(self.parameters.cv.cv_best_models_ci_alpha).compute_pop_oob_feature_importance(&self.train_data, self.parameters.importance.n_permutations_oob, &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true, None));
-            info!("{}", self.importance_collection.as_ref().unwrap().display_feature_importance_terminal(&self.train_data, 30));
+            self.importance_collection = Some(
+                self.final_population
+                    .as_ref()
+                    .unwrap()
+                    .select_best_population(self.parameters.cv.cv_best_models_ci_alpha)
+                    .compute_pop_oob_feature_importance(
+                        &self.train_data,
+                        self.parameters.importance.n_permutations_oob,
+                        &mut rng,
+                        &self.parameters.importance.importance_aggregation,
+                        self.parameters.importance.scaled_importance,
+                        true,
+                        None,
+                    ),
+            );
+            info!(
+                "{}",
+                self.importance_collection
+                    .as_ref()
+                    .unwrap()
+                    .display_feature_importance_terminal(&self.train_data, 30)
+            );
         } else {
-            info!("Computing CV importance with {} folds", self.cv_folds_ids.as_ref().unwrap().len());
+            info!(
+                "Computing CV importance with {} folds",
+                self.cv_folds_ids.as_ref().unwrap().len()
+            );
             if let Some(fold_ids) = &self.cv_folds_ids {
                 debug!("Reconstructing CV object from Experiment...");
-                let cv_result = CV::reconstruct(&self.train_data, fold_ids.clone(), self.collections.clone());
-                
+                let cv_result =
+                    CV::reconstruct(&self.train_data, fold_ids.clone(), self.collections.clone());
+
                 match cv_result {
                     Ok(cv) => {
                         debug!("Computing Intra-fold and Inter-fold importances...");
-                        self.importance_collection = Some(cv.compute_cv_oob_feature_importance(&self.parameters, self.parameters.importance.n_permutations_oob,
-                            &mut rng, &self.parameters.importance.importance_aggregation, self.parameters.importance.scaled_importance, true).expect("CV importance calculation failed."));
+                        self.importance_collection = Some(
+                            cv.compute_cv_oob_feature_importance(
+                                &self.parameters,
+                                self.parameters.importance.n_permutations_oob,
+                                &mut rng,
+                                &self.parameters.importance.importance_aggregation,
+                                self.parameters.importance.scaled_importance,
+                                true,
+                            )
+                            .expect("CV importance calculation failed."),
+                        );
                     }
                     Err(e) => {
                         panic!("Failed to reconstruct CV structure: {}", e);
@@ -242,12 +278,21 @@ impl Experiment {
 
     pub fn display_results(&self) -> String {
         let mut text = String::new();
-        text.push_str(&format!("\n=============== Experiment {} ===============\n\n", self.id));
-        text.push_str(&format!("Gpredomics version: v{}\n", self.gpredomics_version));
+        text.push_str(&format!(
+            "\n=============== Experiment {} ===============\n\n",
+            self.id
+        ));
+        text.push_str(&format!(
+            "Gpredomics version: v{}\n",
+            self.gpredomics_version
+        ));
         text.push_str(&format!("Timestamp: {}\n", self.timestamp));
         text.push_str(&format!("Algorithm: {}\n", self.parameters.general.algo));
         text.push_str(&format!("Execution time: {:.2}s\n", self.execution_time));
-        text.push_str(&format!("Parameters: \x1b[2;97m{:?}\x1b[0m\n", &self.parameters));
+        text.push_str(&format!(
+            "Parameters: \x1b[2;97m{:?}\x1b[0m\n",
+            &self.parameters
+        ));
         text.push_str(&format!("Experiment results:\n\n"));
 
         // Reconstruct CV to print each fold FBM as original display
@@ -263,26 +308,45 @@ impl Experiment {
             let mut final_pop = self.final_population.clone().unwrap();
             final_pop.compute_hash();
 
-            let fbm_hashes: std::collections::HashSet<_> = fbm.individuals.iter().map(|i| i.hash).collect();
-            let final_hashes: std::collections::HashSet<_> = final_pop.individuals.iter().map(|i| i.hash).collect();
+            let fbm_hashes: std::collections::HashSet<_> =
+                fbm.individuals.iter().map(|i| i.hash).collect();
+            let final_hashes: std::collections::HashSet<_> =
+                final_pop.individuals.iter().map(|i| i.hash).collect();
 
             assert_eq!(fbm_hashes, final_hashes, "Something is wrong with the Experiment: reconstructed CV based FBM should be the same as final population");
-            text.push_str(&format!("{}\n", crate::utils::strip_ansi_if_needed("\x1b[1;93mDisplaying Family of best models across folds\x1b[0m", self.parameters.general.display_colorful)));
-        }    
+            text.push_str(&format!(
+                "{}\n",
+                crate::utils::strip_ansi_if_needed(
+                    "\x1b[1;93mDisplaying Family of best models across folds\x1b[0m",
+                    self.parameters.general.display_colorful
+                )
+            ));
+        }
 
         // Print final result
         if let Some(mut final_pop) = self.final_population.clone() {
-            text.push_str(&format!("{}\n", final_pop.display(&self.train_data, self.test_data.as_ref(), &self.parameters)));
+            text.push_str(&format!(
+                "{}\n",
+                final_pop.display(&self.train_data, self.test_data.as_ref(), &self.parameters)
+            ));
         } else if self.parameters.general.algo == "mcmc" {
-            text.push_str(&format!("{}\n", self.collections[0][0].clone().display(&self.train_data, self.test_data.as_ref(), &self.parameters)));
+            text.push_str(&format!(
+                "{}\n",
+                self.collections[0][0].clone().display(
+                    &self.train_data,
+                    self.test_data.as_ref(),
+                    &self.parameters
+                )
+            ));
         } else {
             panic!("No final population available");
         }
-        
+
         if let Some(ref importance_collection) = self.importance_collection {
             let top_features = if self.cv_folds_ids.is_some() {
                 // CV-mode : priorize Collection importances (inter-fold)
-                let collection_features = importance_collection.filter(Some(ImportanceScope::Collection), None);
+                let collection_features =
+                    importance_collection.filter(Some(ImportanceScope::Collection), None);
                 if !collection_features.importances.is_empty() {
                     collection_features.get_top(0.1)
                 } else {
@@ -290,36 +354,46 @@ impl Experiment {
                 }
             } else {
                 // Non CV-mode : priorize Population importances
-                let population_features = importance_collection.filter(
-                    Some(ImportanceScope::Population { id: 0 }), 
-                    None
-                );
+                let population_features =
+                    importance_collection.filter(Some(ImportanceScope::Population { id: 0 }), None);
                 if !population_features.importances.is_empty() {
                     population_features.get_top(0.1)
                 } else {
                     importance_collection.get_top(0.1)
                 }
             };
-            
-            text.push_str(&format!("Top 10%:{}\n", top_features.display_feature_importance_terminal(&self.train_data, top_features.importances.len())));
+
+            text.push_str(&format!(
+                "Top 10%:{}\n",
+                top_features.display_feature_importance_terminal(
+                    &self.train_data,
+                    top_features.importances.len()
+                )
+            ));
         }
-        
+
         if let Some(ref metadata) = self.others {
             match metadata {
                 ExperimentMetadata::Jury { jury } => {
-                    text.push_str(&format!("{}\n", jury.display(&self.train_data, self.test_data.as_ref(), &self.parameters)));
-                },
+                    text.push_str(&format!(
+                        "{}\n",
+                        jury.display(&self.train_data, self.test_data.as_ref(), &self.parameters)
+                    ));
+                }
                 _ => {}
             }
         }
-        
+
         text
     }
 
     pub fn evaluate_on_new_dataset(&mut self, X_path: &str, y_path: &str) {
         let mut new_data = Data::new();
-        
-        let final_pop = self.final_population.as_mut().expect("No final population available");
+
+        let final_pop = self
+            .final_population
+            .as_mut()
+            .expect("No final population available");
 
         if let Err(e) = new_data.load_data(X_path, y_path, self.parameters.data.features_in_rows) {
             panic!("Failed to load test data: {}", e);
@@ -335,83 +409,96 @@ impl Experiment {
 
         if self.train_data.check_compatibility(&new_data) == false {
             panic!("New test data to evaluate is not compatible with train data");
-        } 
+        }
 
         let display_param = self.parameters.clone();
 
-        crate::cinfo!(self.parameters.general.display_colorful, "{}", final_pop.display(&self.train_data, Some(&new_data), &display_param));
+        crate::cinfo!(
+            self.parameters.general.display_colorful,
+            "{}",
+            final_pop.display(&self.train_data, Some(&new_data), &display_param)
+        );
 
         if let Some(ref mut metadata) = self.others {
             match metadata {
                 ExperimentMetadata::Jury { jury } => {
-                    cinfo!(self.parameters.general.display_colorful, "{}", jury.display(&self.train_data, Some(&new_data), &self.parameters));
-                },
+                    cinfo!(
+                        self.parameters.general.display_colorful,
+                        "{}",
+                        jury.display(&self.train_data, Some(&new_data), &self.parameters)
+                    );
+                }
                 _ => {}
             }
         }
     }
-    
-    pub fn save_auto<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
-            let path = path.as_ref();
-            let ext = path.extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_ascii_lowercase();
 
-            match ext.as_str() {
-                "json" => self.save_json(path),
-                "msgpack" | "mp" => self.save_messagepack(path),
-                "bin" | "bincode" => self.save_bincode(path),
-                _ => {
-                    warn!("Unknown format. Saving experiment in msgpack.");
-                    let mp_path = path.with_extension("mp");
-                    self.save_messagepack(mp_path)
-                }
+    pub fn save_auto<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let path = path.as_ref();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        match ext.as_str() {
+            "json" => self.save_json(path),
+            "msgpack" | "mp" => self.save_messagepack(path),
+            "bin" | "bincode" => self.save_bincode(path),
+            _ => {
+                warn!("Unknown format. Saving experiment in msgpack.");
+                let mp_path = path.with_extension("mp");
+                self.save_messagepack(mp_path)
             }
         }
+    }
 
-        /// Save to JSON
-        fn save_json<P: AsRef<std::path::Path>>(
-            &self,
-            path: P,
-        ) -> Result<(), Box<dyn std::error::Error>> {
-            let json = serde_json::to_string_pretty(self)?;
-            warn!("Due to JSON compression, a slight inaccuracy may occur for decimal values. Prefer the msgpack format if you want to read the experiments from another language.");
-            std::fs::write(path, json)?;
-            Ok(())
-        }
+    /// Save to JSON
+    fn save_json<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string_pretty(self)?;
+        warn!("Due to JSON compression, a slight inaccuracy may occur for decimal values. Prefer the msgpack format if you want to read the experiments from another language.");
+        std::fs::write(path, json)?;
+        Ok(())
+    }
 
-        /// Save to messagepack (R and Rust compatible)
-        fn save_messagepack<P: AsRef<std::path::Path>>(
-            &self,
-            path: P,
-        ) -> Result<(), Box<dyn std::error::Error>> {
-            use rmp_serde::Serializer;
-            
-            let mut buf = Vec::new();
-            self.serialize(&mut Serializer::new(&mut buf).with_struct_map())?;
-            std::fs::write(path, buf)?;
-            Ok(())
-        }
+    /// Save to messagepack (R and Rust compatible)
+    fn save_messagepack<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use rmp_serde::Serializer;
 
-        /// Save as bincode (Rust compatible only)
-        fn save_bincode<P: AsRef<std::path::Path>>(
-            &self,
-            path: P,
-        ) -> Result<(), Box<dyn std::error::Error>> {
-            let encoded = bincode::serialize(self)?;
-            std::fs::write(path, encoded)?;
-            Ok(())
-        }
+        let mut buf = Vec::new();
+        self.serialize(&mut Serializer::new(&mut buf).with_struct_map())?;
+        std::fs::write(path, buf)?;
+        Ok(())
+    }
+
+    /// Save as bincode (Rust compatible only)
+    fn save_bincode<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let encoded = bincode::serialize(self)?;
+        std::fs::write(path, encoded)?;
+        Ok(())
+    }
 
     pub fn load_auto<P: AsRef<std::path::Path>>(
         path: P,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let path = path.as_ref();
-        let ext = path.extension()
-                     .and_then(|e| e.to_str())
-                     .unwrap_or("")
-                     .to_ascii_lowercase();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
 
         match ext.as_str() {
             "json" => Self::load_json(path),
@@ -421,9 +508,7 @@ impl Experiment {
         }
     }
 
-    fn load_json<P: AsRef<std::path::Path>>(
-        path: P,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    fn load_json<P: AsRef<std::path::Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
         let experiment: Experiment = serde_json::from_str(&content)?;
         Ok(experiment)
@@ -449,7 +534,7 @@ impl Experiment {
         path: P,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let path = path.as_ref();
-        
+
         if let Ok(experiment) = Self::load_messagepack(path) {
             return Ok(experiment);
         }
@@ -461,14 +546,14 @@ impl Experiment {
         if let Ok(experiment) = Self::load_json(path) {
             return Ok(experiment);
         }
-        
+
         Err("Unable to load the experience".into())
     }
 
     pub fn compute_voting(&mut self) {
         let mut jury;
         let mut voting_pop = self.final_population.clone().unwrap();
-        
+
         voting_pop.compute_all_metrics(&self.train_data, &self.parameters.general.fit);
 
         jury = Jury::new_from_param(&voting_pop, &self.train_data, &self.parameters);
@@ -479,15 +564,14 @@ impl Experiment {
         } else {
             warn!("An informative vote is requiring more than one expert!")
         }
-    
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::population::Population;
     use crate::data::Data;
+    use crate::population::Population;
 
     #[test]
     fn test_new_creates_empty_collection() {
@@ -520,7 +604,7 @@ mod tests {
             scope_pct: 1.0,
             direction: None,
         });
-        
+
         let result = collection.feature(5);
         assert_eq!(result.importances.len(), 1);
         assert_eq!(result.importances[0].feature_idx, 5);
@@ -541,7 +625,7 @@ mod tests {
             scope_pct: 1.0,
             direction: None,
         });
-        
+
         let result = collection.feature(99);
         assert!(result.importances.is_empty());
     }
@@ -582,30 +666,43 @@ mod tests {
             scope_pct: 0.8,
             direction: None,
         });
-        
+
         let result_none = collection.filter(None, None);
         assert_eq!(result_none.importances.len(), 3);
-        
+
         let result_scope = collection.filter(Some(ImportanceScope::Collection), None);
         assert_eq!(result_scope.importances.len(), 1);
-        assert!(matches!(result_scope.importances[0].scope, ImportanceScope::Collection));
-        
+        assert!(matches!(
+            result_scope.importances[0].scope,
+            ImportanceScope::Collection
+        ));
+
         let result_type = collection.filter(None, Some(ImportanceType::MDA));
         assert_eq!(result_type.importances.len(), 2);
-        assert!(result_type.importances.iter().all(|imp| imp.importance_type == ImportanceType::MDA));
-        
-        let result_both = collection.filter(Some(ImportanceScope::Collection), Some(ImportanceType::MDA));
+        assert!(result_type
+            .importances
+            .iter()
+            .all(|imp| imp.importance_type == ImportanceType::MDA));
+
+        let result_both =
+            collection.filter(Some(ImportanceScope::Collection), Some(ImportanceType::MDA));
         assert_eq!(result_both.importances.len(), 1);
-        assert!(matches!(result_both.importances[0].scope, ImportanceScope::Collection));
-        assert_eq!(result_both.importances[0].importance_type, ImportanceType::MDA);
+        assert!(matches!(
+            result_both.importances[0].scope,
+            ImportanceScope::Collection
+        ));
+        assert_eq!(
+            result_both.importances[0].importance_type,
+            ImportanceType::MDA
+        );
     }
 
     #[test]
     fn test_get_top_comprehensive_functionality() {
         let mut collection = ImportanceCollection::new();
-        
+
         assert!(collection.get_top(0.5).importances.is_empty());
-        
+
         collection.importances.push(Importance {
             importance_type: ImportanceType::MDA,
             feature_idx: 1,
@@ -639,20 +736,20 @@ mod tests {
             scope_pct: 0.8,
             direction: None,
         });
-        
+
         let result_zero = collection.get_top(0.0);
         assert_eq!(result_zero.importances.len(), 1);
         assert_eq!(result_zero.importances[0].importance, 0.9);
-        
+
         let result_full = collection.get_top(1.0);
         assert_eq!(result_full.importances.len(), 3);
-        
+
         assert!(result_full.importances[0].importance >= result_full.importances[1].importance);
         assert!(result_full.importances[1].importance >= result_full.importances[2].importance);
         assert_eq!(result_full.importances[0].importance, 0.9);
         assert_eq!(result_full.importances[1].importance, 0.6);
         assert_eq!(result_full.importances[2].importance, 0.3);
-        
+
         let result_half = collection.get_top(0.5);
         assert_eq!(result_half.importances.len(), 2);
         assert_eq!(result_half.importances[0].importance, 0.9);
@@ -662,7 +759,7 @@ mod tests {
     #[test]
     fn test_display_feature_importance_prioritizes_scopes_correctly() {
         let mut collection = ImportanceCollection::new();
-        
+
         collection.importances.push(Importance {
             importance_type: ImportanceType::MDA,
             feature_idx: 1,
@@ -696,11 +793,11 @@ mod tests {
             scope_pct: 0.8,
             direction: None,
         });
-        
+
         let data = Data::test_with_these_features(&[1, 2]);
-        
+
         let result = collection.display_feature_importance_terminal(&data, 10);
-        
+
         // Should prioritise Collection > Population > Individual
         // If Collection is present, should use Collection importance (0.4)
         assert!(!result.is_empty());
@@ -710,9 +807,9 @@ mod tests {
     fn test_display_feature_importance_handles_empty_collection() {
         let collection = ImportanceCollection::new();
         let data = Data::test_with_these_features(&[1, 2]);
-        
+
         let result = collection.display_feature_importance_terminal(&data, 10);
-        assert!(!result.is_empty()); 
+        assert!(!result.is_empty());
     }
 
     #[test]
@@ -740,13 +837,12 @@ mod tests {
             scope_pct: 0.5,
             direction: Some(1),
         });
-        
+
         let data = Data::test_with_these_features(&[1, 2]);
-        
+
         let result = collection.display_feature_importance_terminal(&data, 10);
         assert!(!result.is_empty());
     }
-
 
     impl Experiment {
         pub fn test() -> Experiment {
@@ -754,11 +850,14 @@ mod tests {
                 id: "test_exp_001".to_string(),
                 timestamp: "2025-01-01T12:00:00Z".to_string(),
                 gpredomics_version: "1.0.0".to_string(),
-                parameters: Param::default(), 
-                train_data: Data::test(),      
+                parameters: Param::default(),
+                train_data: Data::test(),
                 cv_folds_ids: None,
                 test_data: Some(Data::test2()),
-                collections: vec![vec!(Population::test_with_n_overlapping_features(2, 20), Population::test_with_n_overlapping_features(15, 12))],
+                collections: vec![vec![
+                    Population::test_with_n_overlapping_features(2, 20),
+                    Population::test_with_n_overlapping_features(15, 12),
+                ]],
                 final_population: Some(Population::test()),
                 importance_collection: None,
                 execution_time: 42.5,
@@ -773,23 +872,23 @@ mod tests {
     //     let file_path = "test_serialization_json_roundtrip";
 
     //     original_exp.save_json(&file_path).unwrap();
-        
+
     //     let _ = Experiment::load_json(&file_path).unwrap();
-        
+
     //     // Vérifications
     //     //assert_eq!(original_exp, loaded_exp);
-        
+
     //     std::fs::remove_file("test_serialization_json_roundtrip").unwrap();
     // }
 
     #[test]
     fn test_serialization_messagepack_roundtrip() {
         let original_exp = Experiment::test();
-        let file_path ="test_serialization_messagepack_roundtrip";
+        let file_path = "test_serialization_messagepack_roundtrip";
 
         original_exp.save_messagepack(&file_path).unwrap();
         let loaded_exp = Experiment::load_messagepack(&file_path).unwrap();
-        
+
         assert_eq!(original_exp, loaded_exp);
         std::fs::remove_file("test_serialization_messagepack_roundtrip").unwrap();
     }
@@ -802,7 +901,7 @@ mod tests {
 
         original_exp.save_bincode(&file_path).unwrap();
         let loaded_exp = Experiment::load_bincode(&file_path).unwrap();
-        
+
         assert_eq!(original_exp, loaded_exp);
         std::fs::remove_file("test_serialization_bincode_roundtrip").unwrap();
     }
@@ -810,7 +909,7 @@ mod tests {
     #[test]
     fn test_auto_format_detection_by_extension() {
         let experiment = Experiment::test();
-        
+
         // Test JSON
         let json_file = "test_auto_format_detection_by_extension.json";
         experiment.save_auto(json_file).unwrap();
@@ -839,7 +938,7 @@ mod tests {
         let experiment = Experiment::test();
         let temp_file = "test_load_fallback_mechanism";
         experiment.save_auto(temp_file).unwrap();
-        
+
         let _ = std::fs::rename("test_load_fallback_mechanism.mp", temp_file);
         let loaded = Experiment::load_auto(temp_file).unwrap();
         assert_eq!(experiment, loaded);
@@ -850,7 +949,7 @@ mod tests {
     #[test]
     fn test_experiment_with_jury_metadata() {
         let mut experiment = Experiment::test();
-        
+
         // Create minimal test data for Jury
         let jury = Jury::new(
             &Population::new(),
@@ -861,17 +960,16 @@ mod tests {
             &0.0,
             &WeightingMethod::Uniform,
         );
-        
+
         experiment.others = Some(ExperimentMetadata::Jury { jury });
-        
+
         // Serialisation test with metadata Short
         let temp_file = "test_experiment_with_jury_metadata.json";
         experiment.save_auto(temp_file).unwrap();
         let loaded = Experiment::load_auto(temp_file).unwrap();
-        
+
         match loaded.others {
-            Some(ExperimentMetadata::Jury { .. }) => {
-            },
+            Some(ExperimentMetadata::Jury { .. }) => {}
             _ => panic!("Jury metadata not preserved during serialization"),
         }
         std::fs::remove_file("test_experiment_with_jury_metadata.json").unwrap();
@@ -880,7 +978,7 @@ mod tests {
     #[test]
     fn test_file_extension_normalization() {
         let experiment = Experiment::test();
-        
+
         // Test with extension in uppercase
         let temp_file = "test_file_extension_normalization.BIN";
         experiment.save_auto(temp_file).unwrap();
@@ -900,7 +998,7 @@ mod tests {
     fn test_evaluate_on_new_dataset_no_population() {
         let mut experiment = Experiment::test();
         experiment.final_population = None;
-        
+
         experiment.evaluate_on_new_dataset("dummy_X.csv", "dummy_y.csv");
     }
 
@@ -909,18 +1007,22 @@ mod tests {
     fn test_complete_experiment_lifecycle() {
         let mut original = Experiment::test();
         original.execution_time = 123.45;
-        
+
         original.final_population = Some(Population::new());
 
         let temp_file = "test_complete_experiment_lifecycle.json";
         original.save_auto(temp_file).unwrap();
-        
+
         let reloaded = Experiment::load_auto(temp_file).unwrap();
-        
+
         assert_eq!(original, reloaded);
         assert!(reloaded.final_population.is_some());
-        
-        cinfo!(reloaded.parameters.general.display_colorful, "{}", reloaded.display_results());
+
+        cinfo!(
+            reloaded.parameters.general.display_colorful,
+            "{}",
+            reloaded.display_results()
+        );
         std::fs::remove_file("test_complete_experiment_lifecycle.json").unwrap();
     }
 
@@ -929,9 +1031,9 @@ mod tests {
         let mut experiment = Experiment::test();
         experiment.cv_folds_ids = None;
         experiment.final_population = Some(Population::test());
-        
+
         experiment.compute_importance();
-        
+
         assert!(experiment.importance_collection.is_some());
         let importance = experiment.importance_collection.unwrap();
         assert!(!importance.importances.is_empty());
@@ -943,7 +1045,7 @@ mod tests {
         let mut experiment = Experiment::test();
         experiment.cv_folds_ids = None;
         experiment.final_population = None;
-        
+
         experiment.compute_importance();
     }
 
@@ -951,16 +1053,19 @@ mod tests {
     fn test_compute_importance_cv_mode_reconstructs_cv_from_collection() {
         let mut experiment = Experiment::test();
         experiment.cv_folds_ids = Some(vec![
-            (vec!["sample1".to_string(), "sample2".to_string()], vec!["sample3".to_string()]),
-            (vec!["sample3".to_string()], vec!["sample1".to_string(), "sample2".to_string()]),
+            (
+                vec!["sample1".to_string(), "sample2".to_string()],
+                vec!["sample3".to_string()],
+            ),
+            (
+                vec!["sample3".to_string()],
+                vec!["sample1".to_string(), "sample2".to_string()],
+            ),
         ]);
-        experiment.collections = vec![
-            vec![Population::test()], 
-            vec![Population::test()]
-        ];
-        
+        experiment.collections = vec![vec![Population::test()], vec![Population::test()]];
+
         experiment.compute_importance();
-        
+
         assert!(experiment.importance_collection.is_some());
     }
 
@@ -968,12 +1073,13 @@ mod tests {
     #[should_panic(expected = "Mismatch")]
     fn test_compute_importance_cv_mode_handles_no_collection() {
         let mut experiment = Experiment::test();
-        experiment.cv_folds_ids = Some(vec![
-            (vec!["sample1".to_string()], vec!["sample2".to_string()]),
-        ]);
+        experiment.cv_folds_ids = Some(vec![(
+            vec!["sample1".to_string()],
+            vec!["sample2".to_string()],
+        )]);
         experiment.collections = vec![];
         experiment.compute_importance();
-        
+
         assert!(experiment.importance_collection.is_none());
     }
 
@@ -981,11 +1087,12 @@ mod tests {
     #[should_panic(expected = "Failed to reconstruct CV structure")]
     fn test_compute_importance_cv_mode_panics_when_cv_reconstruction_fails() {
         let mut experiment = Experiment::test();
-        experiment.cv_folds_ids = Some(vec![
-            (vec!["invalid_sample".to_string()], vec!["another_invalid".to_string()]),
-        ]);
+        experiment.cv_folds_ids = Some(vec![(
+            vec!["invalid_sample".to_string()],
+            vec!["another_invalid".to_string()],
+        )]);
         experiment.collections = vec![vec![Population::test()]];
-        
+
         experiment.compute_importance();
     }
 
@@ -995,9 +1102,9 @@ mod tests {
         experiment.cv_folds_ids = None;
         experiment.final_population = Some(Population::test());
         experiment.parameters.general.thread_number = 2;
-        
+
         experiment.compute_importance();
-        
+
         assert!(experiment.importance_collection.is_some());
     }
 
@@ -1007,7 +1114,7 @@ mod tests {
         let mut experiment = Experiment::test();
 
         experiment.final_population = None;
-        
+
         experiment.evaluate_on_new_dataset("dummy_X.csv", "dummy_y.csv");
     }
 
@@ -1025,12 +1132,17 @@ mod tests {
         let mut experiment = Experiment::test();
         experiment.final_population = Some(Population::test());
 
-        std::fs::write("test_incompatible_X.csv", "feature1,feature2,feature3\n1,2,3\n").unwrap();
+        std::fs::write(
+            "test_incompatible_X.csv",
+            "feature1,feature2,feature3\n1,2,3\n",
+        )
+        .unwrap();
         std::fs::write("test_incompatible_y.csv", "class\n1\n").unwrap();
 
         // Use AssertUnwindSafe to wrap the closure
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            experiment.evaluate_on_new_dataset("test_incompatible_X.csv", "test_incompatible_y.csv");
+            experiment
+                .evaluate_on_new_dataset("test_incompatible_X.csv", "test_incompatible_y.csv");
         }));
 
         // Cleanup code
@@ -1040,5 +1152,4 @@ mod tests {
         // Assert that the code panicked as expected
         assert!(result.is_err(), "The test did not panic as expected");
     }
-    
 }
