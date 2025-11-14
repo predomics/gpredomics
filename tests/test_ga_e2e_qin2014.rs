@@ -679,7 +679,7 @@ fn test_ga_qin2014_cv_enabled() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "Requires GPU hardware - run with 'cargo test -- --ignored' if GPU is available"]
 fn test_ga_qin2014_gpu_vs_cpu() {
     println!("\n=== Testing GPU vs CPU Consistency ===\n");
 
@@ -726,6 +726,7 @@ fn test_ga_qin2014_gpu_vs_cpu() {
 
 /// Test GPU support with inner CV to verify GPU and CPU produce identical results
 #[test]
+#[ignore = "Requires GPU hardware - run with 'cargo test -- --ignored' if GPU is available"]
 fn test_ga_gpu_with_inner_cv() {
     println!("\n=== Testing GA with GPU and Inner CV ===");
 
@@ -939,7 +940,7 @@ fn test_ga_consistency_outer_cv_vs_no_outer_cv() {
 
 /// Test consistency: GPU vs CPU (basic, no CV)
 #[test]
-#[ignore]
+#[ignore = "Requires GPU hardware - run with 'cargo test -- --ignored' if GPU is available"]
 fn test_ga_consistency_gpu_vs_cpu_basic() {
     println!("\n=== Testing GA Consistency: GPU vs CPU (Basic) ===\n");
 
@@ -1000,7 +1001,7 @@ fn test_ga_consistency_gpu_vs_cpu_basic() {
 
 /// Test consistency: GPU inner CV vs CPU inner CV
 #[test]
-#[ignore]
+#[ignore = "Requires GPU hardware - run with 'cargo test -- --ignored' if GPU is available"]
 fn test_ga_consistency_gpu_vs_cpu_inner_cv() {
     println!("\n=== Testing GA Consistency: GPU Inner CV vs CPU Inner CV ===\n");
 
@@ -1141,6 +1142,7 @@ fn test_ga_consistency_keep_trace() {
 
 /// Test with multiple languages and data types like in param.yaml
 #[test]
+#[ignore = "Requires GPU hardware - run with 'cargo test -- --ignored' if GPU is available"]
 fn test_ga_gpu_multiple_lang_dtype() {
     println!("\n=== Testing GA GPU with Multiple Languages/DataTypes ===");
 
