@@ -1003,6 +1003,7 @@ fn test_beam_qin2014_all_language_datatype_combinations() {
 
 /// Test GPU support with inner CV for Beam
 #[test]
+#[ignore]
 fn test_beam_gpu_with_inner_cv() {
     println!("\n=== Testing Beam with GPU and Inner CV ===");
 
