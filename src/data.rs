@@ -1624,33 +1624,6 @@ mod tests {
         );
     }
 
-    fn test_load_legacy_format_qin2014() {
-        let (x_path, y_path) = create_test_files("legacy_001");
-
-        // X.tsv: features×samples format (legacy)
-        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\nFeature2\t1.0\t2.0\t1.5\nFeature3\t0.2\t0.0\t0.8\n";
-        fs::write(&x_path, x_content).unwrap();
-
-        // y.tsv: sample labels
-        let y_content = "SampleID\tLabel\nSample1\t0\nSample2\t1\nSample3\t1\n";
-        fs::write(&y_path, y_content).unwrap();
-
-        let mut data = Data::new();
-        data.load_data(x_path.to_str().unwrap(), y_path.to_str().unwrap(), true)
-            .unwrap();
-
-        assert_eq!(data.sample_len, 3);
-        assert_eq!(data.feature_len, 3);
-        assert_eq!(data.samples, vec!["Sample1", "Sample2", "Sample3"]);
-        assert_eq!(data.features, vec!["Feature1", "Feature2", "Feature3"]);
-        assert_eq!(data.y, vec![0, 1, 1]);
-        assert_eq!(data.X.get(&(0, 0)), Some(&0.5));
-        assert_eq!(data.X.get(&(1, 0)), None);
-        assert_eq!(data.X.get(&(2, 1)), Some(&1.5));
-
-        cleanup_test_files(&x_path, &y_path);
-    }
-
     #[test]
     fn test_load_standard_format_qin2014() {
         let (x_path, y_path) = create_test_files("standard_001");
