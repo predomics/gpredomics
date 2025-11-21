@@ -73,6 +73,36 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         }
     }
 
+    let mut test_data: Option<Data> = None;
+    if (param.data.Xtest.is_empty() && param.data.ytest.is_empty())
+        && param.data.holdout_ratio > 0.0
+    {
+        cinfo!(
+            param.general.display_colorful,
+            "Performing train/test split with holdout ratio of {}...",
+            param.data.holdout_ratio
+        );
+        let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+        let stratify_by: Option<&str> = if data.sample_annotations.is_some() {
+            Some(param.cv.stratify_by.as_str())
+        } else {
+            None
+        };
+        let mut _holdout: Data = Data::new();
+        (data, _holdout) = data.train_test_split(param.data.holdout_ratio, &mut rng, stratify_by);
+        test_data = Some(_holdout);
+        cinfo!(
+            false,
+            "Train/test split: {} train samples, {} test samples",
+            data.sample_len,
+            test_data.as_ref().unwrap().sample_len
+        );
+    } else if (param.data.Xtest.is_empty() && param.data.ytest.is_empty())
+        && param.data.holdout_ratio == 0.0
+    {
+        warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
+    }
+
     // Launch training
     let (collections, final_population, cv_folds_ids, meta) = if param.general.cv {
         run_cv_training(&data, &param, running)
@@ -82,7 +112,7 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     };
 
     // Loading test data
-    let test_data = if !param.data.Xtest.is_empty() {
+    if test_data.is_none() && (!param.data.Xtest.is_empty() && !param.data.ytest.is_empty()) {
         debug!("Loading test data...");
         let mut td = Data::new();
         let _ = td.load_data(
@@ -97,10 +127,8 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         if param.general.algo == "mcmc" {
             td = td.remove_class(2);
         }
-        td
-    } else {
-        Data::new()
-    };
+        test_data = Some(td);
+    }
 
     // Build experiment
     let output = Command::new("git")
@@ -127,7 +155,7 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         timestamp: timestamp.clone(),
 
         train_data: data,
-        test_data: Some(test_data),
+        test_data: test_data,
 
         final_population: Some(final_population),
         collections: collections,

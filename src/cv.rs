@@ -112,6 +112,28 @@ impl CV {
                 stratify_by
             ));
 
+        // Ensure all samples have annotations for the stratification column
+        for i in 0..data.sample_len {
+            let tags = annot.sample_tags.get(&i).unwrap_or_else(|| {
+                panic!(
+                    "Missing sample annotation for sample index {} while using stratified CV on column '{}'. \
+                    Annotation file must cover all samples.",
+                    i, stratify_by
+                );
+            });
+
+            if col_idx >= tags.len() {
+                panic!(
+                    "Sample index {} has incomplete annotations for column '{}': \
+                    expected at least {} columns, found {}.",
+                    i,
+                    stratify_by,
+                    col_idx + 1,
+                    tags.len()
+                );
+            }
+        }
+
         // Stratify each class separately by the annotation column
         let indices_class0_folds =
             stratify_by_annotation(indices_class0, annot, col_idx, folds, rng);
@@ -2571,5 +2593,39 @@ mod tests {
             total_in_folds, data.sample_len,
             "Total samples in folds should equal original dataset size"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Sample annotations are required for stratified CV")]
+    fn test_cv_new_stratified_by_panic_on_missing_annotations() {
+        let mut data = Data::test_with_these_features(&[0, 1, 2, 3]);
+        data.sample_len = 5;
+        data.y = vec![0, 1, 0, 1, 0];
+        data.sample_annotations = None;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let _cv = CV::new_stratified_by(&data, 2, &mut rng, "batch");
+    }
+
+    #[test]
+    #[should_panic(expected = "Sample index")]
+    fn test_cv_new_stratified_by_panic_on_incomplete_annotation_line() {
+        let mut data = Data::test_with_these_features(&[0, 1, 2, 3]);
+        data.sample_len = 4;
+        data.y = vec![0, 1, 0, 1];
+
+        let mut sample_tags = HashMap::new();
+        sample_tags.insert(0, vec!["ctrl".to_string()]);
+        sample_tags.insert(1, vec!["treat".to_string(), "batchA".to_string()]);
+        sample_tags.insert(2, vec!["ctrl".to_string()]);
+        sample_tags.insert(3, vec!["treat".to_string()]);
+
+        data.sample_annotations = Some(SampleAnnotations {
+            tag_column_names: vec!["group".to_string(), "batch".to_string()],
+            sample_tags,
+        });
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let _cv = CV::new_stratified_by(&data, 2, &mut rng, "batch");
     }
 }

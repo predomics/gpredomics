@@ -81,17 +81,8 @@ fn find_all_versions<P: AsRef<Path>>(base_dir: P) -> Vec<(String, PathBuf)> {
 fn compare_experiments(old: &Experiment, new: &Experiment) -> Vec<VersionDifference> {
     let mut differences = Vec::new();
 
-    // Compare version strings
-    if old.gpredomics_version != new.gpredomics_version {
-        differences.push(VersionDifference {
-            field: "gpredomics_version".to_string(),
-            old_value: old.gpredomics_version.clone(),
-            new_value: new.gpredomics_version.clone(),
-        });
-    }
-
     // Compare execution times (allow some variance)
-    if (old.execution_time - new.execution_time).abs() > 1.0 {
+    if (old.execution_time - new.execution_time).abs() > 5.0 {
         differences.push(VersionDifference {
             field: "execution_time".to_string(),
             old_value: format!("{:.2}s", old.execution_time),

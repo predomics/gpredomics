@@ -29,6 +29,7 @@ data:
   y: "samples/Qin2014/Ytrain.tsv"             # The class labels of the training dataset (0 = class 0, 1 = class 1 (positive), 2 = unknown).
   Xtest: "samples/Qin2014/Xtest.tsv"          # The features of the test dataset.
   ytest: "samples/Qin2014/Ytest.tsv"          # The class labels of the test dataset.
+  holdout_ratio: 0.20                         # If >0 and <1, this percentage of samples from X/y will be held out as test data (except Xtest/ytest if provided).      
   feature_annotations:                        # Path to a TSV file containing feature annotations (see data.md for details).
   sample_annotations:                         # Path to a TSV file containing sample annotations (see data.md for details).
   features_in_rows: true                      # Are the features arranged in rows (legacy Predomics) or columns (standard in ML)?
