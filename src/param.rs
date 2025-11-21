@@ -17,7 +17,7 @@ pub enum FitFunction {
     f1_score,
     npv,
     ppv,
-    g_means,
+    g_mean,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -91,6 +91,8 @@ pub struct General {
     pub threshold_ci_n_bootstrap: usize,
     #[serde(default = "zero_default")]
     pub threshold_ci_frac_bootstrap: f64,
+    #[serde(default = "zero_default")]
+    pub user_penalties_weight: f64,
     #[serde(default = "n_model_to_display_default")]
     pub n_model_to_display: u32,
     #[serde(default = "false_default")]
@@ -115,7 +117,7 @@ pub struct Data {
     pub Xtest: String,
     #[serde(default = "empty_string")]
     pub ytest: String,
-    #[serde(default = "false_default")]
+    #[serde(default = "true_default")] // for retrocompatibility
     pub features_in_rows: bool,
     #[serde(default = "uzero_default")]
     pub max_features_per_class: usize,
@@ -135,6 +137,10 @@ pub struct Data {
     pub n_validation_samples: usize,
     #[serde(default = "class_names_default")]
     pub classes: Vec<String>,
+    #[serde(default = "empty_string")]
+    pub feature_annotations: String,
+    #[serde(default = "empty_string")]
+    pub sample_annotations: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -151,6 +157,8 @@ pub struct CV {
     pub fit_on_valid: bool,
     #[serde(default = "best_models_ci_alpha_default")]
     pub cv_best_models_ci_alpha: f64,
+    #[serde(default = "empty_string")]
+    pub stratify_by: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -266,7 +274,9 @@ pub struct Importance {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct Experimental {}
+pub struct Experimental {
+    
+}
 
 // Default section definitions
 

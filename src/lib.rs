@@ -2,7 +2,7 @@
 
 pub mod bayesian_mcmc;
 pub mod beam;
-mod cv;
+pub mod cv;
 pub mod data;
 pub mod experiment;
 pub mod ga;
@@ -26,7 +26,7 @@ use population::Population;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 
-use log::debug;
+use log::{debug, warn};
 
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -52,6 +52,20 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         "\x1b[2;97m{:?}\x1b[0m",
         data
     );
+    
+    if !param.data.feature_annotations.is_empty() {
+        match data.load_feature_annotation(&param.data.feature_annotations) {
+            Ok(fa) => data.feature_annotations = Some(fa),
+            Err(e) => warn!("Could not load feature annotations '{}': {}", param.data.feature_annotations, e),
+        }
+    }
+
+    if !param.data.sample_annotations.is_empty() {
+        match data.load_sample_annotation(&param.data.sample_annotations) {
+            Ok(sa) => data.sample_annotations = Some(sa),
+            Err(e) => warn!("Could not load sample annotations '{}': {}", param.data.sample_annotations, e),
+        }
+    }
 
     // Launch training
     let (collections, final_population, cv_folds_ids, meta) = if param.general.cv {
@@ -300,7 +314,8 @@ pub fn run_cv_training(
     Option<ExperimentMetadata>,
 ) {
     let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-    let mut folds = CV::new(&data, param.cv.outer_folds, &mut rng);
+
+    let mut folds = CV::new_from_param(&data, param, &mut rng, param.cv.outer_folds);
     let cv_folds_ids = Some(folds.get_ids());
 
     let collections;

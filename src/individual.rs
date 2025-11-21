@@ -1,5 +1,5 @@
 use crate::bayesian_mcmc::Betas;
-use crate::data::Data;
+use crate::data::{Data};
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use crate::param::FitFunction;
 use crate::utils::serde_json_hashmap_numeric;
@@ -32,7 +32,8 @@ pub struct AdditionalMetrics {
     pub f1_score: Option<f64>,
     pub npv: Option<f64>,
     pub ppv: Option<f64>,
-    pub g_means: Option<f64>,
+    #[serde(alias = "g_means")]
+    pub g_mean: Option<f64>,
 }
 
 impl Default for AdditionalMetrics {
@@ -42,7 +43,7 @@ impl Default for AdditionalMetrics {
             f1_score: None,
             npv: None,
             ppv: None,
-            g_means: None,
+            g_mean: None,
         }
     }
 }
@@ -155,7 +156,7 @@ impl Individual {
                 f1_score: None,
                 npv: None,
                 ppv: None,
-                g_means: None,
+                g_mean: None,
             },
         }
     }
@@ -221,12 +222,12 @@ impl Individual {
                         additional.ppv.unwrap()
                     );
                 }
-                if self.metrics.g_means.is_some() {
+                if self.metrics.g_mean.is_some() {
                     m = format!(
-                        "{} | G-means {:.3}/{:.3} ",
+                        "{} | G-mean {:.3}/{:.3} ",
                         m,
-                        self.metrics.g_means.unwrap(),
-                        additional.g_means.unwrap()
+                        self.metrics.g_mean.unwrap(),
+                        additional.g_mean.unwrap()
                     );
                 }
                 m
@@ -251,8 +252,8 @@ impl Individual {
                 if self.metrics.ppv.is_some() {
                     m = format!("{} | PPV {:.3} ", m, self.metrics.ppv.unwrap());
                 }
-                if self.metrics.g_means.is_some() {
-                    m = format!("{} | G-means {:.3} ", m, self.metrics.g_means.unwrap());
+                if self.metrics.g_mean.is_some() {
+                    m = format!("{} | G-mean {:.3} ", m, self.metrics.g_mean.unwrap());
                 }
                 m
             }
@@ -327,8 +328,8 @@ impl Individual {
         let (second_line_first_part, second_line_second_part) = if let Some(ref threshold_ci) =
             self.threshold_ci
         {
-            let threshold_text = format!("Class {} < \x1b[2m[Rejection zone - {:2}% CI: {:.3}, {:.3}, {:.3}]\x1b[0m < Class {}:", 
-                data.classes[0], (1.0-ci_alpha)*100.0, threshold_ci.lower, self.threshold, threshold_ci.upper, data.classes[1]);
+            let threshold_text = format!("Class \x1b[95m{}\x1b[0m: score < {}\nClass \x1b[96m{}\x1b[0m: score > {}\nRejection zone \x1b[2m({:2}% CI)\x1b[0m: score ∈ [{:.3}; {:.3}]\nscore =", 
+                data.classes[0], threshold_ci.lower, data.classes[1], threshold_ci.upper, (1.0-ci_alpha)*100.0,  threshold_ci.lower, threshold_ci.upper);
             (threshold_text, String::new())
         } else {
             (
@@ -809,11 +810,42 @@ impl Individual {
         i
     }
 
-    /// randomly generated individual amoung the selected features
+    /// Randomly generated individual among the selected features
+    /// 
+    /// This is the unified function that handles both uniform and weighted feature selection.
+    /// Use `prior_weight` parameter to enable weighted selection, or pass `None` for uniform selection.
+    pub fn random_select(
+        kmin: usize,
+        kmax: usize,
+        feature_selection: &[usize],
+        feature_class: &HashMap<usize, u8>,
+        language: u8,
+        data_type: u8,
+        epsilon: f64,
+        prior_weight: Option<&HashMap<usize, f64>>,
+        threshold_ci: bool,
+        rng: &mut ChaCha8Rng,
+    ) -> Individual {
+        if let Some(weights) = prior_weight {
+            Self::random_select_weighted(
+                kmin, kmax, feature_selection, feature_class,
+                language, data_type, epsilon, weights, threshold_ci, rng,
+            )
+        } else {
+            Self::random_select_k(
+                kmin, kmax, feature_selection, feature_class,
+                language, data_type, epsilon, threshold_ci, rng,
+            )
+        }
+    }
+
+    /// randomly generated individual amoung the selected features (uniform selection)
+    /// 
+    /// **Deprecated:** Use `random_select` with `prior_weight = None` instead.
     pub fn random_select_k(
         kmin: usize,
         kmax: usize,
-        feature_selection: &Vec<usize>,
+        feature_selection: &[usize],
         feature_class: &HashMap<usize, u8>,
         language: u8,
         data_type: u8,
@@ -824,14 +856,14 @@ impl Individual {
         // chose k variables amount feature_selection
         // set a random coeficient for these k variables
 
-        let chosen_feature_set: &Vec<usize> = if language == BINARY_LANG {
-            &feature_selection
+        let chosen_feature_set: Vec<usize> = if language == BINARY_LANG {
+            feature_selection
                 .iter()
                 .cloned()
                 .filter(|i| feature_class[i] > 0)
                 .collect::<Vec<usize>>()
         } else {
-            feature_selection
+            feature_selection.to_vec()
         };
 
         let k: usize = rng.gen_range(
@@ -887,6 +919,98 @@ impl Individual {
         i
     }
 
+    /// Randomly generated individual with weighted feature selection
+    /// 
+    /// **Deprecated:** Use `random_select` with `prior_weight = Some(...)` instead.
+    pub fn random_select_weighted(
+        kmin: usize,
+        kmax: usize,
+        feature_selection: &[usize],
+        feature_class: &HashMap<usize, u8>,
+        language: u8,
+        data_type: u8,
+        epsilon: f64,
+        prior_weight: &HashMap<usize, f64>,
+        threshold_ci: bool,
+        rng: &mut ChaCha8Rng,
+    ) -> Individual {
+        let valid_pairs: Vec<(usize, f64)> = feature_selection
+            .iter()
+            .filter_map(|&feature_idx| {
+                let weight = prior_weight.get(&feature_idx).copied().unwrap_or(1.0);
+                if weight > 0.0 {
+                    Some((feature_idx, weight))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        assert!(!valid_pairs.is_empty(), "No features with positive weight!");
+        
+        let (valid_features, valid_weights): (Vec<_>, Vec<_>) = valid_pairs.into_iter().unzip();
+        
+        // Number of features to select
+        let k = rng.gen_range(kmin..=kmax).min(valid_features.len());
+    
+        let selected_features: Vec<usize> = valid_features
+            .choose_multiple_weighted(rng, k, |&feature_idx| {
+                let idx = valid_features.iter().position(|&x| x == feature_idx).unwrap();
+                valid_weights[idx]
+            })
+            .expect("Failed weighted selection")
+            .copied()
+            .collect();
+        
+        // Create the individual with the selected features
+        let mut features = HashMap::new();
+        for &feature_idx in &selected_features {
+            let coef = Individual::random_coefficient(
+                language,
+                feature_class.get(&feature_idx).copied(),
+                rng,
+            );
+            features.insert(feature_idx, coef);
+        }
+
+        let mut i = Individual::new();
+        i.features = features;
+        i.k = selected_features.len();
+        i.language = language;
+        i.data_type = data_type;
+        i.epsilon = epsilon;
+        i.threshold_ci = if threshold_ci {
+            Some(ThresholdCI {
+                upper: 0.0,
+                lower: 0.0,
+                rejection_rate: 0.0,
+            })
+        } else {
+            None
+        };
+        i
+    }
+    
+    // Generate a random coefficient based on language and feature class
+    fn random_coefficient(language: u8, feature_class: Option<u8>, rng: &mut ChaCha8Rng) -> i8 {
+        match language {
+            BINARY_LANG => 1,
+            TERNARY_LANG | RATIO_LANG => {
+                if let Some(class) = feature_class {
+                    if class == 0 { -1 } else { 1 }
+                } else {
+                    if rng.gen_bool(0.5) { 1 } else { -1 }
+                }
+            }
+            POW2_LANG => {
+                let sign = if rng.gen_bool(0.5) { 1 } else { -1 };
+                let power = rng.gen_range(0..=6); // 2^0 à 2^6 = 1 à 64
+                sign * (1 << power)
+            }
+            _ => panic!("Unknown language: {}", language),
+        }
+    }
+
     /// a function that compute accuracy,precision and sensitivity
     /// return (accuracy, sensitivity, specificity)
     pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64, f64, AdditionalMetrics) {
@@ -896,7 +1020,7 @@ impl Individual {
             self.metrics.f1_score.is_some(),
             self.metrics.npv.is_some(),
             self.metrics.ppv.is_some(),
-            self.metrics.g_means.is_some(),
+            self.metrics.g_mean.is_some(),
         ];
         if let Some(ref threshold_ci) = self.threshold_ci {
             compute_metrics_from_value(
@@ -1525,7 +1649,7 @@ mod tests {
                     f1_score: None,
                     npv: None,
                     ppv: None,
-                    g_means: None,
+                    g_mean: None,
                 },
             }
         }
@@ -1553,7 +1677,7 @@ mod tests {
                     f1_score: None,
                     npv: None,
                     ppv: None,
-                    g_means: None,
+                    g_mean: None,
                 },
             }
         }
@@ -1581,7 +1705,7 @@ mod tests {
                     f1_score: None,
                     npv: None,
                     ppv: None,
-                    g_means: None,
+                    g_mean: None,
                 },
             }
         }
@@ -1614,7 +1738,7 @@ mod tests {
                     f1_score: None,
                     npv: None,
                     ppv: None,
-                    g_means: None,
+                    g_mean: None,
                 },
             }
         }
@@ -1642,7 +1766,7 @@ mod tests {
                     f1_score: None,
                     npv: None,
                     ppv: None,
-                    g_means: None,
+                    g_mean: None,
                 },
             }
         }
@@ -1675,7 +1799,7 @@ mod tests {
                     f1_score: None,
                     npv: None,
                     ppv: None,
-                    g_means: None,
+                    g_mean: None,
                 },
             }
         }
@@ -2366,7 +2490,7 @@ mod tests {
                     f1_score: None,
                     npv: None,
                     ppv: None,
-                    g_means: None
+                    g_mean: None
                 }
             ),
             ind.compute_metrics(&data),
@@ -2380,7 +2504,7 @@ mod tests {
         ind.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1];
-        assert_eq!((0.5_f64, 0.6666666666666666_f64, 0.42857142857142855_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}), ind.compute_metrics(&data),
+        assert_eq!((0.5_f64, 0.6666666666666666_f64, 0.42857142857142855_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_mean: None}), ind.compute_metrics(&data),
         "when ind.sample_len < data.sample_len (or y.len() if it does not match), only the ind.sample_len values should be used to calculate its metrics");
     }
 
@@ -2390,7 +2514,7 @@ mod tests {
         ind.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 1];
-        assert_eq!((0.25_f64, 0.3333333333333333_f64, 0.0_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_means: None}), ind.compute_metrics(&data),
+        assert_eq!((0.25_f64, 0.3333333333333333_f64, 0.0_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_mean: None}), ind.compute_metrics(&data),
         "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
     }
 
@@ -2838,7 +2962,7 @@ mod tests {
                 f1_score: None,
                 npv: None,
                 ppv: None,
-                g_means: None,
+                g_mean: None,
             },
         };
 
@@ -4288,8 +4412,8 @@ mod tests {
             "PPV should be None at initialization"
         );
         assert!(
-            ind.metrics.g_means.is_none(),
-            "G-means should be None at initialization"
+            ind.metrics.g_mean.is_none(),
+            "G-mean should be None at initialization"
         );
     }
 
@@ -4386,10 +4510,10 @@ mod tests {
     }
 
     #[test]
-    fn test_additional_metrics_g_means_calculation() {
+    fn test_additional_metrics_g_mean_calculation() {
         let mut ind = Individual::test();
         ind.threshold = 0.75;
-        ind.metrics.g_means = Some(0.0); // Signal that we want G-means computed
+        ind.metrics.g_mean = Some(0.0); // Signal that we want G-mean computed
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -4397,14 +4521,14 @@ mod tests {
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
         assert!(
-            additional.g_means.is_some(),
-            "G-means should be computed when requested"
+            additional.g_mean.is_some(),
+            "G-mean should be computed when requested"
         );
-        let g_means = additional.g_means.unwrap();
+        let g_mean = additional.g_mean.unwrap();
         assert!(
-            g_means >= 0.0 && g_means <= 1.0,
-            "G-means should be in [0, 1], got {}",
-            g_means
+            g_mean >= 0.0 && g_mean <= 1.0,
+            "G-mean should be in [0, 1], got {}",
+            g_mean
         );
     }
 
@@ -4417,7 +4541,7 @@ mod tests {
         ind.metrics.f1_score = Some(0.0);
         ind.metrics.npv = Some(0.0);
         ind.metrics.ppv = Some(0.0);
-        ind.metrics.g_means = Some(0.0);
+        ind.metrics.g_mean = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -4431,7 +4555,7 @@ mod tests {
         assert!(additional.f1_score.is_some());
         assert!(additional.npv.is_some());
         assert!(additional.ppv.is_some());
-        assert!(additional.g_means.is_some());
+        assert!(additional.g_mean.is_some());
     }
 
     #[test]
@@ -4452,7 +4576,7 @@ mod tests {
         assert!(additional.f1_score.is_none());
         assert!(additional.npv.is_none());
         assert!(additional.ppv.is_none());
-        assert!(additional.g_means.is_none());
+        assert!(additional.g_mean.is_none());
     }
 
     #[test]
@@ -4462,7 +4586,7 @@ mod tests {
         ind.threshold = 0.5;
         ind.metrics.mcc = Some(0.0);
         ind.metrics.f1_score = Some(0.0);
-        ind.metrics.g_means = Some(0.0);
+        ind.metrics.g_mean = Some(0.0);
 
         let mut data = Data::new();
         data.sample_len = 10;
@@ -4543,7 +4667,7 @@ mod tests {
         ind.metrics.ppv = Some(0.0);
         ind.metrics.npv = Some(0.0);
         ind.metrics.mcc = Some(0.0);
-        ind.metrics.g_means = Some(0.0);
+        ind.metrics.g_mean = Some(0.0);
 
         let mut data = Data::test2();
         // 99 negatives, 1 positive
@@ -4689,23 +4813,23 @@ mod tests {
     }
 
     #[test]
-    fn test_metrics_consistency_g_means_formula() {
+    fn test_metrics_consistency_g_mean_formula() {
         let mut ind = Individual::test();
         ind.threshold = 0.75;
-        ind.metrics.g_means = Some(0.0);
+        ind.metrics.g_mean = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
 
         let (_, sensitivity, specificity, _, additional) = ind.compute_metrics(&data);
 
-        if let Some(g_means) = additional.g_means {
-            let expected_g_means = (sensitivity * specificity).sqrt();
+        if let Some(g_mean) = additional.g_mean {
+            let expected_g_mean = (sensitivity * specificity).sqrt();
             assert!(
-                (g_means - expected_g_means).abs() < 1e-10,
-                "G-means should equal sqrt(sensitivity * specificity): expected {}, got {}",
-                expected_g_means,
-                g_means
+                (g_mean - expected_g_mean).abs() < 1e-10,
+                "G-mean should equal sqrt(sensitivity * specificity): expected {}, got {}",
+                expected_g_mean,
+                g_mean
             );
         }
     }
@@ -4858,6 +4982,467 @@ mod tests {
         assert!(
             ind.threshold_ci.is_none(),
             "threshold_ci should not be created when flag is false"
+        );
+    }
+
+    // ============================================================================
+    // Tests for random_select (unified function)
+    // ============================================================================
+
+    #[test]
+    fn test_random_select_without_weights() {
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        for i in 0..5 {
+            feature_class.insert(i, 1);
+        }
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let ind = Individual::random_select(
+            2,
+            3,
+            &features,
+            &feature_class,
+            TERNARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            None,  // No weights, should behave like random_select_k
+            false,
+            &mut rng,
+        );
+
+        assert!(
+            ind.k >= 2 && ind.k <= 3,
+            "Individual should have between kmin and kmax features"
+        );
+        assert_eq!(ind.language, TERNARY_LANG);
+        assert_eq!(ind.data_type, RAW_TYPE);
+        assert_eq!(ind.epsilon, DEFAULT_MINIMUM);
+    }
+
+    #[test]
+    fn test_random_select_with_weights() {
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        for i in 0..5 {
+            feature_class.insert(i, 1);
+        }
+
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 0.1);
+        prior_weight.insert(1, 0.1);
+        prior_weight.insert(2, 100.0);  // Much higher weight
+        prior_weight.insert(3, 0.1);
+        prior_weight.insert(4, 0.1);
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut feature_2_count = 0;
+        let n_trials = 50;
+
+        for _ in 0..n_trials {
+            let ind = Individual::random_select(
+                1,
+                1,
+                &features,
+                &feature_class,
+                BINARY_LANG,
+                RAW_TYPE,
+                DEFAULT_MINIMUM,
+                Some(&prior_weight),  // With weights
+                false,
+                &mut rng,
+            );
+            if ind.features.contains_key(&2) {
+                feature_2_count += 1;
+            }
+        }
+
+        // Feature 2 should be selected much more often
+        assert!(
+            feature_2_count > 40,
+            "Feature with higher weight should be selected more often (got {} out of {})",
+            feature_2_count,
+            n_trials
+        );
+    }
+
+    #[test]
+    fn test_random_select_consistency_with_old_functions() {
+        let features = vec![0, 1, 2];
+        let mut feature_class = HashMap::new();
+        for i in 0..3 {
+            feature_class.insert(i, 1);
+        }
+
+        let mut prior_weight = HashMap::new();
+        for i in 0..3 {
+            prior_weight.insert(i, 1.0);
+        }
+
+        // Test that random_select without weights produces same result as random_select_k
+        let mut rng1 = ChaCha8Rng::seed_from_u64(123);
+        let ind1 = Individual::random_select_k(
+            1, 2, &features, &feature_class,
+            BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, false, &mut rng1,
+        );
+
+        let mut rng2 = ChaCha8Rng::seed_from_u64(123);
+        let ind2 = Individual::random_select(
+            1, 2, &features, &feature_class,
+            BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, None, false, &mut rng2,
+        );
+
+        assert_eq!(ind1.features, ind2.features, "random_select(None) should produce same results as random_select_k");
+
+        // Test that random_select with weights produces same result as random_select_weighted
+        let mut rng3 = ChaCha8Rng::seed_from_u64(456);
+        let ind3 = Individual::random_select_weighted(
+            1, 2, &features, &feature_class,
+            BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &prior_weight, false, &mut rng3,
+        );
+
+        let mut rng4 = ChaCha8Rng::seed_from_u64(456);
+        let ind4 = Individual::random_select(
+            1, 2, &features, &feature_class,
+            BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, Some(&prior_weight), false, &mut rng4,
+        );
+
+        assert_eq!(ind3.features, ind4.features, "random_select(Some) should produce same results as random_select_weighted");
+    }
+
+    // ============================================================================
+    // Tests for random_select_weighted
+    // ============================================================================
+
+    #[test]
+    fn test_random_select_weighted_basic() {
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        feature_class.insert(0, 1);
+        feature_class.insert(1, 0);
+        feature_class.insert(2, 1);
+        feature_class.insert(3, 0);
+        feature_class.insert(4, 1);
+
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 1.0);
+        prior_weight.insert(1, 1.0);
+        prior_weight.insert(2, 1.0);
+        prior_weight.insert(3, 1.0);
+        prior_weight.insert(4, 1.0);
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let ind = Individual::random_select_weighted(
+            2,
+            3,
+            &features,
+            &feature_class,
+            TERNARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng,
+        );
+
+        assert!(
+            ind.k >= 2 && ind.k <= 3,
+            "Individual should have between kmin and kmax features"
+        );
+        assert_eq!(
+            ind.language, TERNARY_LANG,
+            "input language should be respected"
+        );
+        assert_eq!(
+            ind.data_type, RAW_TYPE,
+            "input data_type should be respected"
+        );
+        assert_eq!(
+            ind.epsilon, DEFAULT_MINIMUM,
+            "input epsilon should be respected"
+        );
+        assert!(
+            ind.features
+                .keys()
+                .all(|k| features.contains(k)),
+            "all selected features should be from feature_selection"
+        );
+    }
+
+    #[test]
+    fn test_random_select_weighted_with_weights() {
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        for i in 0..5 {
+            feature_class.insert(i, 1);
+        }
+
+        // Feature 2 has much higher weight
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 0.1);
+        prior_weight.insert(1, 0.1);
+        prior_weight.insert(2, 100.0);
+        prior_weight.insert(3, 0.1);
+        prior_weight.insert(4, 0.1);
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut feature_2_count = 0;
+        let n_trials = 100;
+
+        for _ in 0..n_trials {
+            let ind = Individual::random_select_weighted(
+                1,
+                1,
+                &features,
+                &feature_class,
+                BINARY_LANG,
+                RAW_TYPE,
+                DEFAULT_MINIMUM,
+                &prior_weight,
+                false,
+                &mut rng,
+            );
+            if ind.features.contains_key(&2) {
+                feature_2_count += 1;
+            }
+        }
+
+        // Feature 2 should be selected much more often than others
+        assert!(
+            feature_2_count > 80,
+            "Feature with higher weight should be selected more often (got {} out of {})",
+            feature_2_count,
+            n_trials
+        );
+    }
+
+    #[test]
+    fn test_random_select_weighted_zero_weights_filtered() {
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        for i in 0..5 {
+            feature_class.insert(i, 1);
+        }
+
+        // Only features 2 and 3 have positive weights
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 0.0);
+        prior_weight.insert(1, 0.0);
+        prior_weight.insert(2, 1.0);
+        prior_weight.insert(3, 1.0);
+        prior_weight.insert(4, 0.0);
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let ind = Individual::random_select_weighted(
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng,
+        );
+
+        // Should only select from features 2 and 3
+        assert!(
+            ind.features
+                .keys()
+                .all(|k| *k == 2 || *k == 3),
+            "Should only select features with positive weight"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "No features with positive weight!")]
+    fn test_random_select_weighted_all_zero_weights() {
+        let features = vec![0, 1, 2];
+        let mut feature_class = HashMap::new();
+        for i in 0..3 {
+            feature_class.insert(i, 1);
+        }
+
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 0.0);
+        prior_weight.insert(1, 0.0);
+        prior_weight.insert(2, 0.0);
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        Individual::random_select_weighted(
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng,
+        );
+    }
+
+    #[test]
+    fn test_random_select_weighted_with_threshold_ci() {
+        let features = vec![0, 1, 2];
+        let mut feature_class = HashMap::new();
+        feature_class.insert(0, 1);
+        feature_class.insert(1, 0);
+        feature_class.insert(2, 1);
+
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 1.0);
+        prior_weight.insert(1, 1.0);
+        prior_weight.insert(2, 1.0);
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let ind_with_ci = Individual::random_select_weighted(
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            true,
+            &mut rng,
+        );
+
+        assert!(
+            ind_with_ci.threshold_ci.is_some(),
+            "threshold_ci should be Some when threshold_ci parameter is true"
+        );
+
+        let mut rng2 = ChaCha8Rng::seed_from_u64(43);
+        let ind_without_ci = Individual::random_select_weighted(
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng2,
+        );
+
+        assert!(
+            ind_without_ci.threshold_ci.is_none(),
+            "threshold_ci should be None when threshold_ci parameter is false"
+        );
+    }
+
+    #[test]
+    fn test_random_select_weighted_coefficient_types() {
+        let features = vec![0, 1, 2];
+        let mut feature_class = HashMap::new();
+        feature_class.insert(0, 1);
+        feature_class.insert(1, 0);
+        feature_class.insert(2, 1);
+
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 1.0);
+        prior_weight.insert(1, 1.0);
+        prior_weight.insert(2, 1.0);
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        // Test BINARY_LANG: all coefficients should be 1
+        let ind_bin = Individual::random_select_weighted(
+            2,
+            3,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng,
+        );
+        assert!(
+            ind_bin.features.values().all(|&v| v == 1),
+            "BINARY_LANG should only have coefficient 1"
+        );
+
+        // Test TERNARY_LANG: coefficients should be 1 or -1
+        let ind_ter = Individual::random_select_weighted(
+            2,
+            3,
+            &features,
+            &feature_class,
+            TERNARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng,
+        );
+        assert!(
+            ind_ter.features.values().all(|&v| v == 1 || v == -1),
+            "TERNARY_LANG should only have coefficients 1 or -1"
+        );
+
+        // Test POW2_LANG: coefficients should be powers of 2 or their negatives
+        let ind_pow2 = Individual::random_select_weighted(
+            2,
+            3,
+            &features,
+            &feature_class,
+            POW2_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng,
+        );
+        for &coef in ind_pow2.features.values() {
+            let abs_coef = coef.abs() as u8;
+            // Check if it's a power of 2 (has only one bit set)
+            assert!(
+                abs_coef != 0 && (abs_coef & (abs_coef - 1)) == 0,
+                "POW2_LANG coefficients should be powers of 2 (got {})",
+                coef
+            );
+        }
+    }
+
+    #[test]
+    fn test_random_select_weighted_default_weight() {
+        // Test that missing weights default to 1.0
+        let features = vec![0, 1, 2];
+        let mut feature_class = HashMap::new();
+        for i in 0..3 {
+            feature_class.insert(i, 1);
+        }
+
+        let mut prior_weight = HashMap::new();
+        // Only set weight for feature 0
+        prior_weight.insert(0, 1.0);
+        // Features 1 and 2 will use default weight of 1.0
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let ind = Individual::random_select_weighted(
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng,
+        );
+
+        // Should still be able to select features without explicit weights
+        assert!(
+            ind.k >= 1 && ind.k <= 2,
+            "Should handle features with default weights"
         );
     }
 
@@ -5325,34 +5910,34 @@ mod tests {
     }
 
     #[test]
-    fn test_fit_function_g_means_sets_fit_and_metrics() {
+    fn test_fit_function_g_mean_sets_fit_and_metrics() {
         use crate::param::Param;
         use crate::population::Population;
 
         let mut pop = Population::new();
         let mut ind = Individual::test2();
-        ind.metrics.g_means = Some(0.0);
+        ind.metrics.g_mean = Some(0.0);
         pop.individuals.push(ind);
 
         let data = Data::test2();
         let mut param = Param::default();
-        param.general.fit = FitFunction::g_means;
+        param.general.fit = FitFunction::g_mean;
 
         pop.fit_without_penalty(&data, &mut None, &None, &None, &param);
 
         let fitted_ind = &pop.individuals[0];
 
         assert!(
-            fitted_ind.metrics.g_means.is_some(),
-            "G-means metric should be Some"
+            fitted_ind.metrics.g_mean.is_some(),
+            "G-mean metric should be Some"
         );
 
-        let g_means_value = fitted_ind.metrics.g_means.unwrap();
+        let g_mean_value = fitted_ind.metrics.g_mean.unwrap();
         assert!(
-            (fitted_ind.fit - g_means_value).abs() < 1e-10,
-            "ind.fit should equal ind.metrics.g_means for FitFunction::g_means: fit={}, g_means={}",
+            (fitted_ind.fit - g_mean_value).abs() < 1e-10,
+            "ind.fit should equal ind.metrics.g_mean for FitFunction::g_mean: fit={}, g_mean={}",
             fitted_ind.fit,
-            g_means_value
+            g_mean_value
         );
     }
 
@@ -5395,8 +5980,8 @@ mod tests {
             "PPV should be None for FitFunction::auc"
         );
         assert!(
-            fitted_ind.metrics.g_means.is_none(),
-            "G-means should be None for FitFunction::auc"
+            fitted_ind.metrics.g_mean.is_none(),
+            "G-mean should be None for FitFunction::auc"
         );
     }
 

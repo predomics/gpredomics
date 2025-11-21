@@ -102,6 +102,7 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
                 let mut sub_pop = Population::new();
                 debug!("generating...");
 
+                let prior_weight = data.feature_annotations.as_ref().map(|fa| &fa.prior_weight);
                 sub_pop.generate(
                     target_size,
                     param.ga.kmin,
@@ -115,8 +116,11 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
                     param.general.data_type_epsilon,
                     data,
                     param.general.threshold_ci_n_bootstrap > 0,
+                    prior_weight,
                     rng,
                 );
+                
+                
                 debug!(
                     "generated for {} {}...",
                     sub_pop.individuals[0].get_language(),
@@ -175,7 +179,7 @@ pub fn iterative_evolution(
             10
         };
         info!("Learning on {:?}-folds.", folds_nb);
-        cv = Some(CV::new(&data, folds_nb, &mut data_rng));
+        cv = Some(CV::new_from_param(&data, param, &mut data_rng, folds_nb));
         Data::new()
     } else {
         data.clone()
@@ -231,7 +235,7 @@ pub fn iterative_evolution(
             } else {
                 3
             };
-            cv = Some(CV::new(&data, folds_nb, &mut data_rng));
+            cv = Some(CV::new_from_param(&data, param, &mut data_rng, folds_nb));
 
             if let Some(ref cv) = cv {
                 // Recreate GPU assays for new folds

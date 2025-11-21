@@ -294,7 +294,7 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
             f1_score: None,
             npv: None,
             ppv: None,
-            g_means: None,
+            g_mean: None,
         },
     }
 }
@@ -395,7 +395,7 @@ pub fn iterative_growth(
             3
         };
         info!("Learning on {:?}-folds.", folds_nb);
-        cv = Some(CV::new(&data, folds_nb, &mut data_rng));
+        cv = Some(CV::new_from_param(&data, param, &mut data_rng, folds_nb));
         Data::new()
     } else {
         data.clone()
@@ -859,7 +859,7 @@ fn create_gpu_assays_for_folds_beam(
 
     cv.validation_folds.iter().enumerate().map(|(idx, fold)| {
         let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
-
+        
         // GPU assay for validation fold
         let gpu_max_nb_models_val = buffer_binding_size / (fold.sample_len * std::mem::size_of::<f32>());
         let val_assay = if param.beam.max_nb_of_models == 0 {
@@ -873,7 +873,7 @@ fn create_gpu_assays_for_folds_beam(
             let max_nb = (param.beam.max_nb_of_models as usize) * lang_data_combinations;
             Some(GpuAssay::new(&fold.X, &fold.feature_selection, fold.sample_len, max_nb, &param.gpu))
         };
-
+        
         // GPU assay for training set
         let training_set = &cv.training_sets[idx];
         let gpu_max_nb_models_train = buffer_binding_size / (training_set.sample_len * std::mem::size_of::<f32>());
@@ -888,7 +888,7 @@ fn create_gpu_assays_for_folds_beam(
             let max_nb = (param.beam.max_nb_of_models as usize) * lang_data_combinations;
             Some(GpuAssay::new(&training_set.X, &training_set.feature_selection, training_set.sample_len, max_nb, &param.gpu))
         };
-
+        
         (val_assay, train_assay)
     }).collect()
 }
@@ -921,7 +921,7 @@ mod tests {
                 f1_score: None,
                 npv: None,
                 ppv: None,
-                g_means: None,
+                g_mean: None,
             },
         }
     }
@@ -1033,7 +1033,7 @@ mod tests {
                 f1_score: None,
                 npv: None,
                 ppv: None,
-                g_means: None,
+                g_mean: None,
             },
         }
     }
@@ -1456,7 +1456,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires GPU hardware - run with 'cargo test -- --ignored' if GPU is available"]
     fn test_get_gpu_assay_enabled() {
         // Create minimal data with some X values
         let mut data = Data::new();
