@@ -1,5 +1,5 @@
 use crate::bayesian_mcmc::Betas;
-use crate::data::{Data};
+use crate::data::Data;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use crate::param::FitFunction;
 use crate::utils::serde_json_hashmap_numeric;
@@ -811,7 +811,7 @@ impl Individual {
     }
 
     /// Randomly generated individual among the selected features
-    /// 
+    ///
     /// This is the unified function that handles both uniform and weighted feature selection.
     /// Use `prior_weight` parameter to enable weighted selection, or pass `None` for uniform selection.
     pub fn random_select(
@@ -828,19 +828,34 @@ impl Individual {
     ) -> Individual {
         if let Some(weights) = prior_weight {
             Self::random_select_weighted(
-                kmin, kmax, feature_selection, feature_class,
-                language, data_type, epsilon, weights, threshold_ci, rng,
+                kmin,
+                kmax,
+                feature_selection,
+                feature_class,
+                language,
+                data_type,
+                epsilon,
+                weights,
+                threshold_ci,
+                rng,
             )
         } else {
             Self::random_select_k(
-                kmin, kmax, feature_selection, feature_class,
-                language, data_type, epsilon, threshold_ci, rng,
+                kmin,
+                kmax,
+                feature_selection,
+                feature_class,
+                language,
+                data_type,
+                epsilon,
+                threshold_ci,
+                rng,
             )
         }
     }
 
     /// randomly generated individual amoung the selected features (uniform selection)
-    /// 
+    ///
     /// **Deprecated:** Use `random_select` with `prior_weight = None` instead.
     pub fn random_select_k(
         kmin: usize,
@@ -920,7 +935,7 @@ impl Individual {
     }
 
     /// Randomly generated individual with weighted feature selection
-    /// 
+    ///
     /// **Deprecated:** Use `random_select` with `prior_weight = Some(...)` instead.
     pub fn random_select_weighted(
         kmin: usize,
@@ -945,23 +960,26 @@ impl Individual {
                 }
             })
             .collect();
-        
+
         assert!(!valid_pairs.is_empty(), "No features with positive weight!");
-        
+
         let (valid_features, valid_weights): (Vec<_>, Vec<_>) = valid_pairs.into_iter().unzip();
-        
+
         // Number of features to select
         let k = rng.gen_range(kmin..=kmax).min(valid_features.len());
-    
+
         let selected_features: Vec<usize> = valid_features
             .choose_multiple_weighted(rng, k, |&feature_idx| {
-                let idx = valid_features.iter().position(|&x| x == feature_idx).unwrap();
+                let idx = valid_features
+                    .iter()
+                    .position(|&x| x == feature_idx)
+                    .unwrap();
                 valid_weights[idx]
             })
             .expect("Failed weighted selection")
             .copied()
             .collect();
-        
+
         // Create the individual with the selected features
         let mut features = HashMap::new();
         for &feature_idx in &selected_features {
@@ -990,16 +1008,24 @@ impl Individual {
         };
         i
     }
-    
+
     // Generate a random coefficient based on language and feature class
     fn random_coefficient(language: u8, feature_class: Option<u8>, rng: &mut ChaCha8Rng) -> i8 {
         match language {
             BINARY_LANG => 1,
             TERNARY_LANG | RATIO_LANG => {
                 if let Some(class) = feature_class {
-                    if class == 0 { -1 } else { 1 }
+                    if class == 0 {
+                        -1
+                    } else {
+                        1
+                    }
                 } else {
-                    if rng.gen_bool(0.5) { 1 } else { -1 }
+                    if rng.gen_bool(0.5) {
+                        1
+                    } else {
+                        -1
+                    }
                 }
             }
             POW2_LANG => {
@@ -5006,7 +5032,7 @@ mod tests {
             TERNARY_LANG,
             RAW_TYPE,
             DEFAULT_MINIMUM,
-            None,  // No weights, should behave like random_select_k
+            None, // No weights, should behave like random_select_k
             false,
             &mut rng,
         );
@@ -5031,7 +5057,7 @@ mod tests {
         let mut prior_weight = HashMap::new();
         prior_weight.insert(0, 0.1);
         prior_weight.insert(1, 0.1);
-        prior_weight.insert(2, 100.0);  // Much higher weight
+        prior_weight.insert(2, 100.0); // Much higher weight
         prior_weight.insert(3, 0.1);
         prior_weight.insert(4, 0.1);
 
@@ -5048,7 +5074,7 @@ mod tests {
                 BINARY_LANG,
                 RAW_TYPE,
                 DEFAULT_MINIMUM,
-                Some(&prior_weight),  // With weights
+                Some(&prior_weight), // With weights
                 false,
                 &mut rng,
             );
@@ -5082,32 +5108,69 @@ mod tests {
         // Test that random_select without weights produces same result as random_select_k
         let mut rng1 = ChaCha8Rng::seed_from_u64(123);
         let ind1 = Individual::random_select_k(
-            1, 2, &features, &feature_class,
-            BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, false, &mut rng1,
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            false,
+            &mut rng1,
         );
 
         let mut rng2 = ChaCha8Rng::seed_from_u64(123);
         let ind2 = Individual::random_select(
-            1, 2, &features, &feature_class,
-            BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, None, false, &mut rng2,
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            None,
+            false,
+            &mut rng2,
         );
 
-        assert_eq!(ind1.features, ind2.features, "random_select(None) should produce same results as random_select_k");
+        assert_eq!(
+            ind1.features, ind2.features,
+            "random_select(None) should produce same results as random_select_k"
+        );
 
         // Test that random_select with weights produces same result as random_select_weighted
         let mut rng3 = ChaCha8Rng::seed_from_u64(456);
         let ind3 = Individual::random_select_weighted(
-            1, 2, &features, &feature_class,
-            BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &prior_weight, false, &mut rng3,
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng3,
         );
 
         let mut rng4 = ChaCha8Rng::seed_from_u64(456);
         let ind4 = Individual::random_select(
-            1, 2, &features, &feature_class,
-            BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, Some(&prior_weight), false, &mut rng4,
+            1,
+            2,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            Some(&prior_weight),
+            false,
+            &mut rng4,
         );
 
-        assert_eq!(ind3.features, ind4.features, "random_select(Some) should produce same results as random_select_weighted");
+        assert_eq!(
+            ind3.features, ind4.features,
+            "random_select(Some) should produce same results as random_select_weighted"
+        );
     }
 
     // ============================================================================
@@ -5162,9 +5225,7 @@ mod tests {
             "input epsilon should be respected"
         );
         assert!(
-            ind.features
-                .keys()
-                .all(|k| features.contains(k)),
+            ind.features.keys().all(|k| features.contains(k)),
             "all selected features should be from feature_selection"
         );
     }
@@ -5248,9 +5309,7 @@ mod tests {
 
         // Should only select from features 2 and 3
         assert!(
-            ind.features
-                .keys()
-                .all(|k| *k == 2 || *k == 3),
+            ind.features.keys().all(|k| *k == 2 || *k == 3),
             "Should only select features with positive weight"
         );
     }

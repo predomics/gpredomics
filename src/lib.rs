@@ -52,18 +52,24 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         "\x1b[2;97m{:?}\x1b[0m",
         data
     );
-    
+
     if !param.data.feature_annotations.is_empty() {
         match data.load_feature_annotation(&param.data.feature_annotations) {
             Ok(fa) => data.feature_annotations = Some(fa),
-            Err(e) => warn!("Could not load feature annotations '{}': {}", param.data.feature_annotations, e),
+            Err(e) => warn!(
+                "Could not load feature annotations '{}': {}",
+                param.data.feature_annotations, e
+            ),
         }
     }
 
     if !param.data.sample_annotations.is_empty() {
         match data.load_sample_annotation(&param.data.sample_annotations) {
             Ok(sa) => data.sample_annotations = Some(sa),
-            Err(e) => warn!("Could not load sample annotations '{}': {}", param.data.sample_annotations, e),
+            Err(e) => warn!(
+                "Could not load sample annotations '{}': {}",
+                param.data.sample_annotations, e
+            ),
         }
     }
 

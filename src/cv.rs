@@ -89,21 +89,34 @@ impl CV {
     /// # Panics
     /// Panics if the stratify_by column is not found in sample annotations or if
     /// sample annotations are not available in the dataset.
-    pub fn new_stratified_by(data: &Data, folds: usize, rng: &mut ChaCha8Rng, stratify_by: &str) -> CV {
+    pub fn new_stratified_by(
+        data: &Data,
+        folds: usize,
+        rng: &mut ChaCha8Rng,
+        stratify_by: &str,
+    ) -> CV {
         let (indices_class1, indices_class0) = utils::stratify_indices_by_class(&data.y);
 
-        let annot = data.sample_annotations.as_ref()
+        let annot = data
+            .sample_annotations
+            .as_ref()
             .expect("Sample annotations are required for stratified CV");
 
         // Find the column index
-        let col_idx = annot.tag_column_names
+        let col_idx = annot
+            .tag_column_names
             .iter()
             .position(|c| c == stratify_by)
-            .expect(&format!("Stratification column '{}' not found in sample annotations", stratify_by));
+            .expect(&format!(
+                "Stratification column '{}' not found in sample annotations",
+                stratify_by
+            ));
 
         // Stratify each class separately by the annotation column
-        let indices_class0_folds = stratify_by_annotation(indices_class0, annot, col_idx, folds, rng);
-        let indices_class1_folds = stratify_by_annotation(indices_class1, annot, col_idx, folds, rng);
+        let indices_class0_folds =
+            stratify_by_annotation(indices_class0, annot, col_idx, folds, rng);
+        let indices_class1_folds =
+            stratify_by_annotation(indices_class1, annot, col_idx, folds, rng);
 
         let validation_folds: Vec<Data> = indices_class0_folds
             .into_iter()
@@ -560,7 +573,7 @@ mod tests {
                 Data::test_with_these_features(&[0, 1, 2, 3]),
                 Data::test_with_these_features(&[0, 1, 2, 3]),
             ];
-            
+
             let validation_folds = vec![
                 Data::test_with_these_features(&[0, 1, 2, 3]),
                 Data::test_with_these_features(&[0, 1, 2, 3]),
@@ -569,19 +582,19 @@ mod tests {
 
             // Create populations with properly fitted individuals
             let mut fold_collections = vec![];
-            for i in 0..3 {
+            for _i in 0..3 {
                 let mut pop = Population::test_with_these_features(&[0, 1, 2, 3]);
-                
+
                 // Compute metrics for each individual so they have fit values
                 // Use different fit values to avoid them being filtered out by CI
                 for (j, ind) in pop.individuals.iter_mut().enumerate() {
                     ind.fit = 0.95 - (j as f64 * 0.01); // Descending fit values
                     ind.auc = 0.95 - (j as f64 * 0.01);
                 }
-                
+
                 // Sort by fitness
                 pop = pop.sort();
-                
+
                 fold_collections.push(vec![pop]);
             }
 
@@ -1575,12 +1588,16 @@ mod tests {
     }
 
     use crate::data::SampleAnnotations;
-    fn create_sample_annotations(sample_len: usize, col_name: &str, values: Vec<String>) -> SampleAnnotations {
+    fn create_sample_annotations(
+        sample_len: usize,
+        col_name: &str,
+        values: Vec<String>,
+    ) -> SampleAnnotations {
         let mut sample_tags = HashMap::new();
         for i in 0..sample_len {
             sample_tags.insert(i, vec![values[i].clone()]);
         }
-        
+
         SampleAnnotations {
             tag_column_names: vec![col_name.to_string()],
             sample_tags,
@@ -1591,54 +1608,73 @@ mod tests {
     fn test_new_stratified_by_creates_correct_number_of_folds() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        
+
         // Add sample annotations for stratification
         let annotations = create_sample_annotations(
             data.sample_len,
             "batch",
-            vec!["A".to_string(), "B".to_string(), "A".to_string(), "B".to_string(), "A".to_string(), "B".to_string()]
+            vec![
+                "A".to_string(),
+                "B".to_string(),
+                "A".to_string(),
+                "B".to_string(),
+                "A".to_string(),
+                "B".to_string(),
+            ],
         );
         data.sample_annotations = Some(annotations);
-        
+
         let outer_folds = 3;
         let cv = CV::new_stratified_by(&data, outer_folds, &mut rng, "batch");
-        
-        assert_eq!(cv.validation_folds.len(), outer_folds, "Should create correct number of validation folds");
-        assert_eq!(cv.training_sets.len(), outer_folds, "Should create correct number of training sets");
+
+        assert_eq!(
+            cv.validation_folds.len(),
+            outer_folds,
+            "Should create correct number of validation folds"
+        );
+        assert_eq!(
+            cv.training_sets.len(),
+            outer_folds,
+            "Should create correct number of training sets"
+        );
     }
 
     #[test]
     fn test_new_stratified_by_preserves_class_distribution() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let mut data = Data::specific_test(30, 10); 
-        
+        let mut data = Data::specific_test(30, 10);
+
         let class0_count = data.y.iter().filter(|&&y| y == 0).count();
-        let class1_count = data.y.iter().filter(|&&y| y == 1).count();
-        
+        let _class1_count = data.y.iter().filter(|&&y| y == 1).count();
+
         let annotation_values: Vec<String> = (0..30)
-            .map(|i| if i % 2 == 0 { "A".to_string() } else { "B".to_string() })
+            .map(|i| {
+                if i % 2 == 0 {
+                    "A".to_string()
+                } else {
+                    "B".to_string()
+                }
+            })
             .collect();
 
-        let annotations = create_sample_annotations(
-            data.sample_len,
-            "batch",
-            annotation_values
-        );
+        let annotations = create_sample_annotations(data.sample_len, "batch", annotation_values);
         data.sample_annotations = Some(annotations);
-        
+
         let outer_folds = 3; // 30 / 3 = 10 samples per fold
         let cv = CV::new_stratified_by(&data, outer_folds, &mut rng, "batch");
-        
+
         let expected_size_class0 = class0_count / outer_folds;
-        
+
         for (i, fold) in cv.validation_folds.iter().enumerate() {
             let fold_class0 = fold.y.iter().filter(|&&y| y == 0).count();
-            
+
             // Tolerance of +1/-1 due to integer divisions
             assert!(
-                (fold_class0 as isize - expected_size_class0 as isize).abs() <= 2, 
-                "Fold {}: Class 0 count {} is too far from expected {}", 
-                i, fold_class0, expected_size_class0
+                (fold_class0 as isize - expected_size_class0 as isize).abs() <= 2,
+                "Fold {}: Class 0 count {} is too far from expected {}",
+                i,
+                fold_class0,
+                expected_size_class0
             );
         }
     }
@@ -1651,7 +1687,7 @@ mod tests {
         // to get a reasonable distribution, or create data manually
         let num_samples = 60;
         let num_features = 30;
-        
+
         // Create data manually with exactly 30 of each class
         let mut X = HashMap::new();
         let mut data_rng = ChaCha8Rng::seed_from_u64(12345);
@@ -1660,18 +1696,20 @@ mod tests {
                 X.insert((sample, feature), data_rng.gen_range(0.0..1.0));
             }
         }
-        
+
         // Create exactly 30 samples of each class
         let mut y: Vec<u8> = vec![0; 30];
         y.extend(vec![1; 30]);
-        
+
         let mut data = Data {
             X,
             y,
             sample_len: num_samples,
             feature_class: HashMap::new(),
             feature_significance: HashMap::new(),
-            features: (0..num_features).map(|i| format!("feature_{}", i)).collect(),
+            features: (0..num_features)
+                .map(|i| format!("feature_{}", i))
+                .collect(),
             samples: (0..num_samples).map(|i| format!("sample_{}", i)).collect(),
             feature_selection: (0..num_features).collect(),
             feature_len: num_features,
@@ -1679,33 +1717,51 @@ mod tests {
             feature_annotations: None,
             sample_annotations: None,
         };
-        
+
         // Assign batch annotations: even indices = A, odd indices = B
         let batch_values: Vec<String> = (0..num_samples)
-            .map(|i| if i % 2 == 0 { "A".to_string() } else { "B".to_string() })
+            .map(|i| {
+                if i % 2 == 0 {
+                    "A".to_string()
+                } else {
+                    "B".to_string()
+                }
+            })
             .collect();
 
         let annotations = create_sample_annotations(data.sample_len, "batch", batch_values);
         data.sample_annotations = Some(annotations);
-        
+
         let outer_folds = 3;
         let cv = CV::new_stratified_by(&data, outer_folds, &mut rng, "batch");
 
         // Count the distribution of annotations in the original data
         let annot = data.sample_annotations.as_ref().unwrap();
-        let col_idx = annot.tag_column_names.iter().position(|c| c == "batch").unwrap();
-        
+        let col_idx = annot
+            .tag_column_names
+            .iter()
+            .position(|c| c == "batch")
+            .unwrap();
+
         let mut batch_a_class0 = 0i32;
         let mut batch_b_class0 = 0;
         let mut batch_a_class1 = 0;
         let mut batch_b_class1 = 0;
-        
+
         for i in 0..data.sample_len {
             let batch = &annot.sample_tags[&i][col_idx];
             if data.y[i] == 0 {
-                if batch == "A" { batch_a_class0 += 1; } else { batch_b_class0 += 1; }
+                if batch == "A" {
+                    batch_a_class0 += 1;
+                } else {
+                    batch_b_class0 += 1;
+                }
             } else {
-                if batch == "A" { batch_a_class1 += 1; } else { batch_b_class1 += 1; }
+                if batch == "A" {
+                    batch_a_class1 += 1;
+                } else {
+                    batch_b_class1 += 1;
+                }
             }
         }
 
@@ -1714,34 +1770,46 @@ mod tests {
         let mut total_batch_b_class0 = 0;
         let mut total_batch_a_class1 = 0;
         let mut total_batch_b_class1 = 0;
-        
+
         for fold in &cv.validation_folds {
             let fold_annot = fold.sample_annotations.as_ref().unwrap();
             let mut has_batch_a = false;
             let mut has_batch_b = false;
-            
+
             let mut fold_batch_a_class0 = 0;
             let mut fold_batch_b_class0 = 0;
             let mut fold_batch_a_class1 = 0;
             let mut fold_batch_b_class1 = 0;
-            
+
             for i in 0..fold.sample_len {
                 let batch = &fold_annot.sample_tags[&i][col_idx];
-                if batch == "A" { has_batch_a = true; }
-                if batch == "B" { has_batch_b = true; }
-                
+                if batch == "A" {
+                    has_batch_a = true;
+                }
+                if batch == "B" {
+                    has_batch_b = true;
+                }
+
                 // Count by combination (class, batch) for this fold
                 if fold.y[i] == 0 {
-                    if batch == "A" { fold_batch_a_class0 += 1; } else { fold_batch_b_class0 += 1; }
+                    if batch == "A" {
+                        fold_batch_a_class0 += 1;
+                    } else {
+                        fold_batch_b_class0 += 1;
+                    }
                 } else {
-                    if batch == "A" { fold_batch_a_class1 += 1; } else { fold_batch_b_class1 += 1; }
+                    if batch == "A" {
+                        fold_batch_a_class1 += 1;
+                    } else {
+                        fold_batch_b_class1 += 1;
+                    }
                 }
             }
-            
+
             if has_batch_a && has_batch_b {
                 folds_with_both_batches += 1;
             }
-            
+
             // Accumulate totals for global verification
             total_batch_a_class0 += fold_batch_a_class0;
             total_batch_b_class0 += fold_batch_b_class0;
@@ -1770,10 +1838,12 @@ mod tests {
             total_batch_b_class1, batch_b_class1,
             "Total count of (class=1, batch=B) across folds should match original data"
         );
-        
+
         // Additional verification: total samples reconstructed
-        let total_samples_in_folds = total_batch_a_class0 + total_batch_b_class0 
-                                    + total_batch_a_class1 + total_batch_b_class1;
+        let total_samples_in_folds = total_batch_a_class0
+            + total_batch_b_class0
+            + total_batch_a_class1
+            + total_batch_b_class1;
         assert_eq!(
             total_samples_in_folds, data.sample_len as i32,
             "Total samples across all folds should equal original dataset size"
@@ -1785,7 +1855,7 @@ mod tests {
     fn test_new_stratified_by_panics_without_annotations() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let data = Data::test();
-        
+
         // No annotations - should panic
         let _cv = CV::new_stratified_by(&data, 3, &mut rng, "batch");
     }
@@ -1795,14 +1865,14 @@ mod tests {
     fn test_new_stratified_by_panics_with_wrong_column() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        
+
         let annotations = create_sample_annotations(
             data.sample_len,
             "batch",
-            vec!["A".to_string(); data.sample_len]
+            vec!["A".to_string(); data.sample_len],
         );
         data.sample_annotations = Some(annotations);
-        
+
         // Nonexistent column - should panic
         let _cv = CV::new_stratified_by(&data, 3, &mut rng, "nonexistent");
     }
@@ -1811,54 +1881,69 @@ mod tests {
     fn test_new_stratified_by_all_data_preserved() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        
+
         let annotations = create_sample_annotations(
             data.sample_len,
             "site",
-            vec!["S1".to_string(), "S2".to_string(), "S1".to_string(), 
-                 "S2".to_string(), "S1".to_string(), "S2".to_string()]
+            vec![
+                "S1".to_string(),
+                "S2".to_string(),
+                "S1".to_string(),
+                "S2".to_string(),
+                "S1".to_string(),
+                "S2".to_string(),
+            ],
         );
         data.sample_annotations = Some(annotations);
-        
+
         let outer_folds = 3;
         let cv = CV::new_stratified_by(&data, outer_folds, &mut rng, "site");
-        
+
         // Verify that all data is preserved
         let mut collected_y = Vec::new();
         for fold in &cv.validation_folds {
             collected_y.extend(fold.y.iter().map(|&x| x as usize));
         }
-        
+
         let mut real_y: Vec<usize> = data.y.iter().map(|&x| x as usize).collect();
         real_y.sort();
         collected_y.sort();
-        
-        assert_eq!(collected_y, real_y, "All y values should be preserved across validation folds");
+
+        assert_eq!(
+            collected_y, real_y,
+            "All y values should be preserved across validation folds"
+        );
     }
 
     #[test]
     fn test_new_stratified_by_training_sets_correct() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        
+
         let annotations = create_sample_annotations(
             data.sample_len,
             "cohort",
-            vec!["C1".to_string(), "C2".to_string(), "C1".to_string(), 
-                 "C2".to_string(), "C1".to_string(), "C2".to_string()]
+            vec![
+                "C1".to_string(),
+                "C2".to_string(),
+                "C1".to_string(),
+                "C2".to_string(),
+                "C1".to_string(),
+                "C2".to_string(),
+            ],
         );
         data.sample_annotations = Some(annotations);
-        
+
         let outer_folds = 3;
         let cv = CV::new_stratified_by(&data, outer_folds, &mut rng, "cohort");
-        
+
         // Verify that each training set = all data - corresponding validation fold
         for i in 0..outer_folds {
             let expected_size = data.sample_len - cv.validation_folds[i].sample_len;
             assert_eq!(
-                cv.training_sets[i].sample_len, 
-                expected_size,
-                "Training set {} should have correct size", i
+                cv.training_sets[i].sample_len, expected_size,
+                "Training set {} should have correct size",
+                i
             );
         }
     }
@@ -1868,33 +1953,55 @@ mod tests {
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
         let data = Data::test();
-        
+
         // Standard CV
         let cv_standard = CV::new(&data, 3, &mut rng1);
-        
+
         // CV with uniform stratification (all samples have the same annotation)
         let mut data_with_annot = data.clone();
         let uniform_annotations = create_sample_annotations(
             data.sample_len,
             "uniform",
-            vec!["same".to_string(); data.sample_len]
+            vec!["same".to_string(); data.sample_len],
         );
         data_with_annot.sample_annotations = Some(uniform_annotations);
-        
+
         let cv_stratified = CV::new_stratified_by(&data_with_annot, 3, &mut rng2, "uniform");
-        
+
         // Verify that the class distribution is identical
         for i in 0..3 {
-            let class0_standard = cv_standard.validation_folds[i].y.iter().filter(|&&y| y == 0).count();
-            let class1_standard = cv_standard.validation_folds[i].y.iter().filter(|&&y| y == 1).count();
-            
-            let class0_stratified = cv_stratified.validation_folds[i].y.iter().filter(|&&y| y == 0).count();
-            let class1_stratified = cv_stratified.validation_folds[i].y.iter().filter(|&&y| y == 1).count();
-            
-            assert_eq!(class0_standard, class0_stratified, 
-                "Fold {} should have same class 0 count", i);
-            assert_eq!(class1_standard, class1_stratified, 
-                "Fold {} should have same class 1 count", i);
+            let class0_standard = cv_standard.validation_folds[i]
+                .y
+                .iter()
+                .filter(|&&y| y == 0)
+                .count();
+            let class1_standard = cv_standard.validation_folds[i]
+                .y
+                .iter()
+                .filter(|&&y| y == 1)
+                .count();
+
+            let class0_stratified = cv_stratified.validation_folds[i]
+                .y
+                .iter()
+                .filter(|&&y| y == 0)
+                .count();
+            let class1_stratified = cv_stratified.validation_folds[i]
+                .y
+                .iter()
+                .filter(|&&y| y == 1)
+                .count();
+
+            assert_eq!(
+                class0_standard, class0_stratified,
+                "Fold {} should have same class 0 count",
+                i
+            );
+            assert_eq!(
+                class1_standard, class1_stratified,
+                "Fold {} should have same class 1 count",
+                i
+            );
         }
     }
 
@@ -1903,31 +2010,32 @@ mod tests {
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
         let data = Data::test();
-        
+
         let cv_standard = CV::new(&data, 3, &mut rng1);
-        
+
         let mut data_with_annot = data.clone();
         let uniform_annotations = create_sample_annotations(
             data.sample_len,
             "uniform",
-            vec!["same".to_string(); data.sample_len]
+            vec!["same".to_string(); data.sample_len],
         );
         data_with_annot.sample_annotations = Some(uniform_annotations);
-        
+
         let cv_stratified = CV::new_stratified_by(&data_with_annot, 3, &mut rng2, "uniform");
-        
+
         // Verify that the fold sizes are identical
         for i in 0..3 {
             assert_eq!(
                 cv_standard.validation_folds[i].sample_len,
                 cv_stratified.validation_folds[i].sample_len,
-                "Fold {} should have same size", i
+                "Fold {} should have same size",
+                i
             );
-            
+
             assert_eq!(
-                cv_standard.training_sets[i].sample_len,
-                cv_stratified.training_sets[i].sample_len,
-                "Training set {} should have same size", i
+                cv_standard.training_sets[i].sample_len, cv_stratified.training_sets[i].sample_len,
+                "Training set {} should have same size",
+                i
             );
         }
     }
@@ -1939,26 +2047,26 @@ mod tests {
         let seed = 12345_u64;
         let mut rng1 = ChaCha8Rng::seed_from_u64(seed);
         let mut rng2 = ChaCha8Rng::seed_from_u64(seed);
-        
+
         let data = Data::test();
         let cv_standard = CV::new(&data, 3, &mut rng1);
-        
+
         let mut data_with_annot = data.clone();
         let uniform_annotations = create_sample_annotations(
             data.sample_len,
             "uniform",
-            vec!["X".to_string(); data.sample_len]
+            vec!["X".to_string(); data.sample_len],
         );
         data_with_annot.sample_annotations = Some(uniform_annotations);
-        
+
         let cv_stratified = CV::new_stratified_by(&data_with_annot, 3, &mut rng2, "uniform");
-        
+
         // Verify that the samples in each fold are identical
         for i in 0..3 {
             assert_eq!(
-                cv_standard.validation_folds[i].samples,
-                cv_stratified.validation_folds[i].samples,
-                "Fold {} should have same samples", i
+                cv_standard.validation_folds[i].samples, cv_stratified.validation_folds[i].samples,
+                "Fold {} should have same samples",
+                i
             );
         }
     }
@@ -1967,44 +2075,59 @@ mod tests {
     fn test_new_stratified_by_with_multiple_annotation_values() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        
+
         // Create annotations with multiple different values
         let annotations = create_sample_annotations(
             data.sample_len,
             "center",
-            vec!["Paris".to_string(), "Lyon".to_string(), "Paris".to_string(), 
-                 "Marseille".to_string(), "Lyon".to_string(), "Marseille".to_string()]
+            vec![
+                "Paris".to_string(),
+                "Lyon".to_string(),
+                "Paris".to_string(),
+                "Marseille".to_string(),
+                "Lyon".to_string(),
+                "Marseille".to_string(),
+            ],
         );
         data.sample_annotations = Some(annotations);
-        
+
         let outer_folds = 3;
         let cv = CV::new_stratified_by(&data, outer_folds, &mut rng, "center");
-        
+
         assert_eq!(cv.validation_folds.len(), outer_folds);
-        
+
         // Verify that the data is well distributed
         let total_samples: usize = cv.validation_folds.iter().map(|f| f.sample_len).sum();
-        assert_eq!(total_samples, data.sample_len, "All samples should be distributed");
+        assert_eq!(
+            total_samples, data.sample_len,
+            "All samples should be distributed"
+        );
     }
 
     #[test]
     fn test_new_stratified_by_with_two_folds() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        
+
         let annotations = create_sample_annotations(
             data.sample_len,
             "treatment",
-            vec!["Control".to_string(), "Treated".to_string(), "Control".to_string(), 
-                 "Treated".to_string(), "Control".to_string(), "Treated".to_string()]
+            vec![
+                "Control".to_string(),
+                "Treated".to_string(),
+                "Control".to_string(),
+                "Treated".to_string(),
+                "Control".to_string(),
+                "Treated".to_string(),
+            ],
         );
         data.sample_annotations = Some(annotations);
-        
+
         let cv = CV::new_stratified_by(&data, 2, &mut rng, "treatment");
-        
+
         assert_eq!(cv.validation_folds.len(), 2);
         assert_eq!(cv.training_sets.len(), 2);
-        
+
         // Each training set should contain approximately 50% of the data
         for i in 0..2 {
             let expected_train_size = data.sample_len - cv.validation_folds[i].sample_len;
@@ -2016,27 +2139,36 @@ mod tests {
     fn test_new_stratified_by_no_overlap() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        
+
         let annotations = create_sample_annotations(
             data.sample_len,
             "group",
-            vec!["G1".to_string(), "G2".to_string(), "G1".to_string(), 
-                 "G2".to_string(), "G1".to_string(), "G2".to_string()]
+            vec![
+                "G1".to_string(),
+                "G2".to_string(),
+                "G1".to_string(),
+                "G2".to_string(),
+                "G1".to_string(),
+                "G2".to_string(),
+            ],
         );
         data.sample_annotations = Some(annotations);
-        
+
         let cv = CV::new_stratified_by(&data, 3, &mut rng, "group");
-        
+
         // Verify that there is no overlap between the validation folds
         for i in 0..cv.validation_folds.len() {
-            for j in (i+1)..cv.validation_folds.len() {
+            for j in (i + 1)..cv.validation_folds.len() {
                 let samples_i = &cv.validation_folds[i].samples;
                 let samples_j = &cv.validation_folds[j].samples;
-                
+
                 for sample in samples_i {
                     assert!(
                         !samples_j.contains(sample),
-                        "Sample {} should not appear in both fold {} and fold {}", sample, i, j
+                        "Sample {} should not appear in both fold {} and fold {}",
+                        sample,
+                        i,
+                        j
                     );
                 }
             }
@@ -2047,22 +2179,26 @@ mod tests {
     fn test_new_stratified_by_feature_consistency() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        
+
         let annotations = create_sample_annotations(
             data.sample_len,
             "experiment",
-            vec!["E1".to_string(); data.sample_len]
+            vec!["E1".to_string(); data.sample_len],
         );
         data.sample_annotations = Some(annotations);
-        
+
         let cv = CV::new_stratified_by(&data, 3, &mut rng, "experiment");
-        
+
         // Verify that all features are preserved in all folds
         for fold in cv.validation_folds.iter().chain(cv.training_sets.iter()) {
-            assert_eq!(fold.features, data.features, 
-                "All folds should have same features as original data");
-            assert_eq!(fold.feature_len, data.feature_len,
-                "All folds should have same feature_len as original data");
+            assert_eq!(
+                fold.features, data.features,
+                "All folds should have same features as original data"
+            );
+            assert_eq!(
+                fold.feature_len, data.feature_len,
+                "All folds should have same feature_len as original data"
+            );
         }
     }
 
@@ -2070,29 +2206,29 @@ mod tests {
     fn test_new_stratified_by_large_dataset() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::specific_test(100, 20); // 100 samples, 20 features
-        
+
         // Create annotations with multiple groups
-        let annotation_values: Vec<String> = (0..100)
-            .map(|i| format!("Batch{}", i % 5))
-            .collect();
-        
+        let annotation_values: Vec<String> = (0..100).map(|i| format!("Batch{}", i % 5)).collect();
+
         let annotations = create_sample_annotations(100, "batch", annotation_values);
         data.sample_annotations = Some(annotations);
-        
+
         let outer_folds = 5;
         let cv = CV::new_stratified_by(&data, outer_folds, &mut rng, "batch");
-        
+
         assert_eq!(cv.validation_folds.len(), outer_folds);
-        
+
         // Verify the distribution
         let total_samples: usize = cv.validation_folds.iter().map(|f| f.sample_len).sum();
         assert_eq!(total_samples, 100);
-        
+
         // Each fold should have approximately 20 samples (100/5)
         for (i, fold) in cv.validation_folds.iter().enumerate() {
             assert!(
                 fold.sample_len >= 15 && fold.sample_len <= 25,
-                "Fold {} has {} samples, expected around 20", i, fold.sample_len
+                "Fold {} has {} samples, expected around 20",
+                i,
+                fold.sample_len
             );
         }
     }
@@ -2104,14 +2240,20 @@ mod tests {
         let annotations = create_sample_annotations(
             data.sample_len,
             "batch",
-            vec!["A".to_string(), "B".to_string(), "A".to_string(), 
-                "B".to_string(), "A".to_string(), "B".to_string()]
+            vec![
+                "A".to_string(),
+                "B".to_string(),
+                "A".to_string(),
+                "B".to_string(),
+                "A".to_string(),
+                "B".to_string(),
+            ],
         );
         data.sample_annotations = Some(annotations);
-        
+
         let mut param = Param::default();
         param.cv.stratify_by = "batch".to_string();
-        
+
         let cv = CV::new_from_param(&data, &param, &mut rng, 3);
         assert_eq!(cv.validation_folds.len(), 3);
     }
@@ -2121,7 +2263,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let data = Data::test();
         let param = Param::default(); // stratify_by
-        
+
         let cv = CV::new_from_param(&data, &param, &mut rng, 3);
         assert_eq!(cv.validation_folds.len(), 3);
     }
@@ -2132,7 +2274,7 @@ mod tests {
         let data = Data::test(); // No annotation
         let mut param = Param::default();
         param.cv.stratify_by = "batch".to_string();
-        
+
         // Should fallback to CV::new() without panicking
         let cv = CV::new_from_param(&data, &param, &mut rng, 3);
         assert_eq!(cv.validation_folds.len(), 3);
@@ -2141,19 +2283,19 @@ mod tests {
     #[test]
     fn test_new_stratified_by_interaction_class_x_annotation() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
-        
-        // Create a perfectly balanced dataset: 
+
+        // Create a perfectly balanced dataset:
         // 80 samples: 40 class 0 (20 batch A + 20 batch B), 40 class 1 (20 batch A + 20 batch B)
         let total_samples = 80;
         let samples_per_group = 20; // (class, batch) combinations
-        
+
         let mut data = Data::specific_test(total_samples, 10); // 10 features
-        
+
         // Build class labels: [0,0,...0 (40x), 1,1,...1 (40x)]
         data.y = (0..total_samples)
             .map(|i| if i < total_samples / 2 { 0 } else { 1 })
             .collect();
-        
+
         // Build batch annotations: alternating A/B within each class
         // Class 0: A,B,A,B,... (20 A, 20 B)
         // Class 1: A,B,A,B,... (20 A, 20 B)
@@ -2166,13 +2308,13 @@ mod tests {
                 }
             })
             .collect();
-        
+
         let annotations = create_sample_annotations(total_samples, "batch", annotation_values);
         data.sample_annotations = Some(annotations);
-        
+
         let num_folds = 4; // 80 / 4 = 20 samples per fold
         let cv = CV::new_stratified_by(&data, num_folds, &mut rng, "batch");
-        
+
         // Verify that each fold preserves the ratios within subgroups
         for (fold_idx, fold) in cv.validation_folds.iter().enumerate() {
             let fold_annot = fold.sample_annotations.as_ref().unwrap();
@@ -2181,17 +2323,17 @@ mod tests {
                 .iter()
                 .position(|c| c == "batch")
                 .unwrap();
-            
+
             // Count the 4 subgroups in this fold
             let mut count_0_a = 0;
             let mut count_0_b = 0;
             let mut count_1_a = 0;
             let mut count_1_b = 0;
-            
+
             for sample_idx in 0..fold.sample_len {
                 let class = fold.y[sample_idx];
                 let batch = &fold_annot.sample_tags[&sample_idx][col_idx];
-                
+
                 match (class, batch.as_str()) {
                     (0, "A") => count_0_a += 1,
                     (0, "B") => count_0_b += 1,
@@ -2200,14 +2342,14 @@ mod tests {
                     _ => panic!("Unexpected class/batch combination"),
                 }
             }
-            
+
             // CRITICAL CHECK: The class 0/class 1 ratio must be preserved WITHIN each batch
             // In our balanced dataset, we expect to have as many class 0 as class 1
             // in batch A, and as many class 0 as class 1 in batch B
-            
+
             // Tolerance of ±1 to handle rounding (20 samples per fold / 4 groups = 5 per group)
             let expected_per_group = samples_per_group / num_folds; // 20/4 = 5
-            
+
             assert!(
                 (count_0_a as isize - expected_per_group as isize).abs() <= 1,
                 "Fold {}: count(class=0, batch=A) = {}, expected ~{} (±1)",
@@ -2215,7 +2357,7 @@ mod tests {
                 count_0_a,
                 expected_per_group
             );
-            
+
             assert!(
                 (count_0_b as isize - expected_per_group as isize).abs() <= 1,
                 "Fold {}: count(class=0, batch=B) = {}, expected ~{} (±1)",
@@ -2223,7 +2365,7 @@ mod tests {
                 count_0_b,
                 expected_per_group
             );
-            
+
             assert!(
                 (count_1_a as isize - expected_per_group as isize).abs() <= 1,
                 "Fold {}: count(class=1, batch=A) = {}, expected ~{} (±1)",
@@ -2231,7 +2373,7 @@ mod tests {
                 count_1_a,
                 expected_per_group
             );
-            
+
             assert!(
                 (count_1_b as isize - expected_per_group as isize).abs() <= 1,
                 "Fold {}: count(class=1, batch=B) = {}, expected ~{} (±1)",
@@ -2239,11 +2381,11 @@ mod tests {
                 count_1_b,
                 expected_per_group
             );
-            
+
             // Additional check: class 0/class 1 ratio must be balanced within each batch
             let total_batch_a = count_0_a + count_1_a;
             let total_batch_b = count_0_b + count_1_b;
-            
+
             if total_batch_a > 0 {
                 assert!(
                     (count_0_a as isize - count_1_a as isize).abs() <= 1,
@@ -2253,7 +2395,7 @@ mod tests {
                     count_1_a
                 );
             }
-            
+
             if total_batch_b > 0 {
                 assert!(
                     (count_0_b as isize - count_1_b as isize).abs() <= 1,
@@ -2264,20 +2406,24 @@ mod tests {
                 );
             }
         }
-        
+
         // Global check: all data must be present exactly once
         let total_class_0_a: usize = cv
             .validation_folds
             .iter()
             .map(|fold| {
                 let annot = fold.sample_annotations.as_ref().unwrap();
-                let col_idx = annot.tag_column_names.iter().position(|c| c == "batch").unwrap();
+                let col_idx = annot
+                    .tag_column_names
+                    .iter()
+                    .position(|c| c == "batch")
+                    .unwrap();
                 (0..fold.sample_len)
                     .filter(|&i| fold.y[i] == 0 && annot.sample_tags[&i][col_idx] == "A")
                     .count()
             })
             .sum();
-        
+
         assert_eq!(
             total_class_0_a, samples_per_group,
             "Total count of (class=0, batch=A) across all folds should be {}",
@@ -2285,53 +2431,69 @@ mod tests {
         );
     }
 
-    /// Extreme test case: very few samples per combination (class, annotation) 
+    /// Extreme test case: very few samples per combination (class, annotation)
     /// compared to the number of requested folds. Checks the robustness of stratification
     /// when constraints are difficult to satisfy.
     #[test]
     fn test_new_stratified_by_very_small_samples_per_group() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
-        
+
         // Minimalist dataset: 6 samples, 2 classes, 2 batches
         // 4 possible combinations, with some underrepresented
         let mut data = Data::specific_test(6, 5); // 6 samples, 5 features
-        
-        // Configuration : 
+
+        // Configuration :
         // - Class 0: 4 samples (2 batch A, 2 batch B)
         // - Class 1: 2 samples (1 batch A, 1 batch B)
         data.y = vec![0, 0, 0, 0, 1, 1];
-        
+
         let annotation_values = vec![
-            "A".to_string(), "B".to_string(), "A".to_string(),
-            "B".to_string(), "A".to_string(), "B".to_string()
+            "A".to_string(),
+            "B".to_string(),
+            "A".to_string(),
+            "B".to_string(),
+            "A".to_string(),
+            "B".to_string(),
         ];
         let annotations = create_sample_annotations(6, "batch", annotation_values);
         data.sample_annotations = Some(annotations);
-        
+
         // Create 5 folds (more folds than samples in some subgroups!)
         let outer_folds = 5;
         let cv = CV::new_stratified_by(&data, outer_folds, &mut rng, "batch");
-        
-        assert_eq!(cv.validation_folds.len(), outer_folds, "Should create 5 folds");
-        assert_eq!(cv.training_sets.len(), outer_folds, "Should create 5 training sets");
-        
+
+        assert_eq!(
+            cv.validation_folds.len(),
+            outer_folds,
+            "Should create 5 folds"
+        );
+        assert_eq!(
+            cv.training_sets.len(),
+            outer_folds,
+            "Should create 5 training sets"
+        );
+
         let mut all_samples_in_folds = Vec::new();
         for fold in &cv.validation_folds {
             all_samples_in_folds.extend(fold.samples.clone());
         }
         all_samples_in_folds.sort();
-        
+
         let mut original_samples = data.samples.clone();
         original_samples.sort();
-        
+
         assert_eq!(
             all_samples_in_folds, original_samples,
             "All samples should be present exactly once across all folds"
         );
-        
+
         let annot = data.sample_annotations.as_ref().unwrap();
-        let col_idx = annot.tag_column_names.iter().position(|c| c == "batch").unwrap();
-        
+        let col_idx = annot
+            .tag_column_names
+            .iter()
+            .position(|c| c == "batch")
+            .unwrap();
+
         // Count in the original dataset
         let mut original_counts = std::collections::HashMap::new();
         for i in 0..data.sample_len {
@@ -2340,7 +2502,7 @@ mod tests {
             let key = format!("class{}_batch{}", class, batch);
             *original_counts.entry(key).or_insert(0) += 1;
         }
-        
+
         // Count in the folds
         let mut fold_counts = std::collections::HashMap::new();
         for fold in &cv.validation_folds {
@@ -2352,12 +2514,12 @@ mod tests {
                 *fold_counts.entry(key).or_insert(0) += 1;
             }
         }
-        
+
         assert_eq!(
             original_counts, fold_counts,
             "Distribution of (class, batch) combinations should be preserved"
         );
-        
+
         for i in 0..outer_folds {
             // No overlap
             let training_samples = &cv.training_sets[i].samples;
@@ -2366,10 +2528,11 @@ mod tests {
                 assert!(
                     !training_samples.contains(sample),
                     "Sample '{}' found in both training and validation for fold {}",
-                    sample, i
+                    sample,
+                    i
                 );
             }
-            
+
             // Consistent size
             let expected_training_size = data.sample_len - cv.validation_folds[i].sample_len;
             assert_eq!(
@@ -2377,24 +2540,30 @@ mod tests {
                 "Training set {} should have size = total - validation_fold_size",
                 i
             );
-            
+
             // Features preserved
             assert_eq!(
                 cv.validation_folds[i].features, data.features,
-                "Fold {} should preserve original features", i
+                "Fold {} should preserve original features",
+                i
             );
             assert_eq!(
                 cv.training_sets[i].features, data.features,
-                "Training set {} should preserve original features", i
+                "Training set {} should preserve original features",
+                i
             );
         }
-        
-        let non_empty_folds = cv.validation_folds.iter().filter(|f| f.sample_len > 0).count();
+
+        let non_empty_folds = cv
+            .validation_folds
+            .iter()
+            .filter(|f| f.sample_len > 0)
+            .count();
         assert!(
             non_empty_folds > 0,
             "At least some folds should be non-empty even with very small sample sizes"
         );
-        
+
         // With 6 samples and 5 folds, some folds will have 1 sample, others 2, others 0
         // This is acceptable as long as all samples are present exactly once
         let total_in_folds: usize = cv.validation_folds.iter().map(|f| f.sample_len).sum();
@@ -2403,5 +2572,4 @@ mod tests {
             "Total samples in folds should equal original dataset size"
         );
     }
-
 }

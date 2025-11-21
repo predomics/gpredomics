@@ -859,7 +859,7 @@ fn create_gpu_assays_for_folds_beam(
 
     cv.validation_folds.iter().enumerate().map(|(idx, fold)| {
         let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
-        
+
         // GPU assay for validation fold
         let gpu_max_nb_models_val = buffer_binding_size / (fold.sample_len * std::mem::size_of::<f32>());
         let val_assay = if param.beam.max_nb_of_models == 0 {
@@ -873,7 +873,7 @@ fn create_gpu_assays_for_folds_beam(
             let max_nb = (param.beam.max_nb_of_models as usize) * lang_data_combinations;
             Some(GpuAssay::new(&fold.X, &fold.feature_selection, fold.sample_len, max_nb, &param.gpu))
         };
-        
+
         // GPU assay for training set
         let training_set = &cv.training_sets[idx];
         let gpu_max_nb_models_train = buffer_binding_size / (training_set.sample_len * std::mem::size_of::<f32>());
@@ -888,7 +888,7 @@ fn create_gpu_assays_for_folds_beam(
             let max_nb = (param.beam.max_nb_of_models as usize) * lang_data_combinations;
             Some(GpuAssay::new(&training_set.X, &training_set.feature_selection, training_set.sample_len, max_nb, &param.gpu))
         };
-        
+
         (val_assay, train_assay)
     }).collect()
 }

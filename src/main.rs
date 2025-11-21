@@ -77,8 +77,7 @@ fn main() {
                 if let Some(output_path) = &args.export_params {
                     let yaml = serde_yaml::to_string(&experiment.parameters)
                         .expect("Failed to serialize parameters");
-                    std::fs::write(output_path, yaml)
-                        .expect("Failed to write parameters file");
+                    std::fs::write(output_path, yaml).expect("Failed to write parameters file");
                     info!("Parameters exported to {}", output_path);
                     return;
                 }
@@ -199,5 +198,5 @@ pub struct Cli {
 
     /// export loaded params to file (requires --load)
     #[arg(long, requires = "load")]
-    export_params: Option<String>
+    export_params: Option<String>,
 }

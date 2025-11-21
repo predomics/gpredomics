@@ -1,4 +1,3 @@
-use std::path::Path;
 use crate::param::Param;
 use crate::utils::{self, serde_json_hashmap_numeric};
 use crate::ChaCha8Rng;
@@ -15,6 +14,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[allow(non_camel_case_types)]
@@ -29,7 +29,7 @@ pub struct FeatureAnnotations {
     pub tag_column_names: Vec<String>,
     pub feature_tags: HashMap<usize, Vec<String>>,
     pub prior_weight: HashMap<usize, f64>,
-    pub feature_penalty: HashMap<usize, f64>
+    pub feature_penalty: HashMap<usize, f64>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -310,122 +310,132 @@ impl Data {
         info!("Classes inverted");
     }
 
-        /// Load TSV d'annotations de features.
-        /// - feature_name (obligatoire)
-        /// - prior_weight (optionnel, f64)
-        /// - feature_penalty (optionnel, f64 ou liste de f64 séparés par ',')
-        /// - autres colonnes stockées dans feature_tags
-        pub fn load_feature_annotation<P: AsRef<Path>>(
-            &self,
-            path: P,
-        ) -> Result<FeatureAnnotations, Box<dyn Error>> {
-            let mut fw_c = 0;
-            let mut fp_c = 0;
-            let path_buf = path.as_ref().to_path_buf();
-            let file = File::open(&path_buf)?;
-            let reader = BufReader::new(file);
-            let mut lines = reader.lines();
-            let header = match lines.next() {
-                Some(Ok(line)) => line,
-                _ => return Err("Empty annotation file".into()),
-            };
-            let columns: Vec<&str> = header.trim_end().split('\t').collect();
-            let mut idx_feature = None;
-            let mut idx_prior = None;
-            let mut idx_penalty = None;
-            let mut extra_idxs = vec![];
-            for (i, col) in columns.iter().enumerate() {
-                match *col {
-                    "feature" | "feature_name" => idx_feature = Some(i),
-                    "prior_weight" => idx_prior = Some(i),
-                    "feature_penalty" => idx_penalty = Some(i),
-                    _ => extra_idxs.push((i, col.to_string())),
-                }
+    /// Load TSV d'annotations de features.
+    /// - feature_name (obligatoire)
+    /// - prior_weight (optionnel, f64)
+    /// - feature_penalty (optionnel, f64 ou liste de f64 séparés par ',')
+    /// - autres colonnes stockées dans feature_tags
+    pub fn load_feature_annotation<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<FeatureAnnotations, Box<dyn Error>> {
+        let mut fw_c = 0;
+        let mut fp_c = 0;
+        let path_buf = path.as_ref().to_path_buf();
+        let file = File::open(&path_buf)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        let header = match lines.next() {
+            Some(Ok(line)) => line,
+            _ => return Err("Empty annotation file".into()),
+        };
+        let columns: Vec<&str> = header.trim_end().split('\t').collect();
+        let mut idx_feature = None;
+        let mut idx_prior = None;
+        let mut idx_penalty = None;
+        let mut extra_idxs = vec![];
+        for (i, col) in columns.iter().enumerate() {
+            match *col {
+                "feature" | "feature_name" => idx_feature = Some(i),
+                "prior_weight" => idx_prior = Some(i),
+                "feature_penalty" => idx_penalty = Some(i),
+                _ => extra_idxs.push((i, col.to_string())),
             }
-            let idx_feature = idx_feature.ok_or("No feature/feature_name column found")?;
-            let tag_column_names: Vec<String> = extra_idxs.iter().map(|(_, name)| name.clone()).collect();
-            let mut feature_tags: HashMap<usize, Vec<String>> = HashMap::new();
-            let mut prior_weight: HashMap<usize, f64> = HashMap::new();
-            let mut feature_penalty: HashMap<usize, f64> = HashMap::new();
-            // Rouvre le fichier pour lire toutes les lignes après l'en-tête
-            let file2 = File::open(&path_buf)?;
-            let reader2 = BufReader::new(file2);
-            let all_lines: Vec<String> = reader2.lines().skip(1).filter_map(Result::ok).collect();
-            let mut annotation_features = Vec::new();
-            for line in &all_lines {
-                let fields: Vec<&str> = line.trim_end().split('\t').collect();
-                if fields.len() > idx_feature {
-                    annotation_features.push(fields[idx_feature].to_string());
-                }
-            }
-
-            // Parsing comme avant
-            for line in &all_lines {
-                let fields: Vec<&str> = line.trim_end().split('\t').collect();
-                if fields.len() <= idx_feature { continue; }
-                let feature_name = fields[idx_feature];
-                if !self.features.contains(&feature_name.to_string()) {
-                    log::debug!("Feature '{}' from annotation not found in data.features: {:?}", feature_name, self.features);
-                }
-                let feature_idx = self.features.iter().position(|f| f == feature_name);
-                let feature_idx = match feature_idx {
-                    Some(idx) => idx,
-                    None => {
-                        log::warn!("Feature '{}' from annotation not found in data.features", feature_name);
-                        continue; // ignore unknown features
-                    }
-                };
-                // Prior_weight
-                if let Some(idx) = idx_prior {
-                    if let Some(val) = fields.get(idx) {
-                        if !val.is_empty() {
-                            if let Ok(v) = val.parse::<f64>() {
-                                prior_weight.insert(feature_idx, v);
-                                fw_c += 1;
-                            }
-                        }
-                    }
-                }
-                // Feature_penalty
-                if let Some(idx) = idx_penalty {
-                    if let Some(val) = fields.get(idx) {
-                        if !val.is_empty() {
-                            if let Ok(v) = val.parse::<f64>() {
-                                feature_penalty.insert(feature_idx, v);
-                                fp_c += 1;
-                            }
-                        }
-                    }
-                }
-                // Feature_tags
-                let mut tags = Vec::new();
-                for (i, _name) in &extra_idxs {
-                    if let Some(val) = fields.get(*i) {
-                        tags.push(val.to_string());
-                    } else {
-                        tags.push(String::new());
-                    }
-                }
-                if !tags.is_empty() {
-                    feature_tags.insert(feature_idx, tags);
-                }
-            }
-
-            if fw_c != self.feature_len {
-                warn!("Not all features have prior_weight defined in the annotation file ({}/{}). Missing values will default to 1.0.", fw_c, self.feature_len) ; 
-            }
-
-            if fp_c != self.feature_len {
-                warn!("Not all features have feature_penalty defined in the annotation file ({}/{}). Missing values will default to no penalty.", fp_c, self.feature_len) ; 
-            }
-
-            Ok(FeatureAnnotations {
-                feature_tags,
-                tag_column_names,
-                prior_weight,
-                feature_penalty,
-            })
         }
+        let idx_feature = idx_feature.ok_or("No feature/feature_name column found")?;
+        let tag_column_names: Vec<String> =
+            extra_idxs.iter().map(|(_, name)| name.clone()).collect();
+        let mut feature_tags: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut prior_weight: HashMap<usize, f64> = HashMap::new();
+        let mut feature_penalty: HashMap<usize, f64> = HashMap::new();
+        // Rouvre le fichier pour lire toutes les lignes après l'en-tête
+        let file2 = File::open(&path_buf)?;
+        let reader2 = BufReader::new(file2);
+        let all_lines: Vec<String> = reader2.lines().skip(1).filter_map(Result::ok).collect();
+        let mut annotation_features = Vec::new();
+        for line in &all_lines {
+            let fields: Vec<&str> = line.trim_end().split('\t').collect();
+            if fields.len() > idx_feature {
+                annotation_features.push(fields[idx_feature].to_string());
+            }
+        }
+
+        // Parsing comme avant
+        for line in &all_lines {
+            let fields: Vec<&str> = line.trim_end().split('\t').collect();
+            if fields.len() <= idx_feature {
+                continue;
+            }
+            let feature_name = fields[idx_feature];
+            if !self.features.contains(&feature_name.to_string()) {
+                log::debug!(
+                    "Feature '{}' from annotation not found in data.features: {:?}",
+                    feature_name,
+                    self.features
+                );
+            }
+            let feature_idx = self.features.iter().position(|f| f == feature_name);
+            let feature_idx = match feature_idx {
+                Some(idx) => idx,
+                None => {
+                    log::warn!(
+                        "Feature '{}' from annotation not found in data.features",
+                        feature_name
+                    );
+                    continue; // ignore unknown features
+                }
+            };
+            // Prior_weight
+            if let Some(idx) = idx_prior {
+                if let Some(val) = fields.get(idx) {
+                    if !val.is_empty() {
+                        if let Ok(v) = val.parse::<f64>() {
+                            prior_weight.insert(feature_idx, v);
+                            fw_c += 1;
+                        }
+                    }
+                }
+            }
+            // Feature_penalty
+            if let Some(idx) = idx_penalty {
+                if let Some(val) = fields.get(idx) {
+                    if !val.is_empty() {
+                        if let Ok(v) = val.parse::<f64>() {
+                            feature_penalty.insert(feature_idx, v);
+                            fp_c += 1;
+                        }
+                    }
+                }
+            }
+            // Feature_tags
+            let mut tags = Vec::new();
+            for (i, _name) in &extra_idxs {
+                if let Some(val) = fields.get(*i) {
+                    tags.push(val.to_string());
+                } else {
+                    tags.push(String::new());
+                }
+            }
+            if !tags.is_empty() {
+                feature_tags.insert(feature_idx, tags);
+            }
+        }
+
+        if fw_c != self.feature_len {
+            warn!("Not all features have prior_weight defined in the annotation file ({}/{}). Missing values will default to 1.0.", fw_c, self.feature_len);
+        }
+
+        if fp_c != self.feature_len {
+            warn!("Not all features have feature_penalty defined in the annotation file ({}/{}). Missing values will default to no penalty.", fp_c, self.feature_len);
+        }
+
+        Ok(FeatureAnnotations {
+            feature_tags,
+            tag_column_names,
+            prior_weight,
+            feature_penalty,
+        })
+    }
 
     pub fn load_sample_annotation<P: AsRef<Path>>(
         &self,
@@ -500,8 +510,7 @@ impl Data {
             };
 
             // Récupération des tags (toutes les colonnes hors sample)
-            
-            
+
             let mut tags = Vec::with_capacity(extra_idxs.len());
             for i in &extra_idxs {
                 let val = fields.get(i.0).map(|s| s.to_string()).unwrap_or_default();
@@ -513,8 +522,12 @@ impl Data {
             }
         }
 
-        let tag_column_names: Vec<String> = extra_idxs.iter().map(|(_, name)| name.clone()).collect();
-        Ok(SampleAnnotations { tag_column_names, sample_tags })
+        let tag_column_names: Vec<String> =
+            extra_idxs.iter().map(|(_, name)| name.clone()).collect();
+        Ok(SampleAnnotations {
+            tag_column_names,
+            sample_tags,
+        })
     }
 
     /// for a given feature (chosen as the #j line of X ) answer 0 if the feature is more significantly associated with class 0, 1 with class 1, 2 otherwise
@@ -2174,12 +2187,20 @@ mod tests {
 
         // Create test data with known features
         let mut data = Data::new();
-        data.features = vec!["feature1".to_string(), "feature2".to_string(), "feature3".to_string()];
+        data.features = vec![
+            "feature1".to_string(),
+            "feature2".to_string(),
+            "feature3".to_string(),
+        ];
         data.feature_len = 3;
 
         // Create temporary annotation file
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "feature_name\tprior_weight\tfeature_penalty\ttag1\ttag2").unwrap();
+        writeln!(
+            temp_file,
+            "feature_name\tprior_weight\tfeature_penalty\ttag1\ttag2"
+        )
+        .unwrap();
         writeln!(temp_file, "feature1\t1.5\t0.1\tgood\tA").unwrap();
         writeln!(temp_file, "feature2\t2.0\t0.2\tbetter\tB").unwrap();
         writeln!(temp_file, "feature3\t0.5\t0.3\tbest\tC").unwrap();
@@ -2201,9 +2222,18 @@ mod tests {
         assert_eq!(annotations.feature_penalty.get(&2), Some(&0.3));
 
         // Verify feature_tags
-        assert_eq!(annotations.feature_tags.get(&0), Some(&vec!["good".to_string(), "A".to_string()]));
-        assert_eq!(annotations.feature_tags.get(&1), Some(&vec!["better".to_string(), "B".to_string()]));
-        assert_eq!(annotations.feature_tags.get(&2), Some(&vec!["best".to_string(), "C".to_string()]));
+        assert_eq!(
+            annotations.feature_tags.get(&0),
+            Some(&vec!["good".to_string(), "A".to_string()])
+        );
+        assert_eq!(
+            annotations.feature_tags.get(&1),
+            Some(&vec!["better".to_string(), "B".to_string()])
+        );
+        assert_eq!(
+            annotations.feature_tags.get(&2),
+            Some(&vec!["best".to_string(), "C".to_string()])
+        );
     }
 
     #[test]
@@ -2226,13 +2256,19 @@ mod tests {
 
         // feature1 should have prior_weight
         assert_eq!(annotations.prior_weight.get(&0), Some(&1.5));
-        
+
         // feature2 should NOT have prior_weight (empty string)
         assert_eq!(annotations.prior_weight.get(&1), None);
 
         // Both should have tags
-        assert_eq!(annotations.feature_tags.get(&0), Some(&vec!["tagA".to_string()]));
-        assert_eq!(annotations.feature_tags.get(&1), Some(&vec!["tagB".to_string()]));
+        assert_eq!(
+            annotations.feature_tags.get(&0),
+            Some(&vec!["tagA".to_string()])
+        );
+        assert_eq!(
+            annotations.feature_tags.get(&1),
+            Some(&vec!["tagB".to_string()])
+        );
     }
 
     #[test]
@@ -2296,7 +2332,10 @@ mod tests {
 
         let result = data.load_feature_annotation(temp_file.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No feature/feature_name column found"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No feature/feature_name column found"));
     }
 
     #[test]
@@ -2306,7 +2345,11 @@ mod tests {
 
         // Create test data with known samples
         let mut data = Data::new();
-        data.samples = vec!["sample1".to_string(), "sample2".to_string(), "sample3".to_string()];
+        data.samples = vec![
+            "sample1".to_string(),
+            "sample2".to_string(),
+            "sample3".to_string(),
+        ];
         data.sample_len = 3;
 
         // Create temporary annotation file
@@ -2320,12 +2363,36 @@ mod tests {
         let annotations = data.load_sample_annotation(temp_file.path()).unwrap();
 
         // Verify tag_column_names
-        assert_eq!(annotations.tag_column_names, vec!["age", "gender", "condition"]);
+        assert_eq!(
+            annotations.tag_column_names,
+            vec!["age", "gender", "condition"]
+        );
 
         // Verify sample_tags
-        assert_eq!(annotations.sample_tags.get(&0), Some(&vec!["25".to_string(), "M".to_string(), "healthy".to_string()]));
-        assert_eq!(annotations.sample_tags.get(&1), Some(&vec!["30".to_string(), "F".to_string(), "diseased".to_string()]));
-        assert_eq!(annotations.sample_tags.get(&2), Some(&vec!["45".to_string(), "M".to_string(), "healthy".to_string()]));
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec![
+                "25".to_string(),
+                "M".to_string(),
+                "healthy".to_string()
+            ])
+        );
+        assert_eq!(
+            annotations.sample_tags.get(&1),
+            Some(&vec![
+                "30".to_string(),
+                "F".to_string(),
+                "diseased".to_string()
+            ])
+        );
+        assert_eq!(
+            annotations.sample_tags.get(&2),
+            Some(&vec![
+                "45".to_string(),
+                "M".to_string(),
+                "healthy".to_string()
+            ])
+        );
     }
 
     #[test]
@@ -2344,7 +2411,10 @@ mod tests {
         temp_file.flush().unwrap();
 
         let annotations = data.load_sample_annotation(temp_file.path()).unwrap();
-        assert_eq!(annotations.sample_tags.get(&0), Some(&vec!["25".to_string()]));
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec!["25".to_string()])
+        );
     }
 
     #[test]
@@ -2368,8 +2438,14 @@ mod tests {
 
         // Only known samples should be present
         assert_eq!(annotations.sample_tags.len(), 2);
-        assert_eq!(annotations.sample_tags.get(&0), Some(&vec!["25".to_string()]));
-        assert_eq!(annotations.sample_tags.get(&1), Some(&vec!["35".to_string()]));
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec!["25".to_string()])
+        );
+        assert_eq!(
+            annotations.sample_tags.get(&1),
+            Some(&vec!["35".to_string()])
+        );
     }
 
     #[test]
@@ -2391,7 +2467,10 @@ mod tests {
         let annotations = data.load_sample_annotation(temp_file.path()).unwrap();
 
         // sample2 should have empty strings for missing values
-        assert_eq!(annotations.sample_tags.get(&1), Some(&vec!["".to_string(), "".to_string()]));
+        assert_eq!(
+            annotations.sample_tags.get(&1),
+            Some(&vec!["".to_string(), "".to_string()])
+        );
     }
 
     #[test]
@@ -2411,7 +2490,10 @@ mod tests {
 
         let result = data.load_sample_annotation(temp_file.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No sample/sample_name column found"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No sample/sample_name column found"));
     }
 
     #[test]
@@ -2429,7 +2511,10 @@ mod tests {
 
         let result = data.load_sample_annotation(temp_file.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Empty sample annotation file"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Empty sample annotation file"));
     }
 
     #[test]
@@ -2474,17 +2559,20 @@ mod tests {
 
         assert_eq!(annotations.tag_column_names.len(), 2);
         assert_eq!(annotations.sample_tags.len(), 2);
-        assert_eq!(annotations.sample_tags.get(&0), Some(&vec!["25".to_string(), "M".to_string()]));
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec!["25".to_string(), "M".to_string()])
+        );
     }
 
     #[test]
     fn test_data_with_feature_annotations() {
         // Test Data struct integration with FeatureAnnotations
         let mut data = Data::test();
-        
+
         let mut prior_weight = HashMap::new();
         prior_weight.insert(0, 1.5);
-        
+
         let feature_annotations = FeatureAnnotations {
             tag_column_names: vec!["category".to_string()],
             feature_tags: HashMap::new(),
@@ -2503,10 +2591,10 @@ mod tests {
     fn test_data_with_sample_annotations() {
         // Test Data struct integration with SampleAnnotations
         let mut data = Data::test();
-        
+
         let mut sample_tags = HashMap::new();
         sample_tags.insert(0, vec!["healthy".to_string()]);
-        
+
         let sample_annotations = SampleAnnotations {
             tag_column_names: vec!["condition".to_string()],
             sample_tags,
@@ -2516,6 +2604,9 @@ mod tests {
 
         assert!(data.sample_annotations.is_some());
         let annotations = data.sample_annotations.unwrap();
-        assert_eq!(annotations.sample_tags.get(&0), Some(&vec!["healthy".to_string()]));
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec!["healthy".to_string()])
+        );
     }
 }
