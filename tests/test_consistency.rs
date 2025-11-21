@@ -1,15 +1,21 @@
+use gpredomics::data::Data;
 /// Integration tests for serialization backward/forward compatibility
 ///
 /// These tests ensure that:
 /// 1. The current version can read all experiment files from previous versions
 /// 2. The current version produces consistent results compared to previous versions
 /// 3. Any differences are documented and tracked
+/// 4. run() and run_on_data() produce consistent results under identical conditions
 ///
 /// Run with: cargo test --test test_serialization_compatibility -- --nocapture
 use gpredomics::experiment::Experiment;
+use gpredomics::param::Param;
+use gpredomics::{run, run_on_data};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -394,4 +400,142 @@ fn test_results_consistency() {
     } else {
         println!("\nAll version comparisons show identical results!");
     }
+}
+
+fn get_qin_paths() -> (String, String) {
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/Qin2014");
+    (
+        base.join("Xtrain.tsv").to_str().unwrap().to_string(),
+        base.join("Ytrain.tsv").to_str().unwrap().to_string(),
+    )
+}
+
+#[test]
+fn test_run_vs_run_on_data_strict_consistency() {
+    // 1. Setup parameters
+    let (x_path, y_path) = get_qin_paths();
+    let mut param = Param::default();
+    param.data.X = x_path;
+    param.data.y = y_path;
+    param.data.features_in_rows = true; // Legacy format for Qin2014
+    param.general.seed = 42; // Critical for reproducibility
+    param.ga.max_epochs = 5; // Short run for speed
+    param.general.algo = "ga".to_string();
+
+    let running = Arc::new(AtomicBool::new(true));
+
+    // 2. Execute 'run' (File-based workflow)
+    // This function loads data internally from paths in param
+    let exp_file = run(&param, running.clone());
+
+    // 3. Execute 'run_on_data' (Memory-based workflow)
+    // We manually load data to simulate the R wrapper's behavior
+    let mut data_mem = Data::new();
+    data_mem
+        .load_data(&param.data.X, &param.data.y, param.data.features_in_rows)
+        .expect("Failed to load data for run_on_data");
+
+    // Note: We pass None for test_data to mimic standard run behavior without external test set
+    let exp_mem = run_on_data(data_mem, None, &param, running.clone());
+
+    // 4. Assertions: The results must be bit-exact identical
+    let pop_file = exp_file
+        .final_population
+        .as_ref()
+        .expect("No population in file exp");
+    let pop_mem = exp_mem
+        .final_population
+        .as_ref()
+        .expect("No population in mem exp");
+
+    assert_eq!(
+        pop_file.individuals.len(),
+        pop_mem.individuals.len(),
+        "Population sizes differ"
+    );
+
+    // Check the best individual
+    let best_file = &pop_file.individuals[0];
+    let best_mem = &pop_mem.individuals[0];
+
+    assert_eq!(
+        best_file.features, best_mem.features,
+        "Best individual features mismatch"
+    );
+    assert_eq!(
+        best_file.fit, best_mem.fit,
+        "Best individual fitness mismatch"
+    );
+
+    // Check execution metadata to ensure logic path was similar
+    assert_eq!(
+        exp_file.train_data.sample_len, exp_mem.train_data.sample_len,
+        "Training data size mismatch"
+    );
+}
+
+#[test]
+fn test_run_vs_run_on_data_holdout_consistency() {
+    // 1. Setup parameters with Holdout
+    let (x_path, y_path) = get_qin_paths();
+    let mut param = Param::default();
+    param.data.X = x_path;
+    param.data.y = y_path;
+    param.data.features_in_rows = true;
+    param.general.seed = 1234; // Different seed
+    param.ga.max_epochs = 5;
+    param.data.holdout_ratio = 0.2; // ENABLE HOLDOUT
+
+    let running = Arc::new(AtomicBool::new(true));
+
+    // 2. Execute 'run'
+    // Logic: 'run' will see holdout_ratio > 0 and perform the split internally
+    let exp_file = run(&param, running.clone());
+
+    // 3. Execute 'run_on_data'
+    let mut data_mem = Data::new();
+    data_mem
+        .load_data(&param.data.X, &param.data.y, param.data.features_in_rows)
+        .expect("Failed to load data");
+
+    // Logic: 'run_on_data' receives full data, sees holdout_ratio > 0 in param,
+    // and MUST perform the exact same split as 'run'.
+    let exp_mem = run_on_data(data_mem, None, &param, running.clone());
+
+    // 4. Assertions on Split Consistency
+    // If the split logic (RNG usage) differs, train/test sizes or content will differ.
+
+    // Check Train sizes
+    assert_eq!(
+        exp_file.train_data.sample_len, exp_mem.train_data.sample_len,
+        "Train set size mismatch after holdout split"
+    );
+
+    // Check Test sizes (Holdout)
+    assert!(exp_file.test_data.is_some(), "File run missing test data");
+    assert!(exp_mem.test_data.is_some(), "Memory run missing test data");
+
+    assert_eq!(
+        exp_file.test_data.as_ref().unwrap().sample_len,
+        exp_mem.test_data.as_ref().unwrap().sample_len,
+        "Holdout set size mismatch"
+    );
+
+    // Check actual samples in Train (to ensure the shuffle was identical)
+    // We check the first sample's index (mapped ID)
+    let file_first_sample = exp_file.train_data.samples.last();
+    let mem_first_sample = exp_mem.train_data.samples.last();
+    assert_eq!(
+        file_first_sample, mem_first_sample,
+        "Train set content differs (split mismatch)"
+    );
+
+    // 5. Assertions on Results
+    let pop_file = exp_file.final_population.as_ref().unwrap();
+    let pop_mem = exp_mem.final_population.as_ref().unwrap();
+
+    assert_eq!(
+        pop_file.individuals[0].fit, pop_mem.individuals[0].fit,
+        "Fitness mismatch with holdout"
+    );
 }
