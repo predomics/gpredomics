@@ -54,7 +54,7 @@ cv:
   stratify_by:                                # If sample annotations are provided, stratify folds according to classes AND to this annotation (must exist in sample_annotations file).
     
 importance:
-  compute_importance: true                   # Should importance be computed?
+  compute_importance: false                   # Should importance be computed?
   n_permutations_oob: 100                     # Number of permutations per feature for OOB importance.
   scaled_importance: true                     # Scale importance by feature prevalence inside folds.
   importance_aggregation: mean                # Aggregation method for importances: "mean" or "median".
@@ -83,7 +83,7 @@ ga:
   mutated_children_pct: 80                    # Percentage of children submitted to mutation.
   mutated_features_pct: 20                    # Percentage of mutation per "gene" (potential variable). Note: most mutations are nonsensical (e.g., removing a variable).
   mutation_non_null_chance_pct: 20            # Percentage of "meaningful" mutations (likelihood that a mutation may add a new variable).
-  forced_diversity_pct: 0                     # If >0%, the population is filtered every forced_diversity_epochs according to this value. A feature is considered different if it is present with a given sign in individual A but not in B.
+  forced_diversity_pct: 0                     # If >0%, the population is filtered every forced_diversity_epochs according to this value. A feature is considered different if it is present with a given sign in individual A but not in B. Linear models (Bin, Ter, Pow2) are grouped and filtered together, while ratio models are compared separately.
   forced_diversity_epochs: 10                 # If forced_diversity_pct > 0%, the epoch gap between two diversity filters.
   random_sampling_pct: 0                      # If >0%, each generation is fitted on only a percentage of random samples to reduce overfitting.
   random_sampling_epochs: 1                   # If random_sampling_pct > 0, number of epochs during which the same randomized dataset is kept.

@@ -274,9 +274,7 @@ pub struct Importance {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct Experimental {
-    
-}
+pub struct Experimental {}
 
 // Default section definitions
 

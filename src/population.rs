@@ -4,6 +4,7 @@ use crate::experiment::ImportanceAggregation;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use crate::gpu::GpuAssay;
 use crate::individual::Individual;
+use crate::individual::{BINARY_LANG, POW2_LANG, RATIO_LANG, TERNARY_LANG};
 use crate::param::FitFunction;
 use crate::param::Param;
 use crate::utils::{
@@ -69,11 +70,11 @@ impl Population {
                 let (test_auc, test_best_acc, test_best_sens, test_best_spec) =
                     self.bayesian_compute_metrics(&data_to_test, train_best_threshold);
                 format!("{}\n\nBayesian model {}:{} [n_st = {}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}", 
-                    str, self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), 
+                    str, self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(),
                     train_auc, test_auc, train_best_acc, test_best_acc, train_best_sens, test_best_sens, train_best_spec, test_best_spec)
             } else {
                 format!("{}\nBayesian model {}:{} [n_st = {}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}", 
-                    str, self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(), 
+                    str, self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(),
                     train_auc, train_best_acc, train_best_sens, train_best_sens)
             };
 
@@ -130,7 +131,7 @@ impl Population {
                     let (test_spec_mean, _) = mean_and_std(&test_spec_vec);
 
                     format!("\n\x1b[1;33mFBM mean (n={}) - AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}\x1b[0m\n", 
-                        fbm.individuals.len(), train_auc_mean, test_auc_mean, train_acc_mean, test_acc_mean, 
+                        fbm.individuals.len(), train_auc_mean, test_auc_mean, train_acc_mean, test_acc_mean,
                         train_sens_mean, test_sens_mean, train_spec_mean, test_spec_mean)
                 } else {
                     format!("\n\x1b[1;33mFBM mean (n={}) - AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}\x1b[0m\n", 
@@ -249,7 +250,7 @@ impl Population {
                             }
                         }
                     }
-                    
+
                     if total_weight > 0.0 {
                         i.fit -= lambda * (acc / total_weight);
                     }
@@ -532,7 +533,7 @@ impl Population {
     }
 
     /// Populate the population with a set of random individuals
-    /// 
+    ///
     /// This is the unified function that handles both uniform and weighted feature selection.
     /// Use `prior_weight` parameter to enable weighted selection, or pass `None` for uniform selection.
     pub fn generate(
@@ -565,7 +566,7 @@ impl Population {
     }
 
     /// Populate the population with weighted feature selection
-    /// 
+    ///
     /// **Deprecated:** Use `generate` with `prior_weight = Some(...)` instead.
     #[deprecated(since = "0.7.5", note = "Use generate with prior_weight parameter")]
     pub fn generate_weighted(
@@ -884,24 +885,31 @@ impl Population {
 
         let threshold_normalized = threshold / 100.0;
 
-        // Optimisation 1: Pré-calculer la capacité estimée
-        let estimated_capacity = (self.individuals.len() as f64 * 0.3) as usize; // heuristique
+        let estimated_capacity = (self.individuals.len() as f64 * 0.3) as usize;
         let mut all_filtered = Vec::with_capacity(estimated_capacity);
 
         let groups: Vec<Vec<usize>> = if considere_niche {
+            // Group individuals by family niche: (language family, data type)
+            // Linear vs Ratio vs others
             let mut niches: rustc_hash::FxHashMap<(u8, u8), Vec<usize>> =
                 rustc_hash::FxHashMap::default();
 
             for (idx, individual) in self.individuals.iter().enumerate() {
-                let niche_key = (individual.language, individual.data_type);
+                let family_lang: u8 = match individual.language {
+                    BINARY_LANG | TERNARY_LANG | POW2_LANG => 0, // linear family
+                    RATIO_LANG => 1,                             // ratio family
+                    other => other,                              // MCMC or future languages
+                };
+
+                let niche_key = (family_lang, individual.data_type);
                 niches.entry(niche_key).or_insert_with(Vec::new).push(idx);
             }
+
             niches.into_values().collect()
         } else {
             vec![(0..self.individuals.len()).collect()]
         };
 
-        // Optimisation 3: Traitement par chunks pour éviter allocations temporaires
         groups
             .par_iter()
             .filter(|group| !group.is_empty())
@@ -914,7 +922,6 @@ impl Population {
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
 
-                // Optimisation 4: Travailler avec des indices plutôt que cloner
                 let mut filtered_indices = Vec::with_capacity(sorted_indices.len());
                 if !sorted_indices.is_empty() {
                     filtered_indices.push(sorted_indices[0]);
@@ -923,7 +930,6 @@ impl Population {
                         let candidate = &self.individuals[candidate_idx];
                         let mut is_different = true;
 
-                        // Optimisation 5: Early break + optimisation vectorielle potentielle
                         for &selected_idx in &filtered_indices {
                             let selected = &self.individuals[selected_idx];
                             if candidate.signed_jaccard_dissimilarity_with(selected)
@@ -1069,7 +1075,10 @@ impl Population {
                 if let Some(fa) = &data.feature_annotations {
                     let tag_vals = fa.feature_tags.get(feature_idx);
                     for i in 0..tag_names.len() {
-                        let v = tag_vals.and_then(|vals| vals.get(i)).map(|s| s.as_str()).unwrap_or("");
+                        let v = tag_vals
+                            .and_then(|vals| vals.get(i))
+                            .map(|s| s.as_str())
+                            .unwrap_or("");
                         result.push_str(&format!(" | {:<20}", v));
                     }
                 } else {
@@ -1391,12 +1400,12 @@ mod tests {
     #[test]
     fn test_generate_weighted() {
         let data = Data::test_disc_data();
-        
+
         // Create feature annotations with prior weights
         let mut prior_weight = HashMap::new();
         prior_weight.insert(0, 1.0);
         prior_weight.insert(1, 1.0);
-        
+
         let mut pop = Population::new();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
@@ -1465,19 +1474,19 @@ mod tests {
     #[test]
     fn test_generate_weighted_with_biased_weights() {
         let data = Data::test_disc_data();
-        
+
         // Create prior weights favoring feature 0
         let mut prior_weight = HashMap::new();
-        prior_weight.insert(0, 100.0);  // High weight for feature 0
-        prior_weight.insert(1, 0.1);    // Low weight for feature 1
-        
+        prior_weight.insert(0, 100.0); // High weight for feature 0
+        prior_weight.insert(1, 0.1); // Low weight for feature 1
+
         let mut pop = Population::new();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         pop.generate(
             50,
             1,
-            1,  // Only select 1 feature per individual
+            1, // Only select 1 feature per individual
             BINARY_LANG,
             RAW_TYPE,
             DEFAULT_MINIMUM,
@@ -1488,7 +1497,8 @@ mod tests {
         );
 
         // Count how many individuals have feature 0
-        let feature_0_count = pop.individuals
+        let feature_0_count = pop
+            .individuals
             .iter()
             .filter(|ind| ind.features.contains_key(&0))
             .count();
@@ -1504,11 +1514,11 @@ mod tests {
     #[test]
     fn test_generate_weighted_reproducibility() {
         let data = Data::test_disc_data();
-        
+
         let mut prior_weight = HashMap::new();
         prior_weight.insert(0, 1.0);
         prior_weight.insert(1, 1.0);
-        
+
         let mut pop1 = Population::new();
         let mut rng1 = ChaCha8Rng::seed_from_u64(123);
         pop1.generate(
@@ -1548,8 +1558,7 @@ mod tests {
 
         for i in 0..pop1.individuals.len() {
             assert_eq!(
-                pop1.individuals[i].features,
-                pop2.individuals[i].features,
+                pop1.individuals[i].features, pop2.individuals[i].features,
                 "Individuals at position {} should have same features with same seed",
                 i
             );
@@ -1559,7 +1568,7 @@ mod tests {
     #[test]
     fn test_generate_unified_function() {
         let data = Data::test_disc_data();
-        
+
         // Test without weights (None) - using TERNARY_LANG to avoid filtering issues
         let mut pop_no_weights = Population::new();
         let mut rng1 = ChaCha8Rng::seed_from_u64(123);
@@ -1567,7 +1576,7 @@ mod tests {
             5,
             1,
             2,
-            TERNARY_LANG,  // Changed to TERNARY_LANG
+            TERNARY_LANG, // Changed to TERNARY_LANG
             RAW_TYPE,
             DEFAULT_MINIMUM,
             &data,
@@ -1756,7 +1765,7 @@ mod tests {
 
         let (selected_pop5, n5) = pop.select_first_pct(10.0);
         assert_eq!(n5, 1);
-        assert_eq!(selected_pop5.individuals[0].accuracy, 0.23, 
+        assert_eq!(selected_pop5.individuals[0].accuracy, 0.23,
         "select_first_pct() should be deterministic : selecting 1 Individual (10% of 10 Individuals) should lead to keep only the first Individual of the Population");
 
         // to change : return n=10 instead of n=100 (currently pop.individuals.len() != n in this case) when pct>100 or panic
@@ -1788,7 +1797,7 @@ mod tests {
 
         let selected_pop5 = pop.select_random_above_n(10.0, 0, &mut rng);
         assert_eq!(selected_pop5.individuals.len(), 1);
-        assert_eq!(selected_pop5.individuals[0].accuracy, 0.32, 
+        assert_eq!(selected_pop5.individuals[0].accuracy, 0.32,
         "the selected Individual is not the same as selected in the past, indicating a reproductibility problem probably linked to the seed interpretation");
 
         let selected_pop6 = pop.select_random_above_n(100.0, 8, &mut rng);
@@ -2640,35 +2649,6 @@ mod tests {
         assert!(filtered.individuals.iter().any(|i| i.fit == 0.85));
     }
 
-    #[test]
-    fn test_filter_by_signed_jaccard_dissimilarity_with_multiple_niches() {
-        // Test with multiple niches to ensure proper grouping
-        let ind1 =
-            Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.95, 0, 0); // Niche (0,0)
-        let ind2 =
-            Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.90, 0, 1); // Niche (0,1)
-        let ind3 =
-            Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.85, 1, 0); // Niche (1,0)
-        let ind4 =
-            Individual::test_with_these_given_features_fit_lang_types(vec![(1, 1)], 0.80, 0, 0); // Niche (0,0), same as ind1
-
-        let pop = Population {
-            individuals: vec![ind1.clone(), ind2.clone(), ind3.clone(), ind4.clone()],
-        };
-
-        let filtered = pop.filter_by_signed_jaccard_dissimilarity(50.0, true);
-
-        // Niche (0,0): ind1 kept (highest fit), ind4 filtered out (identical features, dissimilarity = 0.0)
-        // Niche (0,1): ind2 kept (only individual in this niche)
-        // Niche (1,0): ind3 kept (only individual in this niche)
-
-        assert_eq!(filtered.individuals.len(), 3);
-        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95)); // Niche (0,0)
-        assert!(filtered.individuals.iter().any(|i| i.fit == 0.90)); // Niche (0,1)
-        assert!(filtered.individuals.iter().any(|i| i.fit == 0.85)); // Niche (1,0)
-        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.80)); // Filtered from niche (0,0)
-    }
-
     fn create_test_population() -> Population {
         let mut pop = Population::new();
         for i in 0..5 {
@@ -3080,7 +3060,6 @@ mod tests {
         }
     }
 
-
     // -----------------------------------------------------------------
     // Tests for prune_all_by_importance
     // -----------------------------------------------------------------
@@ -3246,9 +3225,7 @@ mod tests {
     }
 
     use crate::data::FeatureAnnotations;
-    fn make_feature_annotations_with_penalties(
-        penalties: &[(usize, f64)],
-    ) -> FeatureAnnotations {
+    fn make_feature_annotations_with_penalties(penalties: &[(usize, f64)]) -> FeatureAnnotations {
         let mut feature_penalty = HashMap::new();
         for (idx, p) in penalties {
             feature_penalty.insert(*idx, *p);
@@ -3292,7 +3269,10 @@ mod tests {
         // Assert
         // Weighted mean = (1*0.5 + 1*0.5) / (1+1) = 0.5
         let fit = pop.individuals[0].fit;
-        assert!((fit + 0.5).abs() < 1e-9, "Expected fit to be -0.5, got {fit}");
+        assert!(
+            (fit + 0.5).abs() < 1e-9,
+            "Expected fit to be -0.5, got {fit}"
+        );
     }
 
     #[test]
@@ -3366,5 +3346,54 @@ mod tests {
             (final_fit - initial_fit).abs() < 1e-12,
             "Fit should remain unchanged when lambda=0. initial={initial_fit}, final={final_fit}"
         );
+    }
+
+    #[test]
+    fn test_filter_by_signed_jaccard_dissimilarity_linear_family_shared_niche() {
+        use crate::individual::{BINARY_LANG, POW2_LANG, RATIO_LANG, RAW_TYPE, TERNARY_LANG};
+
+        let ind_bin = Individual::test_with_these_given_features_fit_lang_types(
+            vec![(1, 1)],
+            0.95,
+            BINARY_LANG,
+            RAW_TYPE,
+        );
+        let ind_ter = Individual::test_with_these_given_features_fit_lang_types(
+            vec![(1, 1)],
+            0.90,
+            TERNARY_LANG,
+            RAW_TYPE,
+        );
+        let ind_pow2 = Individual::test_with_these_given_features_fit_lang_types(
+            vec![(1, 1)],
+            0.85,
+            POW2_LANG,
+            RAW_TYPE,
+        );
+        let ind_ratio = Individual::test_with_these_given_features_fit_lang_types(
+            vec![(1, 1)],
+            0.80,
+            RATIO_LANG,
+            RAW_TYPE,
+        );
+
+        let pop = Population {
+            individuals: vec![
+                ind_bin.clone(),
+                ind_ter.clone(),
+                ind_pow2.clone(),
+                ind_ratio.clone(),
+            ],
+        };
+
+        let filtered = pop.filter_by_signed_jaccard_dissimilarity(50.0, true);
+
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.95));
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.90));
+        assert!(!filtered.individuals.iter().any(|i| i.fit == 0.85));
+
+        assert!(filtered.individuals.iter().any(|i| i.fit == 0.80));
+
+        assert_eq!(filtered.individuals.len(), 2);
     }
 }

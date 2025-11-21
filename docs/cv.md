@@ -78,12 +78,12 @@ Fold C: 30 samples
    - Sick:    15 (5 Paris, 10 London)
 ```
 
-The algorithm creates folds that respect proportions without discarding data. In extreme cases like this, fold sizes may vary slightly (2 vs 3 samples), but the stratification guarantees that the rare "Class 0 / Batch B" sample is isolated for validation exactly once.
+The algorithm creates folds that respect proportions without discarding data:
 
 Example with Unbalanced Double Stratification:
 
 ```
-Consider a "Rare Condition" dataset with 7 samples and stratify_by=batch (3 folds):
+Consider an extreme "Rare Condition" dataset with 7 samples and stratify_by=batch (3 folds):
     Class 0 (Control): 5 samples (4 from Batch A, 1 from Batch B).
     Class 1 (Case): 2 samples (0 from Batch A, 2 from Batch B).
 
@@ -100,6 +100,8 @@ Fold C (2 samples):
    - Class 0: 1 sample  (1 Batch A, 0 Batch B)
    - Class 1: 1 sample  (1 Batch B)
 ```
+
+In extreme cases like above, fold sizes may vary slightly (2 vs 3 samples), but the stratification guarantees that the rare "Class 0 / Batch B" sample is isolated for validation exactly once.
 
 *Why are there 0 samples of Class 1 in Fold B?*
 Since there are only 2 samples of Class 1 total and we requested 3 folds, it is mathematically impossible to put a sample in every fold (2 items cannot fill 3 boxes).

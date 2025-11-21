@@ -119,8 +119,7 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
                     prior_weight,
                     rng,
                 );
-                
-                
+
                 debug!(
                     "generated for {} {}...",
                     sub_pop.individuals[0].get_language(),
@@ -328,10 +327,8 @@ pub fn evolve(
     // Filter before cross-over to improve diversity
     if param.ga.forced_diversity_pct != 0.0 && epoch % param.ga.forced_diversity_epochs == 0 {
         let n = new_pop.individuals.len();
-        new_pop = new_pop.filter_by_signed_jaccard_dissimilarity(
-            param.ga.forced_diversity_pct,
-            param.ga.select_niche_pct == 0.0,
-        );
+        new_pop =
+            new_pop.filter_by_signed_jaccard_dissimilarity(param.ga.forced_diversity_pct, true);
         if new_pop.individuals.len() > 1 {
             debug!(
                 "Parents filtered for diversity: {}/{} individuals retained",

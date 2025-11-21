@@ -620,38 +620,38 @@ pub fn stratified_bootstrap_sample(
     bootstrap_indices
 }
 
-    /// Helper function to stratify indices by sample annotation column
-    pub fn stratify_by_annotation(
-        indices: Vec<usize>,
-        annot: &crate::data::SampleAnnotations,
-        col_idx: usize,
-        n_folds: usize,
-        rng: &mut ChaCha8Rng,
-    ) -> Vec<Vec<usize>> {
-        use std::collections::HashMap;
-        
-        // Group indices by their annotation value
-        let mut strata: HashMap<String, Vec<usize>> = HashMap::new();
-        for &idx in &indices {
-            if let Some(tags) = annot.sample_tags.get(&idx) {
-                if col_idx < tags.len() {
-                    let tag_value = tags[col_idx].clone();
-                    strata.entry(tag_value).or_insert_with(Vec::new).push(idx);
-                }
+/// Helper function to stratify indices by sample annotation column
+pub fn stratify_by_annotation(
+    indices: Vec<usize>,
+    annot: &crate::data::SampleAnnotations,
+    col_idx: usize,
+    n_folds: usize,
+    rng: &mut ChaCha8Rng,
+) -> Vec<Vec<usize>> {
+    use std::collections::HashMap;
+
+    // Group indices by their annotation value
+    let mut strata: HashMap<String, Vec<usize>> = HashMap::new();
+    for &idx in &indices {
+        if let Some(tags) = annot.sample_tags.get(&idx) {
+            if col_idx < tags.len() {
+                let tag_value = tags[col_idx].clone();
+                strata.entry(tag_value).or_insert_with(Vec::new).push(idx);
             }
         }
-        
-        // Split each stratum into folds
-        let mut folds: Vec<Vec<usize>> = vec![Vec::new(); n_folds];
-        for (_tag_value, stratum_indices) in strata {
-            let stratum_folds = split_into_balanced_random_chunks(stratum_indices, n_folds, rng);
-            for (fold_idx, stratum_fold) in stratum_folds.into_iter().enumerate() {
-                folds[fold_idx].extend(stratum_fold);
-            }
-        }
-        
-        folds
     }
+
+    // Split each stratum into folds
+    let mut folds: Vec<Vec<usize>> = vec![Vec::new(); n_folds];
+    for (_tag_value, stratum_indices) in strata {
+        let stratum_folds = split_into_balanced_random_chunks(stratum_indices, n_folds, rng);
+        for (fold_idx, stratum_fold) in stratum_folds.into_iter().enumerate() {
+            folds[fold_idx].extend(stratum_fold);
+        }
+    }
+
+    folds
+}
 
 /// Apply Geyer rescaling for confidence interval construction
 ///
@@ -1312,7 +1312,10 @@ pub fn display_feature_importance_terminal(
             if let Some(fa) = &data.feature_annotations {
                 let tag_vals = fa.feature_tags.get(feature_idx);
                 for i in 0..fa.tag_column_names.len() {
-                    let v = tag_vals.and_then(|vals| vals.get(i)).map(|s| s.as_str()).unwrap_or("");
+                    let v = tag_vals
+                        .and_then(|vals| vals.get(i))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
                     line.push_str(&format!(" | {:<20}", v));
                 }
             }
@@ -3661,10 +3664,7 @@ mod tests {
         assert!(additional.f1_score.is_some(), "F1 should be computed");
         assert!(additional.npv.is_none(), "NPV should NOT be computed");
         assert!(additional.ppv.is_none(), "PPV should NOT be computed");
-        assert!(
-            additional.g_mean.is_none(),
-            "G-mean should NOT be computed"
-        );
+        assert!(additional.g_mean.is_none(), "G-mean should NOT be computed");
     }
 
     #[test]
