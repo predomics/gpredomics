@@ -204,8 +204,8 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
 }
 
 pub fn run_on_data(
-    data: &mut Data,
-    test_data: Option<&Data>,
+    mut data: Data,
+    mut test_data: Option<Data>,
     param: &Param,
     running: Arc<AtomicBool>,
 ) -> Experiment {
@@ -218,11 +218,44 @@ pub fn run_on_data(
         data
     );
 
+    if test_data.is_none() && param.data.holdout_ratio > 0.0 {
+        cinfo!(
+            param.general.display_colorful,
+            "Performing train/test split with holdout ratio of {}...",
+            param.data.holdout_ratio
+        );
+        let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+
+        let stratify_by: Option<&str> = if data.sample_annotations.is_some() {
+            // si `stratify_by` peut être vide, protège avec is_empty()
+            Some(param.cv.stratify_by.as_str())
+        } else {
+            None
+        };
+
+        let (train, holdout) =
+            data.train_test_split(param.data.holdout_ratio, &mut rng, stratify_by);
+        data = train;
+        test_data = Some(holdout);
+
+        cinfo!(
+            false,
+            "Train/test split: {} train samples, {} test samples",
+            data.sample_len,
+            test_data.as_ref().unwrap().sample_len
+        );
+    } else if param.data.Xtest.is_empty()
+        && param.data.ytest.is_empty()
+        && param.data.holdout_ratio == 0.0
+    {
+        warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
+    }
+
     // Launch training
     let (collections, final_population, cv_folds_ids, meta) = if param.general.cv {
         run_cv_training(&data, &param, running)
     } else {
-        let (collection, final_population, meta) = run_training(data, &param, running);
+        let (collection, final_population, meta) = run_training(&mut data, &param, running);
         (vec![collection], final_population, None, meta)
     };
 
@@ -248,8 +281,8 @@ pub fn run_on_data(
         gpredomics_version: gpredomics_version,
         timestamp: timestamp.clone(),
 
-        train_data: data.clone(),
-        test_data: test_data.cloned(),
+        train_data: data,
+        test_data: test_data,
 
         final_population: Some(final_population),
         collections: collections,

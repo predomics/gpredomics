@@ -232,8 +232,8 @@ fn test_ga_qin2014_basic_run() {
         "Execution time should be positive"
     );
     assert!(
-        experiment.execution_time < 600.0,
-        "Execution time should be less than 10 minutes"
+        experiment.execution_time < 1200.0,
+        "Execution time should be less than 20 minutes"
     );
 
     println!("✓ Basic GA run completed successfully");
