@@ -119,6 +119,8 @@ pub struct Data {
     pub ytest: String,
     #[serde(default = "true_default")] // for retrocompatibility
     pub features_in_rows: bool,
+    #[serde(default = "holdout_ratio_default")]
+    pub holdout_ratio: f64,
     #[serde(default = "uzero_default")]
     pub max_features_per_class: usize,
     #[serde(default = "feature_selection_method_default")]
@@ -393,6 +395,13 @@ pub fn validate(param: &mut Param) -> Result<(), String> {
     if param.general.threshold_ci_alpha > 0.0 && param.general.threshold_ci_alpha < 1.0 {
         validate_bootstrap(param)?
     };
+
+    if (param.data.Xtest.is_empty() && !param.data.ytest.is_empty())
+        || (!param.data.Xtest.is_empty() && param.data.ytest.is_empty())
+    {
+        return Err(format!("Both Xtest and ytest must be provided together.",));
+    }
+
     validate_penalties(param)?;
     Ok(())
 }
@@ -634,4 +643,7 @@ fn ga_mut_features_pct_default() -> f64 {
 }
 fn ga_mut_non_null_pct_default() -> f64 {
     20.0
+}
+fn holdout_ratio_default() -> f64 {
+    0.2
 }

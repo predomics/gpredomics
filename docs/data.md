@@ -4,7 +4,7 @@ Gpredomics data must follow a specific .tsv format to be correctly interpreted b
 
 ## Format
 
-The X and Y files must be structured as follows: 
+The X and y files must be structured as follows: 
 
 `X.tsv` : features by rows and samples by columns; first column contains feature names, subsequent columns contain numeric values per sample.
 | feature |	sample_a | sample_b	| sample_c
@@ -21,6 +21,8 @@ The X and Y files must be structured as follows:
 
 Note: The X file can be transposed (samples as rows) if the `features_in_rows` parameter is set to false. 
 Gpredomics automatically aligns samples between X and Y files based on their IDs.
+
+It is possible to specify an external test set via the `Xtest` and `ytest` parameters. If no test set is provided, a split holdout can be generated automatically in Gpredomics according to the value of the `holdout_ratio` parameter. This split is stratified first by class, then by the `stratify_by` variable (if specified, see below) to ensure a good balanced representation in the training and test sets.
 
 ## Data annotations
 
