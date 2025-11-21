@@ -1150,7 +1150,7 @@ fn test_ga_gpu_multiple_lang_dtype() {
     param.general.seed = 42;
     param.general.language = "bin,ter,ratio,pow2".to_string();
     param.general.data_type = "raw,prev,log".to_string();
-    param.general.fit = gpredomics::param::FitFunction::g_means;
+    param.general.fit = gpredomics::param::FitFunction::g_mean;
     param.ga.population_size = 30000;
     param.ga.max_epochs = 3;
     param.cv.inner_folds = 5;

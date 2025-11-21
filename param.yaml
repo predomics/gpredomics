@@ -8,7 +8,7 @@ general:
   language: bin,ratio,pow2,ter                # Possible values are ter, bin, ratio, pow2. See README.md for details. A comma-separated list (no spaces) is accepted; the initial population will be split among the listed languages.
   data_type: raw,prev,log                     # Possible values are raw, prev, log. See README.md for details. A comma-separated list is accepted.
   epsilon: 1e-5                               # This is only useful for data_type 'prevalence' (where it is a threshold) or 'log' (where it replaces values below the threshold).
-  fit: auc                                    # Possible values are auc, specificity, sensitivity, mcc, f1_score, g_means (classification). See README.md for details.
+  fit: auc                                    # Possible values are auc, specificity, sensitivity, mcc, f1_score, g_mean (classification). See README.md for details.
   k_penalty: 0.0001                           # This penalty is derived from the fit function and multiplied by k (the number of variables used in the model).
   fr_penalty: 0.0                             # Used only when fit is specificity or sensitivity. Subtract (1 - symmetrical_metrics) × fr_penalty from the fit during threshold optimization.
   bias_penalty: 0.00                          # Penalize model fit with specificity/sensitivity < 0.5: fit - (1.0 - bad_metrics) * bias_penalty.
@@ -16,6 +16,7 @@ general:
   threshold_ci_penalty: 0.5                   # If a threshold confidence interval exists (see above), penalize evolution according to rejection_rate * penalty.
   threshold_ci_alpha: 0.05                    # If a threshold confidence interval exists (see above), alpha to construct the CI around the threshold (allows models to reject a sample).
   threshold_ci_frac_bootstrap: 1.0            # Should the bootstrap be based on random draw with replacement (on the whole dataset, frac=1, Efron method) or a random draw without replacement on a random subset (0<frac<1, Politis & Romano method)?
+  user_feature_penalties_weight: 1.0          # Weight of user feature penalties defined in feature_annotations if specified
   #log_base:                                  # Uncomment to print log and results in log_base.txt
   log_level: info                             # Possible values are trace, debug, info, warning, or error.
   n_model_to_display: 30                      # Number of models to display in the last generation (default 10, 0 means all models).
@@ -28,19 +29,21 @@ data:
   y: "samples/Qin2014/Ytrain.tsv"             # The class labels of the training dataset (0 = class 0, 1 = class 1 (positive), 2 = unknown).
   Xtest: "samples/Qin2014/Xtest.tsv"          # The features of the test dataset.
   ytest: "samples/Qin2014/Ytest.tsv"          # The class labels of the test dataset.
+  feature_annotations:                        # Path to a TSV file containing feature annotations (see data.md for details).
+  sample_annotations:                         # Path to a TSV file containing sample annotations (see data.md for details).
   features_in_rows: true                      # Are the features arranged in rows (legacy Predomics) or columns (standard in ML)?
+  inverse_classes: false                      # If true, the negative class becomes the objective.
+  classes:                                    # List of class literal labels.
+    - "healthy"                               # Class 0 label
+    - "cirrhosis"                             # Class 1 label             
+    - "unknown"                               # Class 2 label (ignored during training and testing)     
   max_features_per_class: 0                   # 0: all significant features; otherwise take the first X significant features sorted by p-value/log_abs_bayes_factor.
   feature_minimal_prevalence_pct: 10          # Per class: features are retained if any class reaches this prevalence (percentage).
   feature_minimal_feature_value: 1e-4         # Features whose mean is below this value are discarded.
   feature_selection_method: wilcoxon          # Possible values are wilcoxon, student_t (Student's t-test), and bayesian_fisher. Wilcoxon is recommended in most cases.
   feature_maximal_adj_pvalue: 1               # Features with a corrected p-value (BH) above this threshold will be removed.
   feature_minimal_log_abs_bayes_factor: 2     # Features with a lower log absolute Bayes factor will be removed (Bayesian method only).
-  inverse_classes: false                      # If true, the negative class becomes the objective.
-  classes:
-    - "healthy"
-    - "cirrhosis"
-    - "unknown"
-
+  
 cv:
   inner_folds: 5                              # Number of folds used to penalize overfitting if overfit_penalty > 0.
   overfit_penalty: 0                          # This penalty is derived from the fit function (fit -= mean(fit on k-1 - abs(delta with last fold) * overfit_penalty)).
@@ -48,9 +51,10 @@ cv:
   outer_folds: 5                              # Number of folds used for outer cross-validation (run the algorithm on each set of k-1 folds then merge Families of Best Models).
   fit_on_valid: true                          # If true, FBM is based on validation fold fit (favoring generalization); otherwise on k-1 folds. DO NOT enable without external validation data.
   cv_best_models_ci_alpha: 0.05               # Alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha -> larger best_model range.
-
+  stratify_by:                                # If sample annotations are provided, stratify folds according to classes AND to this annotation (must exist in sample_annotations file).
+    
 importance:
-  compute_importance: false                   # Should importance be computed?
+  compute_importance: true                   # Should importance be computed?
   n_permutations_oob: 100                     # Number of permutations per feature for OOB importance.
   scaled_importance: true                     # Scale importance by feature prevalence inside folds.
   importance_aggregation: mean                # Aggregation method for importances: "mean" or "median".

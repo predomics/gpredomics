@@ -1,6 +1,6 @@
 [package]
 name = "gpredomics"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2021"
 
 [dependencies]
@@ -28,6 +28,9 @@ toml = "0.5"
 argmin = "0.10.0"
 rmp-serde = "1.1"
 clap = { version = "4.0", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.8"
 
 [profile.flamegraph]
 inherits = "release"        # Inherit most settings from the release profile
