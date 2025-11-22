@@ -1854,3 +1854,193 @@ fn test_beam_qin2014_voting_with_pruning() {
 
     println!("✓ Voting with pruning test passed");
 }
+
+#[test]
+fn test_beam_qin2014_internal_holdout_split() {
+    println!("\n=== Testing Beam internal holdout split (no external test set) ===\n");
+
+    // 1) Run Beam without internal holdout, without Xtest/Ytest
+    let mut param_no_holdout = create_qin2014_beam_params();
+    param_no_holdout.data.Xtest = "".to_string();
+    param_no_holdout.data.ytest = "".to_string();
+    param_no_holdout.data.holdout_ratio = 0.0;
+    param_no_holdout.general.cv = false;
+    // Make the test lighter
+    param_no_holdout.beam.kmin = 2;
+    param_no_holdout.beam.kmax = 4;
+    param_no_holdout.data.max_features_per_class = 15;
+
+    let running1 = Arc::new(AtomicBool::new(true));
+    let exp_no_holdout = run(&param_no_holdout, running1);
+
+    // Without holdout or explicit test set, there should be no test_data
+    assert!(
+        exp_no_holdout.test_data.is_none(),
+        "Without holdout or external test set, test_data must be None"
+    );
+    let total_samples = exp_no_holdout.train_data.sample_len;
+    assert!(total_samples > 0, "Total number of samples must be > 0");
+
+    // 2) Same config but with internal holdout
+    let mut param_with_holdout = param_no_holdout.clone();
+    param_with_holdout.data.holdout_ratio = 0.25;
+
+    let running2 = Arc::new(AtomicBool::new(true));
+    let exp_with_holdout = run(&param_with_holdout, running2);
+
+    // With holdout_ratio > 0 and no Xtest/Ytest, we must use internal split
+    assert!(
+        exp_with_holdout.test_data.is_some(),
+        "With holdout_ratio > 0 and no external test set, test_data must be Some"
+    );
+    let test_data = exp_with_holdout.test_data.as_ref().unwrap();
+    let train_samples = exp_with_holdout.train_data.sample_len;
+    let test_samples = test_data.sample_len;
+
+    println!("  - Total samples (no holdout): {}", total_samples);
+    println!("  - Train samples with holdout: {}", train_samples);
+    println!("  - Test samples with holdout: {}", test_samples);
+
+    // Verify that holdout has effectively reduced the train set and created a real test set
+    assert_eq!(
+        train_samples + test_samples,
+        total_samples,
+        "Train+test sample counts must equal total samples"
+    );
+    assert!(
+        test_samples > 0,
+        "Holdout test set must contain at least one sample"
+    );
+    assert!(
+        train_samples < total_samples,
+        "Train set must be strictly smaller than total when holdout is enabled"
+    );
+
+    // Verify that train/test share the same feature/class space
+    assert_eq!(
+        exp_with_holdout.train_data.feature_len, test_data.feature_len,
+        "Train and test must share same number of features"
+    );
+    assert_eq!(
+        exp_with_holdout.train_data.classes, test_data.classes,
+        "Train and test must share same class labels"
+    );
+}
+
+#[test]
+fn test_beam_qin2014_external_test_overrides_holdout() {
+    println!("\n=== Testing Beam external test set overrides holdout_ratio ===\n");
+
+    // 1) Baseline: external test set only, no holdout
+    let mut param_external_only = create_qin2014_beam_params();
+    param_external_only.data.holdout_ratio = 0.0;
+    param_external_only.general.cv = false;
+    // Keep Beam reasonably fast
+    param_external_only.beam.kmin = 2;
+    param_external_only.beam.kmax = 4;
+
+    let running1 = Arc::new(AtomicBool::new(true));
+    let exp_external_only = run(&param_external_only, running1);
+
+    // With explicit Xtest/Ytest, test_data must come from the external test set
+    assert!(
+        exp_external_only.test_data.is_some(),
+        "External test set should be used when Xtest/Ytest are provided"
+    );
+    let test_external_only = exp_external_only.test_data.as_ref().unwrap();
+
+    let train_samples_external_only = exp_external_only.train_data.sample_len;
+    let test_samples_external_only = test_external_only.sample_len;
+
+    assert!(
+        train_samples_external_only > 0,
+        "Train set must contain at least one sample"
+    );
+    assert!(
+        test_samples_external_only > 0,
+        "External test set must contain at least one sample"
+    );
+
+    // 2) Same config but with a non-zero holdout_ratio; internal holdout must be ignored
+    let mut param_with_holdout_and_external = param_external_only.clone();
+    param_with_holdout_and_external.data.holdout_ratio = 0.25;
+
+    let running2 = Arc::new(AtomicBool::new(true));
+    let exp_with_holdout_and_external = run(&param_with_holdout_and_external, running2);
+
+    assert!(
+        exp_with_holdout_and_external.test_data.is_some(),
+        "When external test set is provided, test_data must be Some even if holdout_ratio > 0"
+    );
+    let test_with_holdout_and_external = exp_with_holdout_and_external.test_data.as_ref().unwrap();
+
+    // The presence of a holdout_ratio must not reduce the training set
+    // when an explicit external test set is provided.
+    assert_eq!(
+        exp_with_holdout_and_external.train_data.sample_len, train_samples_external_only,
+        "Train sample count must not be reduced by holdout_ratio when Xtest/Ytest are provided"
+    );
+
+    // The explicit test set must keep driving the test sample size.
+    assert_eq!(
+        test_with_holdout_and_external.sample_len, test_samples_external_only,
+        "Test sample count must remain driven by the external Xtest/Ytest files"
+    );
+
+    // Sanity checks on feature space and classes across runs
+    assert_eq!(
+        exp_with_holdout_and_external.train_data.feature_len,
+        exp_external_only.train_data.feature_len,
+        "Train feature dimension must be identical across runs"
+    );
+    assert_eq!(
+        test_with_holdout_and_external.feature_len, test_external_only.feature_len,
+        "Test feature dimension must be identical across runs"
+    );
+    assert_eq!(
+        exp_with_holdout_and_external.train_data.classes, exp_external_only.train_data.classes,
+        "Train classes must be identical across runs"
+    );
+    assert_eq!(
+        test_with_holdout_and_external.classes, test_external_only.classes,
+        "Test classes must be identical across runs"
+    );
+
+    // 1) Train sets must be identical (no internal holdout applied)
+    assert_eq!(
+        exp_with_holdout_and_external.train_data.samples, exp_external_only.train_data.samples,
+        "Train samples must be identical when an external test set is provided"
+    );
+    assert_eq!(
+        exp_with_holdout_and_external.train_data.y, exp_external_only.train_data.y,
+        "Train labels must be identical when an external test set is provided"
+    );
+
+    // 2) Test sets must be identical (both must use the external Xtest/Ytest)
+    assert_eq!(
+        test_with_holdout_and_external.samples, test_external_only.samples,
+        "Test samples must come from the same external Xtest/Ytest files"
+    );
+    assert_eq!(
+        test_with_holdout_and_external.y, test_external_only.y,
+        "Test labels must come from the same external ytest file"
+    );
+
+    println!(
+        "  - Train samples (external only)     : {}",
+        train_samples_external_only
+    );
+    println!(
+        "  - Train samples (ext + holdout>0.0): {}",
+        exp_with_holdout_and_external.train_data.sample_len
+    );
+    println!(
+        "  - Test samples  (external only)     : {}",
+        test_samples_external_only
+    );
+    println!(
+        "  - Test samples  (ext + holdout>0.0): {}",
+        test_with_holdout_and_external.sample_len
+    );
+    println!("✓ Beam external test overrides holdout_ratio as expected");
+}

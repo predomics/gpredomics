@@ -255,7 +255,7 @@ pub fn compute_metrics_from_classes(
         f1_score: None,
         npv: None,
         ppv: None,
-        g_means: None,
+        g_mean: None,
     };
     if others_to_compute[0] {
         additional.mcc = Some(mcc(tp, fp, tn, fn_count));
@@ -270,7 +270,7 @@ pub fn compute_metrics_from_classes(
         additional.ppv = Some(ppv(tp, fp));
     }
     if others_to_compute[4] {
-        additional.g_means = Some(g_means(sensitivity, specificity));
+        additional.g_mean = Some(g_mean(sensitivity, specificity));
     }
 
     (accuracy, sensitivity, specificity, additional)
@@ -390,7 +390,7 @@ pub fn compute_roc_and_metrics_from_value(
             FitFunction::f1_score => f1_score(tp, fp, fn_count),
             FitFunction::npv => npv(tn, fn_count),
             FitFunction::ppv => ppv(tp, fp),
-            FitFunction::g_means => g_means(sensitivity, specificity),
+            FitFunction::g_mean => g_mean(sensitivity, specificity),
         };
 
         if objective > best_objective {
@@ -465,7 +465,7 @@ fn ppv(tp: usize, fp: usize) -> f64 {
 }
 
 #[inline]
-fn g_means(sensitivity: f64, specificity: f64) -> f64 {
+fn g_mean(sensitivity: f64, specificity: f64) -> f64 {
     (sensitivity * specificity).sqrt()
 }
 
@@ -618,6 +618,39 @@ pub fn stratified_bootstrap_sample(
     let mut bootstrap_indices = bootstrap_pos;
     bootstrap_indices.extend(bootstrap_neg);
     bootstrap_indices
+}
+
+/// Helper function to stratify indices by sample annotation column
+pub fn stratify_by_annotation(
+    indices: Vec<usize>,
+    annot: &crate::data::SampleAnnotations,
+    col_idx: usize,
+    n_folds: usize,
+    rng: &mut ChaCha8Rng,
+) -> Vec<Vec<usize>> {
+    use std::collections::HashMap;
+
+    // Group indices by their annotation value
+    let mut strata: HashMap<String, Vec<usize>> = HashMap::new();
+    for &idx in &indices {
+        if let Some(tags) = annot.sample_tags.get(&idx) {
+            if col_idx < tags.len() {
+                let tag_value = tags[col_idx].clone();
+                strata.entry(tag_value).or_insert_with(Vec::new).push(idx);
+            }
+        }
+    }
+
+    // Split each stratum into folds
+    let mut folds: Vec<Vec<usize>> = vec![Vec::new(); n_folds];
+    for (_tag_value, stratum_indices) in strata {
+        let stratum_folds = split_into_balanced_random_chunks(stratum_indices, n_folds, rng);
+        for (fold_idx, stratum_fold) in stratum_folds.into_iter().enumerate() {
+            folds[fold_idx].extend(stratum_fold);
+        }
+    }
+
+    folds
 }
 
 /// Apply Geyer rescaling for confidence interval construction
@@ -1036,8 +1069,8 @@ pub fn display_epoch_legend(param: &Param) -> String {
             FitFunction::mcc => {
                 "MCC"
             }
-            FitFunction::g_means => {
-                "G_means"
+            FitFunction::g_mean => {
+                "G_mean"
             }
             FitFunction::f1_score => {
                 "F1-score"
@@ -1203,19 +1236,34 @@ pub fn display_feature_importance_terminal(
         }
     });
 
-    let header_line = format!(
+    let tag_names: Vec<String> = if let Some(fa) = &data.feature_annotations {
+        fa.tag_column_names.clone()
+    } else {
+        Vec::new()
+    };
+
+    let mut header_line = format!(
         "{:<LEFT_MARGIN$}|{:^VALUE_AREA_WIDTH$}|",
         "Feature", "Feature importance"
     );
+    for tag in &tag_names {
+        header_line.push_str(&format!(" | {:<20}", tag));
+    }
     result.push_str(&"-".repeat(LEFT_MARGIN));
     result.push_str("|-");
     result.push_str(&"-".repeat(VALUE_AREA_WIDTH));
+    for _ in &tag_names {
+        result.push_str("|----------------------");
+    }
     result.push_str("|\n");
     result.push_str(&header_line);
     result.push_str("\n");
     result.push_str(&"-".repeat(LEFT_MARGIN));
     result.push_str("|-");
     result.push_str(&"-".repeat(VALUE_AREA_WIDTH));
+    for _ in &tag_names {
+        result.push_str("|----------------------");
+    }
     result.push_str("|\n");
 
     for (i, (feature_idx, (importance, std_dev))) in importance_vec.iter().enumerate() {
@@ -1259,6 +1307,20 @@ pub fn display_feature_importance_terminal(
         }
 
         line.push('|');
+
+        if !tag_names.is_empty() {
+            if let Some(fa) = &data.feature_annotations {
+                let tag_vals = fa.feature_tags.get(feature_idx);
+                for i in 0..fa.tag_column_names.len() {
+                    let v = tag_vals
+                        .and_then(|vals| vals.get(i))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    line.push_str(&format!(" | {:<20}", v));
+                }
+            }
+        }
+
         result.push_str(&line);
         result.push('\n');
     }
@@ -3543,9 +3605,9 @@ mod tests {
         assert_eq!(additional.npv, Some(1.0), "NPV should be 1.0 for perfect");
         assert_eq!(additional.ppv, Some(1.0), "PPV should be 1.0 for perfect");
         assert_eq!(
-            additional.g_means,
+            additional.g_mean,
             Some(1.0),
-            "G-means should be 1.0 for perfect"
+            "G-mean should be 1.0 for perfect"
         );
     }
 
@@ -3563,7 +3625,7 @@ mod tests {
         // MCC should be -1.0 for perfectly inverse classification
         assert_eq!(additional.mcc, Some(-1.0), "MCC should be -1.0");
         assert_eq!(additional.f1_score, Some(0.0), "F1 should be 0.0");
-        assert_eq!(additional.g_means, Some(0.0), "G-means should be 0.0");
+        assert_eq!(additional.g_mean, Some(0.0), "G-mean should be 0.0");
     }
 
     #[test]
@@ -3602,10 +3664,7 @@ mod tests {
         assert!(additional.f1_score.is_some(), "F1 should be computed");
         assert!(additional.npv.is_none(), "NPV should NOT be computed");
         assert!(additional.ppv.is_none(), "PPV should NOT be computed");
-        assert!(
-            additional.g_means.is_none(),
-            "G-means should NOT be computed"
-        );
+        assert!(additional.g_mean.is_none(), "G-mean should NOT be computed");
     }
 
     #[test]
@@ -3647,7 +3706,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gmeans_calculation() {
+    fn test_gmean_calculation() {
         let predicted = vec![0, 0, 1, 1];
         let y = vec![0, 1, 0, 1];
 
@@ -3655,19 +3714,19 @@ mod tests {
             compute_metrics_from_classes(&predicted, &y, [false, false, false, false, true]);
 
         // Sensitivity = 0.5, Specificity = 0.5
-        // G-means = sqrt(0.5 * 0.5) = sqrt(0.25) = 0.5
+        // G-mean = sqrt(0.5 * 0.5) = sqrt(0.25) = 0.5
 
-        let gmeans = additional.g_means.unwrap();
+        let gmean = additional.g_mean.unwrap();
         assert!(
-            (gmeans - 0.5).abs() < 1e-10,
-            "G-means should be 0.5, got {}",
-            gmeans
+            (gmean - 0.5).abs() < 1e-10,
+            "G-mean should be 0.5, got {}",
+            gmean
         );
 
-        let expected_gmeans = (sens * spec).sqrt();
+        let expected_gmean = (sens * spec).sqrt();
         assert!(
-            (gmeans - expected_gmeans).abs() < 1e-10,
-            "G-means should match sqrt(sens * spec)"
+            (gmean - expected_gmean).abs() < 1e-10,
+            "G-mean should match sqrt(sens * spec)"
         );
     }
 

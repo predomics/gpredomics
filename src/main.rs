@@ -74,6 +74,14 @@ fn main() {
     if let Some(experiment_path) = args.load {
         match Experiment::load_auto(&experiment_path) {
             Ok(mut experiment) => {
+                if let Some(output_path) = &args.export_params {
+                    let yaml = serde_yaml::to_string(&experiment.parameters)
+                        .expect("Failed to serialize parameters");
+                    std::fs::write(output_path, yaml).expect("Failed to write parameters file");
+                    info!("Parameters exported to {}", output_path);
+                    return;
+                }
+
                 info!("Loading experiment from: {}", experiment_path);
 
                 if args.evaluate {
@@ -187,4 +195,8 @@ pub struct Cli {
     /// y test data path (required if --evaluate is used)
     #[arg(long, required_if_eq("evaluate", "true"))]
     y_test: Option<String>,
+
+    /// export loaded params to file (requires --load)
+    #[arg(long, requires = "load")]
+    export_params: Option<String>,
 }

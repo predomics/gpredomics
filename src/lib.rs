@@ -2,7 +2,7 @@
 
 pub mod bayesian_mcmc;
 pub mod beam;
-mod cv;
+pub mod cv;
 pub mod data;
 pub mod experiment;
 pub mod ga;
@@ -26,7 +26,7 @@ use population::Population;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 
-use log::debug;
+use log::{debug, warn};
 
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -53,6 +53,56 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         data
     );
 
+    if !param.data.feature_annotations.is_empty() {
+        match data.load_feature_annotation(&param.data.feature_annotations) {
+            Ok(fa) => data.feature_annotations = Some(fa),
+            Err(e) => warn!(
+                "Could not load feature annotations '{}': {}",
+                param.data.feature_annotations, e
+            ),
+        }
+    }
+
+    if !param.data.sample_annotations.is_empty() {
+        match data.load_sample_annotation(&param.data.sample_annotations) {
+            Ok(sa) => data.sample_annotations = Some(sa),
+            Err(e) => warn!(
+                "Could not load sample annotations '{}': {}",
+                param.data.sample_annotations, e
+            ),
+        }
+    }
+
+    let mut test_data: Option<Data> = None;
+    if (param.data.Xtest.is_empty() && param.data.ytest.is_empty())
+        && param.data.holdout_ratio > 0.0
+    {
+        cinfo!(
+            param.general.display_colorful,
+            "Performing train/test split with holdout ratio of {}...",
+            param.data.holdout_ratio
+        );
+        let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+        let stratify_by: Option<&str> = if data.sample_annotations.is_some() {
+            Some(param.cv.stratify_by.as_str())
+        } else {
+            None
+        };
+        let mut _holdout: Data = Data::new();
+        (data, _holdout) = data.train_test_split(param.data.holdout_ratio, &mut rng, stratify_by);
+        test_data = Some(_holdout);
+        cinfo!(
+            false,
+            "Train/test split: {} train samples, {} test samples",
+            data.sample_len,
+            test_data.as_ref().unwrap().sample_len
+        );
+    } else if (param.data.Xtest.is_empty() && param.data.ytest.is_empty())
+        && param.data.holdout_ratio == 0.0
+    {
+        warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
+    }
+
     // Launch training
     let (collections, final_population, cv_folds_ids, meta) = if param.general.cv {
         run_cv_training(&data, &param, running)
@@ -62,7 +112,7 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     };
 
     // Loading test data
-    let test_data = if !param.data.Xtest.is_empty() {
+    if test_data.is_none() && (!param.data.Xtest.is_empty() && !param.data.ytest.is_empty()) {
         debug!("Loading test data...");
         let mut td = Data::new();
         let _ = td.load_data(
@@ -77,10 +127,8 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         if param.general.algo == "mcmc" {
             td = td.remove_class(2);
         }
-        td
-    } else {
-        Data::new()
-    };
+        test_data = Some(td);
+    }
 
     // Build experiment
     let output = Command::new("git")
@@ -107,7 +155,7 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         timestamp: timestamp.clone(),
 
         train_data: data,
-        test_data: Some(test_data),
+        test_data: test_data,
 
         final_population: Some(final_population),
         collections: collections,
@@ -156,8 +204,8 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
 }
 
 pub fn run_on_data(
-    data: &mut Data,
-    test_data: Option<&Data>,
+    mut data: Data,
+    mut test_data: Option<Data>,
     param: &Param,
     running: Arc<AtomicBool>,
 ) -> Experiment {
@@ -170,11 +218,44 @@ pub fn run_on_data(
         data
     );
 
+    if test_data.is_none() && param.data.holdout_ratio > 0.0 {
+        cinfo!(
+            param.general.display_colorful,
+            "Performing train/test split with holdout ratio of {}...",
+            param.data.holdout_ratio
+        );
+        let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+
+        let stratify_by: Option<&str> = if data.sample_annotations.is_some() {
+            // si `stratify_by` peut être vide, protège avec is_empty()
+            Some(param.cv.stratify_by.as_str())
+        } else {
+            None
+        };
+
+        let (train, holdout) =
+            data.train_test_split(param.data.holdout_ratio, &mut rng, stratify_by);
+        data = train;
+        test_data = Some(holdout);
+
+        cinfo!(
+            false,
+            "Train/test split: {} train samples, {} test samples",
+            data.sample_len,
+            test_data.as_ref().unwrap().sample_len
+        );
+    } else if param.data.Xtest.is_empty()
+        && param.data.ytest.is_empty()
+        && param.data.holdout_ratio == 0.0
+    {
+        warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
+    }
+
     // Launch training
     let (collections, final_population, cv_folds_ids, meta) = if param.general.cv {
         run_cv_training(&data, &param, running)
     } else {
-        let (collection, final_population, meta) = run_training(data, &param, running);
+        let (collection, final_population, meta) = run_training(&mut data, &param, running);
         (vec![collection], final_population, None, meta)
     };
 
@@ -200,8 +281,8 @@ pub fn run_on_data(
         gpredomics_version: gpredomics_version,
         timestamp: timestamp.clone(),
 
-        train_data: data.clone(),
-        test_data: test_data.cloned(),
+        train_data: data,
+        test_data: test_data,
 
         final_population: Some(final_population),
         collections: collections,
@@ -300,7 +381,8 @@ pub fn run_cv_training(
     Option<ExperimentMetadata>,
 ) {
     let mut rng: ChaCha8Rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-    let mut folds = CV::new(&data, param.cv.outer_folds, &mut rng);
+
+    let mut folds = CV::new_from_param(&data, param, &mut rng, param.cv.outer_folds);
     let cv_folds_ids = Some(folds.get_ids());
 
     let collections;

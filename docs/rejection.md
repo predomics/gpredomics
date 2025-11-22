@@ -7,10 +7,13 @@ When this feature is enabled, models can reject a sample when the predicted scor
 computed around their binary decision threshold:
 
 ```
-Model #27 Ratio:Raw [k=51] [gen:1] [fit:0.799] AUC 0.923/0.902 | accuracy 0.911/0.864 | sensitivity 0.875/0.909 | specificity 0.957/0.818 | rejection rate 0.122/0.267 | G-means 0.886/0.862 
-Class healthy < [Rejection zone - 95% CI: 0.120, 0.225, 0.270] < Class cirrhosis: (msp_0049 + msp_0313 + msp_0380 + msp_0385 + msp_0581 + msp_0602c + msp_0768 + msp_0881 + msp_0884 + msp_0977 + msp_1127 + msp_1453 + msp_1543 + msp_1789 + msp_1793 + msp_1799) / (msp_0017 + msp_0034 + msp_0047 + msp_0048 + msp_0062 + msp_0063 + msp_0088 + msp_0089 + msp_0144 + msp_0151 + msp_0194 + msp_0196 + msp_0198 + msp_0205 + msp_0236 + msp_0263 + msp_0306 + msp_0381 + msp_0450 + msp_0464 + msp_0468 + msp_0558 + msp_0572 + msp_0757 + msp_0763 + msp_0852 + msp_0898 + msp_0917 + msp_1021 + msp_1093 + msp_1139 + msp_1185 + msp_1275 + msp_1323 + msp_1881 + 1e-5)
+Model #27 Ratio:Raw [k=51] [gen:1] [fit:0.799] AUC 0.923/0.902 | accuracy 0.911/0.864 | sensitivity 0.875/0.909 | specificity 0.957/0.818 | rejection rate 0.122/0.267 | G-mean 0.886/0.862 
+Class healthy: score < 0.120
+Class cirrhosis: score > 0.270
+Rejection zone (95% CI): score ∈ [0.120; 0.270]
+score = (msp_0049 + msp_0313 + msp_0380 + msp_0385 + msp_0581 + msp_0602c + msp_0768 + msp_0881 + msp_0884 + msp_0977 + msp_1127 + msp_1453 + msp_1543 + msp_1789 + msp_1793 + msp_1799) / (msp_0017 + msp_0034 + msp_0047 + msp_0048 + msp_0062 + msp_0063 + msp_0088 + msp_0089 + msp_0144 + msp_0151 + msp_0194 + msp_0196 + msp_0198 + msp_0205 + msp_0236 + msp_0263 + msp_0306 + msp_0381 + msp_0450 + msp_0464 + msp_0468 + msp_0558 + msp_0572 + msp_0757 + msp_0763 + msp_0852 + msp_0898 + msp_0917 + msp_1021 + msp_1093 + msp_1139 + msp_1185 + msp_1275 + msp_1323 + msp_1881 + 1e-5)
 ```
-There, the rejection zone is defined between ` 0.120` and `0.270` while `0.225` is the threshold obtained from the entire data set (i.e. without bootstrapping).
+There, the rejection zone is defined between ` 0.120` and `0.270`.
 
 Concretely, for each epoch, the threshold of each model is estimated on the full dataset and on a number of
 resampled datasets (the number of bootstrap iterations given by `threshold_ci_n_bootstrap`). This yields an empirical
@@ -90,4 +93,4 @@ points:
 - Bootstrap methodology: Efron, B. & Tibshirani, R. J. (1993). An Introduction to the Bootstrap. Chapman & Hall/CRC.
 - Subsampling correction: Politis, D. N., Romano, J. P., & Wolf, M. (1999). Subsampling. Springer.
 
-*Last updated: v0.7.3*
+*Last updated: v0.7.4*
