@@ -294,7 +294,7 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
             f1_score: None,
             npv: None,
             ppv: None,
-            g_means: None,
+            g_mean: None,
         },
     }
 }
@@ -395,7 +395,7 @@ pub fn iterative_growth(
             3
         };
         info!("Learning on {:?}-folds.", folds_nb);
-        cv = Some(CV::new(&data, folds_nb, &mut data_rng));
+        cv = Some(CV::new_from_param(&data, param, &mut data_rng, folds_nb));
         Data::new()
     } else {
         data.clone()
@@ -921,7 +921,7 @@ mod tests {
                 f1_score: None,
                 npv: None,
                 ppv: None,
-                g_means: None,
+                g_mean: None,
             },
         }
     }
@@ -1033,7 +1033,7 @@ mod tests {
                 f1_score: None,
                 npv: None,
                 ppv: None,
-                g_means: None,
+                g_mean: None,
             },
         }
     }

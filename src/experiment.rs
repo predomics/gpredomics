@@ -234,13 +234,6 @@ impl Experiment {
                         None,
                     ),
             );
-            info!(
-                "{}",
-                self.importance_collection
-                    .as_ref()
-                    .unwrap()
-                    .display_feature_importance_terminal(&self.train_data, 30)
-            );
         } else {
             info!(
                 "Computing CV importance with {} folds",

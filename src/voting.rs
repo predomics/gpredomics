@@ -283,7 +283,7 @@ impl Jury {
                 self.experts
                     .individuals
                     .iter()
-                    .any(|e| e.metrics.g_means.is_some()),
+                    .any(|e| e.metrics.g_mean.is_some()),
             ];
 
             let (accuracy, sensitivity, specificity, additional_metrics) =
@@ -861,12 +861,12 @@ impl Jury {
                     test_additional.ppv.unwrap_or(0.0)
                 );
             }
-            if self.metrics.g_means.is_some() {
+            if self.metrics.g_mean.is_some() {
                 summary_str = format!(
-                    "{} | G-means {:.3}/{:.3}",
+                    "{} | G-mean {:.3}/{:.3}",
                     summary_str,
-                    self.metrics.g_means.unwrap(),
-                    test_additional.g_means.unwrap_or(0.0)
+                    self.metrics.g_mean.unwrap(),
+                    test_additional.g_mean.unwrap_or(0.0)
                 );
             }
 
@@ -897,11 +897,11 @@ impl Jury {
             if self.metrics.ppv.is_some() {
                 summary_str = format!("{} | PPV {:.3}", summary_str, self.metrics.ppv.unwrap());
             }
-            if self.metrics.g_means.is_some() {
+            if self.metrics.g_mean.is_some() {
                 summary_str = format!(
-                    "{} | G-means {:.3}",
+                    "{} | G-mean {:.3}",
                     summary_str,
-                    self.metrics.g_means.unwrap()
+                    self.metrics.g_mean.unwrap()
                 );
             }
 
@@ -2089,6 +2089,8 @@ mod tests {
             samples: vec!["sample1".to_string()],
             feature_class,
             feature_significance: HashMap::new(),
+            feature_annotations: None,
+            sample_annotations: None,
             feature_selection: vec![0],
             feature_len: 1,
             sample_len: 1,
@@ -2490,6 +2492,8 @@ mod tests {
             ],
             feature_class,
             feature_significance: HashMap::new(),
+            feature_annotations: None,
+            sample_annotations: None,
             feature_selection: vec![0],
             feature_len: 1,
             sample_len: 3,
@@ -2600,6 +2604,8 @@ mod tests {
             samples: samples.clone(),
             feature_class,
             feature_significance: HashMap::new(),
+            feature_annotations: None,
+            sample_annotations: None,
             feature_selection: vec![0],
             feature_len: 1,
             sample_len: samples.len(),
@@ -3190,8 +3196,8 @@ mod tests {
             "PPV should be None when experts don't have it"
         );
         assert!(
-            jury.metrics.g_means.is_none(),
-            "G-means should be None when experts don't have it"
+            jury.metrics.g_mean.is_none(),
+            "G-mean should be None when experts don't have it"
         );
     }
 
@@ -3206,7 +3212,7 @@ mod tests {
             expert.metrics.f1_score = Some(0.8);
             expert.metrics.npv = Some(0.75);
             expert.metrics.ppv = Some(0.85);
-            expert.metrics.g_means = Some(0.79);
+            expert.metrics.g_mean = Some(0.79);
         }
 
         let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
@@ -3241,8 +3247,8 @@ mod tests {
             "PPV should be computed when experts have it"
         );
         assert!(
-            jury.metrics.g_means.is_some(),
-            "G-means should be computed when experts have it"
+            jury.metrics.g_mean.is_some(),
+            "G-mean should be computed when experts have it"
         );
 
         // Values should be in valid range [0, 1] or [-1, 1] for MCC
@@ -3263,8 +3269,8 @@ mod tests {
             "PPV should be in [0, 1]"
         );
         assert!(
-            jury.metrics.g_means.unwrap() >= 0.0 && jury.metrics.g_means.unwrap() <= 1.0,
-            "G-means should be in [0, 1]"
+            jury.metrics.g_mean.unwrap() >= 0.0 && jury.metrics.g_mean.unwrap() <= 1.0,
+            "G-mean should be in [0, 1]"
         );
     }
 
@@ -3314,8 +3320,8 @@ mod tests {
             "PPV should not be computed when no expert has it"
         );
         assert!(
-            jury.metrics.g_means.is_none(),
-            "G-means should not be computed when no expert has it"
+            jury.metrics.g_mean.is_none(),
+            "G-mean should not be computed when no expert has it"
         );
     }
 
@@ -3475,7 +3481,7 @@ mod tests {
         for expert in &mut pop.individuals {
             expert.metrics.mcc = Some(0.7);
             expert.metrics.f1_score = Some(0.75);
-            expert.metrics.g_means = Some(0.73);
+            expert.metrics.g_mean = Some(0.73);
         }
 
         let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
@@ -3504,8 +3510,8 @@ mod tests {
             "Stored and returned F1-score should match"
         );
         assert_eq!(
-            jury.metrics.g_means, returned_metrics.g_means,
-            "Stored and returned G-means should match"
+            jury.metrics.g_mean, returned_metrics.g_mean,
+            "Stored and returned G-mean should match"
         );
     }
 
@@ -3876,6 +3882,8 @@ mod tests {
             samples: vec!["sample1".to_string(), "sample2".to_string()],
             feature_class,
             feature_significance: HashMap::new(),
+            feature_annotations: None,
+            sample_annotations: None,
             feature_selection: vec![0],
             feature_len: 1,
             sample_len: 2,
@@ -4173,7 +4181,7 @@ mod tests {
                 f1_score: Some(0.7 + 0.05 * i as f64),
                 npv: Some(0.8),
                 ppv: Some(0.75),
-                g_means: Some(0.65),
+                g_mean: Some(0.65),
             };
         }
 
@@ -4263,16 +4271,16 @@ mod tests {
             panic!("PPV should have been computed since some experts expose it");
         }
 
-        // G-means: Computed from Jury's sensitivity and specificity
-        if let Some(g_means) = metrics.g_means {
+        // G-mean: Computed from Jury's sensitivity and specificity
+        if let Some(g_mean) = metrics.g_mean {
             assert!(
-                g_means >= 0.0 && g_means <= 1.0,
-                "G-means should be in valid range [0, 1], got {}",
-                g_means
+                g_mean >= 0.0 && g_mean <= 1.0,
+                "G-mean should be in valid range [0, 1], got {}",
+                g_mean
             );
-            assert!(g_means.is_finite(), "G-means should be finite");
+            assert!(g_mean.is_finite(), "G-mean should be finite");
         } else {
-            panic!("G-means should have been computed since some experts expose it");
+            panic!("G-mean should have been computed since some experts expose it");
         }
 
         // Verify standard metrics are also valid

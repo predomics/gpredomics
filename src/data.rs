@@ -14,6 +14,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[allow(non_camel_case_types)]
@@ -23,15 +24,18 @@ pub enum PreselectionMethod {
     bayesian_fisher,
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct FeatureAnnotations {
+    pub tag_column_names: Vec<String>,
     pub feature_tags: HashMap<usize, Vec<String>>,
     pub prior_weight: HashMap<usize, f64>,
     pub feature_penalty: HashMap<usize, f64>,
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct SampleAnnotations {
+    pub tag_column_names: Vec<String>,
     pub sample_tags: HashMap<usize, Vec<String>>,
-    pub samples_subclasses: HashMap<usize, u8>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -49,6 +53,10 @@ pub struct Data {
     pub classes: Vec<String>,
     #[serde(default)]
     pub feature_significance: HashMap<usize, f64>,
+    #[serde(default)]
+    pub feature_annotations: Option<FeatureAnnotations>,
+    #[serde(default)]
+    pub sample_annotations: Option<SampleAnnotations>,
 }
 
 impl Data {
@@ -65,6 +73,8 @@ impl Data {
             feature_len: 0,
             sample_len: 0,
             classes: Vec::new(),
+            feature_annotations: None,
+            sample_annotations: None,
         }
     }
 
@@ -298,6 +308,226 @@ impl Data {
         self.classes.swap(0, 1);
 
         info!("Classes inverted");
+    }
+
+    /// Load TSV d'annotations de features.
+    /// - feature_name (obligatoire)
+    /// - prior_weight (optionnel, f64)
+    /// - feature_penalty (optionnel, f64 ou liste de f64 séparés par ',')
+    /// - autres colonnes stockées dans feature_tags
+    pub fn load_feature_annotation<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<FeatureAnnotations, Box<dyn Error>> {
+        let mut fw_c = 0;
+        let mut fp_c = 0;
+        let path_buf = path.as_ref().to_path_buf();
+        let file = File::open(&path_buf)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        let header = match lines.next() {
+            Some(Ok(line)) => line,
+            _ => return Err("Empty annotation file".into()),
+        };
+        let columns: Vec<&str> = header.trim_end().split('\t').collect();
+        let mut idx_feature = None;
+        let mut idx_prior = None;
+        let mut idx_penalty = None;
+        let mut extra_idxs = vec![];
+        for (i, col) in columns.iter().enumerate() {
+            match *col {
+                "feature" | "feature_name" => idx_feature = Some(i),
+                "prior_weight" => idx_prior = Some(i),
+                "feature_penalty" => idx_penalty = Some(i),
+                _ => extra_idxs.push((i, col.to_string())),
+            }
+        }
+        let idx_feature = idx_feature.ok_or("No feature/feature_name column found")?;
+        let tag_column_names: Vec<String> =
+            extra_idxs.iter().map(|(_, name)| name.clone()).collect();
+        let mut feature_tags: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut prior_weight: HashMap<usize, f64> = HashMap::new();
+        let mut feature_penalty: HashMap<usize, f64> = HashMap::new();
+        // Rouvre le fichier pour lire toutes les lignes après l'en-tête
+        let file2 = File::open(&path_buf)?;
+        let reader2 = BufReader::new(file2);
+        let all_lines: Vec<String> = reader2.lines().skip(1).filter_map(Result::ok).collect();
+        let mut annotation_features = Vec::new();
+        for line in &all_lines {
+            let fields: Vec<&str> = line.trim_end().split('\t').collect();
+            if fields.len() > idx_feature {
+                annotation_features.push(fields[idx_feature].to_string());
+            }
+        }
+
+        // Parsing comme avant
+        for line in &all_lines {
+            let fields: Vec<&str> = line.trim_end().split('\t').collect();
+            if fields.len() <= idx_feature {
+                continue;
+            }
+            let feature_name = fields[idx_feature];
+            if !self.features.contains(&feature_name.to_string()) {
+                log::debug!(
+                    "Feature '{}' from annotation not found in data.features: {:?}",
+                    feature_name,
+                    self.features
+                );
+            }
+            let feature_idx = self.features.iter().position(|f| f == feature_name);
+            let feature_idx = match feature_idx {
+                Some(idx) => idx,
+                None => {
+                    log::warn!(
+                        "Feature '{}' from annotation not found in data.features",
+                        feature_name
+                    );
+                    continue; // ignore unknown features
+                }
+            };
+            // Prior_weight
+            if let Some(idx) = idx_prior {
+                if let Some(val) = fields.get(idx) {
+                    if !val.is_empty() {
+                        if let Ok(v) = val.parse::<f64>() {
+                            prior_weight.insert(feature_idx, v);
+                            fw_c += 1;
+                        }
+                    }
+                }
+            }
+            // Feature_penalty
+            if let Some(idx) = idx_penalty {
+                if let Some(val) = fields.get(idx) {
+                    if !val.is_empty() {
+                        if let Ok(v) = val.parse::<f64>() {
+                            feature_penalty.insert(feature_idx, v);
+                            fp_c += 1;
+                        }
+                    }
+                }
+            }
+            // Feature_tags
+            let mut tags = Vec::new();
+            for (i, _name) in &extra_idxs {
+                if let Some(val) = fields.get(*i) {
+                    tags.push(val.to_string());
+                } else {
+                    tags.push(String::new());
+                }
+            }
+            if !tags.is_empty() {
+                feature_tags.insert(feature_idx, tags);
+            }
+        }
+
+        if fw_c != self.feature_len {
+            warn!("Not all features have prior_weight defined in the annotation file ({}/{}). Missing values will default to 1.0.", fw_c, self.feature_len);
+        }
+
+        if fp_c != self.feature_len {
+            warn!("Not all features have feature_penalty defined in the annotation file ({}/{}). Missing values will default to no penalty.", fp_c, self.feature_len);
+        }
+
+        Ok(FeatureAnnotations {
+            feature_tags,
+            tag_column_names,
+            prior_weight,
+            feature_penalty,
+        })
+    }
+
+    pub fn load_sample_annotation<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<SampleAnnotations, Box<dyn Error>> {
+        let path_buf = path.as_ref().to_path_buf();
+        let file = File::open(&path_buf)?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+
+        // En-tête
+        let header = match lines.next() {
+            Some(Ok(line)) => line,
+            _ => return Err("Empty sample annotation file".into()),
+        };
+
+        let columns: Vec<&str> = header.trim_end().split('\t').collect();
+        let mut idx_sample = None;
+        let mut extra_idxs: Vec<(usize, String)> = Vec::new();
+
+        // Détection de la colonne sample et des colonnes supplémentaires
+        for (i, col) in columns.iter().enumerate() {
+            match *col {
+                "sample" | "sample_name" => idx_sample = Some(i),
+                _ => extra_idxs.push((i, col.to_string())),
+            }
+        }
+
+        let idx_sample = idx_sample.ok_or("No sample/sample_name column found")?;
+
+        let mut sample_tags: HashMap<usize, Vec<String>> = HashMap::new();
+
+        // Parcours des lignes d'annotations
+        for line_res in lines {
+            let line = match line_res {
+                Ok(l) => l,
+                Err(e) => {
+                    log::warn!(
+                        "Error reading line in sample annotation file {}: {}",
+                        path_buf.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            let fields: Vec<&str> = line.trim_end().split('\t').collect();
+            if fields.len() <= idx_sample {
+                continue;
+            }
+
+            let sample_name = fields[idx_sample];
+
+            // Rattacher à un index de self.samples
+            if !self.samples.contains(&sample_name.to_string()) {
+                log::debug!(
+                    "Sample '{}' from annotation not found in data.samples: {:?}",
+                    sample_name,
+                    self.samples
+                );
+            }
+
+            let sample_idx = match self.samples.iter().position(|s| s == sample_name) {
+                Some(idx) => idx,
+                None => {
+                    log::warn!(
+                        "Sample '{}' from annotation not found in data.samples",
+                        sample_name
+                    );
+                    continue; // on ignore les samples inconnus
+                }
+            };
+
+            // Récupération des tags (toutes les colonnes hors sample)
+
+            let mut tags = Vec::with_capacity(extra_idxs.len());
+            for i in &extra_idxs {
+                let val = fields.get(i.0).map(|s| s.to_string()).unwrap_or_default();
+                tags.push(val);
+            }
+
+            if !tags.is_empty() {
+                sample_tags.insert(sample_idx, tags);
+            }
+        }
+
+        let tag_column_names: Vec<String> =
+            extra_idxs.iter().map(|(_, name)| name.clone()).collect();
+        Ok(SampleAnnotations {
+            tag_column_names,
+            sample_tags,
+        })
     }
 
     /// for a given feature (chosen as the #j line of X ) answer 0 if the feature is more significantly associated with class 0, 1 with class 1, 2 otherwise
@@ -768,6 +998,21 @@ impl Data {
             }
         }
 
+        let sample_annotations = self.sample_annotations.as_ref().map(|sa| {
+            let mut new_sample_tags: HashMap<usize, Vec<String>> = HashMap::new();
+
+            for (new_sample, old_sample) in samples.iter().enumerate() {
+                if let Some(tags) = sa.sample_tags.get(old_sample) {
+                    new_sample_tags.insert(new_sample, tags.clone());
+                }
+            }
+
+            SampleAnnotations {
+                tag_column_names: sa.tag_column_names.clone(),
+                sample_tags: new_sample_tags,
+            }
+        });
+
         Data {
             X: X,
             y: samples.iter().map(|i| self.y[*i]).collect(),
@@ -779,6 +1024,8 @@ impl Data {
             feature_len: self.feature_len,
             sample_len: samples.len(),
             classes: self.classes.clone(),
+            feature_annotations: self.feature_annotations.clone(),
+            sample_annotations: sample_annotations,
         }
     }
 
@@ -794,6 +1041,8 @@ impl Data {
             feature_len: self.feature_len,
             sample_len: self.sample_len,
             classes: self.classes.clone(),
+            feature_annotations: self.feature_annotations.clone(),
+            sample_annotations: self.sample_annotations.clone(),
         }
     }
 
@@ -875,6 +1124,142 @@ impl Data {
         all_indices.truncate(n_samples.min(total_len));
 
         all_indices
+    }
+
+    /// Stratified train/test split with secondary stratification by annotation.
+    ///
+    /// Arguments :
+    /// * data : complete dataset
+    /// * test_ratio : fraction of data for testing in (0,1)
+    /// * rng : mutable random generator for reproducibility
+    /// * stratify_by : name of the annotation column for double stratification (optional)
+    ///
+    /// Returns `(train_data, test_data)`.
+    pub fn train_test_split(
+        &self,
+        test_ratio: f64,
+        rng: &mut ChaCha8Rng,
+        stratify_by: Option<&str>,
+    ) -> (Data, Data) {
+        assert!(
+            test_ratio > 0.0 && test_ratio < 1.0,
+            "test_ratio must be in (0,1)"
+        );
+
+        if stratify_by.is_none() {
+            // Easy case: simple stratification by class only
+            let (mut indices_class1, mut indices_class0) =
+                utils::stratify_indices_by_class(&self.y);
+            indices_class1.shuffle(rng);
+            indices_class0.shuffle(rng);
+
+            let n_test_1 = ((indices_class1.len() as f64) * test_ratio).round() as usize;
+            let n_test_0 = ((indices_class0.len() as f64) * test_ratio).round() as usize;
+
+            let (test_1, train_1) = indices_class1.split_at(n_test_1);
+            let (test_0, train_0) = indices_class0.split_at(n_test_0);
+
+            let mut train_indices = Vec::with_capacity(train_0.len() + train_1.len());
+            train_indices.extend_from_slice(train_0);
+            train_indices.extend_from_slice(train_1);
+
+            let mut test_indices = Vec::with_capacity(test_0.len() + test_1.len());
+            test_indices.extend_from_slice(test_0);
+            test_indices.extend_from_slice(test_1);
+
+            return (self.subset(train_indices), self.subset(test_indices));
+        }
+
+        // Case double stratification by annotation
+        let stratify_col = stratify_by.unwrap();
+
+        let annot = self
+            .sample_annotations
+            .as_ref()
+            .expect("Sample annotations are required for stratified split by annotation");
+
+        // Find the index of the annotation column
+        let col_idx = annot
+            .tag_column_names
+            .iter()
+            .position(|c| c == stratify_col)
+            .expect(&format!(
+                "Stratification column '{}' not found in sample annotations",
+                stratify_col
+            ));
+
+        // Partition indices by class
+        let (indices_class1, indices_class0) = utils::stratify_indices_by_class(&self.y);
+
+        // Function to split stratified by annotation within each class
+        let split_by_annotation = |indices: &[usize],
+                                   rng: &mut ChaCha8Rng,
+                                   ratio: f64|
+         -> (Vec<usize>, Vec<usize>) {
+            // Retrieve the annotation column for these indices
+            let annotations_for_indices: Vec<_> = indices
+                .iter()
+                .map(|&i| {
+                    let tags = annot.sample_tags.get(&i).unwrap_or_else(|| {
+                        panic!(
+                            "Sample index {} has no entry in sample_annotations.sample_tags while using double stratification on column '{}'. \
+                            All samples must be annotated.",
+                            i, stratify_col
+                        );
+                    });
+
+                    tags.get(col_idx).unwrap_or_else(|| {
+                        panic!(
+                            "Sample index {} has incomplete annotations for column '{}': expected at least {} columns, found {}.",
+                            i,
+                            stratify_col,
+                            col_idx + 1,
+                            tags.len()
+                        );
+                    }).clone()
+                })
+                .collect();
+
+            // Group indices by annotation level
+            let mut levels_map: HashMap<String, Vec<usize>> = HashMap::new();
+            for (idx, annotation_level) in annotations_for_indices.iter().enumerate() {
+                levels_map
+                    .entry(annotation_level.clone())
+                    .or_insert_with(Vec::new)
+                    .push(indices[idx]);
+            }
+
+            let mut train_part = Vec::new();
+            let mut test_part = Vec::new();
+
+            // For each annotation level, shuffle and split according to test_ratio
+            for (_level, mut idxs) in levels_map.into_iter() {
+                idxs.shuffle(rng);
+                let len: usize = idxs.len();
+                let n_test: usize = ((len as f64) * ratio).round() as usize;
+                let n_test = n_test.min(len); // upper bound
+                let (test_slice, train_slice) = idxs.split_at(n_test);
+                train_part.extend_from_slice(train_slice);
+                test_part.extend_from_slice(test_slice);
+            }
+
+            (train_part, test_part)
+        };
+
+        // Split within each class
+        let (train_1, test_1) = split_by_annotation(&indices_class1, rng, test_ratio);
+        let (train_0, test_0) = split_by_annotation(&indices_class0, rng, test_ratio);
+
+        // Merge train and test indices from both classes
+        let mut train_indices = Vec::with_capacity(train_0.len() + train_1.len());
+        train_indices.extend_from_slice(&train_0);
+        train_indices.extend_from_slice(&train_1);
+
+        let mut test_indices = Vec::with_capacity(test_0.len() + test_1.len());
+        test_indices.extend_from_slice(&test_0);
+        test_indices.extend_from_slice(&test_1);
+
+        (self.subset(train_indices), self.subset(test_indices))
     }
 }
 
@@ -980,6 +1365,8 @@ mod tests {
                 feature_len: 2,
                 sample_len: 6,
                 classes: vec!["a".to_string(), "b".to_string()],
+                feature_annotations: None,
+                sample_annotations: None,
             }
         }
 
@@ -1011,6 +1398,8 @@ mod tests {
                 feature_selection: (0..num_features).collect(),
                 feature_len: num_features,
                 classes: vec!["class_0".to_string(), "class_1".to_string()],
+                feature_annotations: None,
+                sample_annotations: None,
             }
         }
 
@@ -1082,6 +1471,8 @@ mod tests {
                 feature_len: 2,
                 sample_len: 10,
                 classes: vec!["a".to_string(), "b".to_string()],
+                feature_annotations: None,
+                sample_annotations: None,
             }
         }
 
@@ -1120,6 +1511,8 @@ mod tests {
                 feature_len: 2,
                 sample_len: 5,
                 classes: vec!["a".to_string(), "b".to_string()],
+                feature_annotations: None,
+                sample_annotations: None,
             }
         }
 
@@ -1158,6 +1551,8 @@ mod tests {
                 feature_len: 2,
                 sample_len: 5,
                 classes: vec!["a".to_string(), "b".to_string()],
+                feature_annotations: None,
+                sample_annotations: None,
             }
         }
     }
@@ -1524,6 +1919,8 @@ mod tests {
             feature_len: 1,
             sample_len: 2,
             classes: vec!["a".to_string(), "b".to_string()],
+            feature_annotations: None,
+            sample_annotations: None,
         };
 
         let data2 = Data {
@@ -1537,6 +1934,8 @@ mod tests {
             feature_len: 1,
             sample_len: 2,
             classes: vec!["a".to_string(), "b".to_string()],
+            feature_annotations: None,
+            sample_annotations: None,
         };
 
         data1.add(&data2);
@@ -1758,9 +2157,9 @@ mod tests {
     }
 
     #[test]
-    fn test_default_features_in_rows_false() {
+    fn test_default_features_in_rows_true() {
         let param = Param::new();
-        assert_eq!(param.data.features_in_rows, false);
+        assert_eq!(param.data.features_in_rows, true);
     }
 
     #[test]
@@ -1930,5 +2329,1032 @@ mod tests {
             results.len(),
             "With alpha=1 & p∈[0,1], every features should be selected"
         );
+    }
+
+    #[test]
+    fn test_load_feature_annotation_basic() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create test data with known features
+        let mut data = Data::new();
+        data.features = vec![
+            "feature1".to_string(),
+            "feature2".to_string(),
+            "feature3".to_string(),
+        ];
+        data.feature_len = 3;
+
+        // Create temporary annotation file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(
+            temp_file,
+            "feature_name\tprior_weight\tfeature_penalty\ttag1\ttag2"
+        )
+        .unwrap();
+        writeln!(temp_file, "feature1\t1.5\t0.1\tgood\tA").unwrap();
+        writeln!(temp_file, "feature2\t2.0\t0.2\tbetter\tB").unwrap();
+        writeln!(temp_file, "feature3\t0.5\t0.3\tbest\tC").unwrap();
+        temp_file.flush().unwrap();
+
+        let annotations = data.load_feature_annotation(temp_file.path()).unwrap();
+
+        // Verify tag_column_names
+        assert_eq!(annotations.tag_column_names, vec!["tag1", "tag2"]);
+
+        // Verify prior_weight
+        assert_eq!(annotations.prior_weight.get(&0), Some(&1.5));
+        assert_eq!(annotations.prior_weight.get(&1), Some(&2.0));
+        assert_eq!(annotations.prior_weight.get(&2), Some(&0.5));
+
+        // Verify feature_penalty
+        assert_eq!(annotations.feature_penalty.get(&0), Some(&0.1));
+        assert_eq!(annotations.feature_penalty.get(&1), Some(&0.2));
+        assert_eq!(annotations.feature_penalty.get(&2), Some(&0.3));
+
+        // Verify feature_tags
+        assert_eq!(
+            annotations.feature_tags.get(&0),
+            Some(&vec!["good".to_string(), "A".to_string()])
+        );
+        assert_eq!(
+            annotations.feature_tags.get(&1),
+            Some(&vec!["better".to_string(), "B".to_string()])
+        );
+        assert_eq!(
+            annotations.feature_tags.get(&2),
+            Some(&vec!["best".to_string(), "C".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_load_feature_annotation_partial_data() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.features = vec!["feature1".to_string(), "feature2".to_string()];
+        data.feature_len = 2;
+
+        // Create annotation file with missing values
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "feature_name\tprior_weight\ttag1").unwrap();
+        writeln!(temp_file, "feature1\t1.5\ttagA").unwrap();
+        writeln!(temp_file, "feature2\t\ttagB").unwrap(); // Missing prior_weight
+        temp_file.flush().unwrap();
+
+        let annotations = data.load_feature_annotation(temp_file.path()).unwrap();
+
+        // feature1 should have prior_weight
+        assert_eq!(annotations.prior_weight.get(&0), Some(&1.5));
+
+        // feature2 should NOT have prior_weight (empty string)
+        assert_eq!(annotations.prior_weight.get(&1), None);
+
+        // Both should have tags
+        assert_eq!(
+            annotations.feature_tags.get(&0),
+            Some(&vec!["tagA".to_string()])
+        );
+        assert_eq!(
+            annotations.feature_tags.get(&1),
+            Some(&vec!["tagB".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_load_feature_annotation_unknown_features() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.features = vec!["feature1".to_string(), "feature2".to_string()];
+        data.feature_len = 2;
+
+        // Create annotation file with unknown feature
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "feature_name\tprior_weight").unwrap();
+        writeln!(temp_file, "feature1\t1.5").unwrap();
+        writeln!(temp_file, "unknown_feature\t2.0").unwrap(); // Unknown feature
+        writeln!(temp_file, "feature2\t0.5").unwrap();
+        temp_file.flush().unwrap();
+
+        let annotations = data.load_feature_annotation(temp_file.path()).unwrap();
+
+        // Only known features should be present
+        assert_eq!(annotations.prior_weight.len(), 2);
+        assert_eq!(annotations.prior_weight.get(&0), Some(&1.5));
+        assert_eq!(annotations.prior_weight.get(&1), Some(&0.5));
+    }
+
+    #[test]
+    fn test_load_feature_annotation_alternative_column_names() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.features = vec!["feature1".to_string()];
+        data.feature_len = 1;
+
+        // Test with "feature" instead of "feature_name"
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "feature\tprior_weight").unwrap();
+        writeln!(temp_file, "feature1\t1.5").unwrap();
+        temp_file.flush().unwrap();
+
+        let annotations = data.load_feature_annotation(temp_file.path()).unwrap();
+        assert_eq!(annotations.prior_weight.get(&0), Some(&1.5));
+    }
+
+    #[test]
+    fn test_load_feature_annotation_missing_feature_column() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.features = vec!["feature1".to_string()];
+        data.feature_len = 1;
+
+        // Create annotation file without feature/feature_name column
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "prior_weight\ttag1").unwrap();
+        writeln!(temp_file, "1.5\ttagA").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = data.load_feature_annotation(temp_file.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No feature/feature_name column found"));
+    }
+
+    #[test]
+    fn test_load_sample_annotation_basic() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create test data with known samples
+        let mut data = Data::new();
+        data.samples = vec![
+            "sample1".to_string(),
+            "sample2".to_string(),
+            "sample3".to_string(),
+        ];
+        data.sample_len = 3;
+
+        // Create temporary annotation file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "sample_name\tage\tgender\tcondition").unwrap();
+        writeln!(temp_file, "sample1\t25\tM\thealthy").unwrap();
+        writeln!(temp_file, "sample2\t30\tF\tdiseased").unwrap();
+        writeln!(temp_file, "sample3\t45\tM\thealthy").unwrap();
+        temp_file.flush().unwrap();
+
+        let annotations = data.load_sample_annotation(temp_file.path()).unwrap();
+
+        // Verify tag_column_names
+        assert_eq!(
+            annotations.tag_column_names,
+            vec!["age", "gender", "condition"]
+        );
+
+        // Verify sample_tags
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec![
+                "25".to_string(),
+                "M".to_string(),
+                "healthy".to_string()
+            ])
+        );
+        assert_eq!(
+            annotations.sample_tags.get(&1),
+            Some(&vec![
+                "30".to_string(),
+                "F".to_string(),
+                "diseased".to_string()
+            ])
+        );
+        assert_eq!(
+            annotations.sample_tags.get(&2),
+            Some(&vec![
+                "45".to_string(),
+                "M".to_string(),
+                "healthy".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_load_sample_annotation_alternative_column_name() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.samples = vec!["sample1".to_string()];
+        data.sample_len = 1;
+
+        // Test with "sample" instead of "sample_name"
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "sample\tage").unwrap();
+        writeln!(temp_file, "sample1\t25").unwrap();
+        temp_file.flush().unwrap();
+
+        let annotations = data.load_sample_annotation(temp_file.path()).unwrap();
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec!["25".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_load_sample_annotation_unknown_samples() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.samples = vec!["sample1".to_string(), "sample2".to_string()];
+        data.sample_len = 2;
+
+        // Create annotation file with unknown sample
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "sample_name\tage").unwrap();
+        writeln!(temp_file, "sample1\t25").unwrap();
+        writeln!(temp_file, "unknown_sample\t30").unwrap(); // Unknown sample
+        writeln!(temp_file, "sample2\t35").unwrap();
+        temp_file.flush().unwrap();
+
+        let annotations = data.load_sample_annotation(temp_file.path()).unwrap();
+
+        // Only known samples should be present
+        assert_eq!(annotations.sample_tags.len(), 2);
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec!["25".to_string()])
+        );
+        assert_eq!(
+            annotations.sample_tags.get(&1),
+            Some(&vec!["35".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_load_sample_annotation_partial_data() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.samples = vec!["sample1".to_string(), "sample2".to_string()];
+        data.sample_len = 2;
+
+        // Create annotation file with missing values
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "sample_name\tage\tgender").unwrap();
+        writeln!(temp_file, "sample1\t25\tM").unwrap();
+        writeln!(temp_file, "sample2\t\t").unwrap(); // Missing values
+        temp_file.flush().unwrap();
+
+        let annotations = data.load_sample_annotation(temp_file.path()).unwrap();
+
+        // sample2 should have empty strings for missing values
+        assert_eq!(
+            annotations.sample_tags.get(&1),
+            Some(&vec!["".to_string(), "".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_load_sample_annotation_missing_sample_column() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.samples = vec!["sample1".to_string()];
+        data.sample_len = 1;
+
+        // Create annotation file without sample/sample_name column
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "age\tgender").unwrap();
+        writeln!(temp_file, "25\tM").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = data.load_sample_annotation(temp_file.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No sample/sample_name column found"));
+    }
+
+    #[test]
+    fn test_load_sample_annotation_empty_file() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut data = Data::new();
+        data.samples = vec!["sample1".to_string()];
+        data.sample_len = 1;
+
+        // Create empty annotation file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.flush().unwrap();
+
+        let result = data.load_sample_annotation(temp_file.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Empty sample annotation file"));
+    }
+
+    #[test]
+    fn test_feature_annotations_struct() {
+        // Test creating FeatureAnnotations manually
+        let mut feature_tags = HashMap::new();
+        feature_tags.insert(0, vec!["tag1".to_string(), "tag2".to_string()]);
+        feature_tags.insert(1, vec!["tag3".to_string(), "tag4".to_string()]);
+
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 1.5);
+        prior_weight.insert(1, 2.0);
+
+        let mut feature_penalty = HashMap::new();
+        feature_penalty.insert(0, 0.1);
+        feature_penalty.insert(1, 0.2);
+
+        let annotations = FeatureAnnotations {
+            tag_column_names: vec!["col1".to_string(), "col2".to_string()],
+            feature_tags,
+            prior_weight,
+            feature_penalty,
+        };
+
+        assert_eq!(annotations.tag_column_names.len(), 2);
+        assert_eq!(annotations.feature_tags.len(), 2);
+        assert_eq!(annotations.prior_weight.len(), 2);
+        assert_eq!(annotations.feature_penalty.len(), 2);
+    }
+
+    #[test]
+    fn test_sample_annotations_struct() {
+        // Test creating SampleAnnotations manually
+        let mut sample_tags = HashMap::new();
+        sample_tags.insert(0, vec!["25".to_string(), "M".to_string()]);
+        sample_tags.insert(1, vec!["30".to_string(), "F".to_string()]);
+
+        let annotations = SampleAnnotations {
+            tag_column_names: vec!["age".to_string(), "gender".to_string()],
+            sample_tags,
+        };
+
+        assert_eq!(annotations.tag_column_names.len(), 2);
+        assert_eq!(annotations.sample_tags.len(), 2);
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec!["25".to_string(), "M".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_data_with_feature_annotations() {
+        // Test Data struct integration with FeatureAnnotations
+        let mut data = Data::test();
+
+        let mut prior_weight = HashMap::new();
+        prior_weight.insert(0, 1.5);
+
+        let feature_annotations = FeatureAnnotations {
+            tag_column_names: vec!["category".to_string()],
+            feature_tags: HashMap::new(),
+            prior_weight,
+            feature_penalty: HashMap::new(),
+        };
+
+        data.feature_annotations = Some(feature_annotations);
+
+        assert!(data.feature_annotations.is_some());
+        let annotations = data.feature_annotations.unwrap();
+        assert_eq!(annotations.prior_weight.get(&0), Some(&1.5));
+    }
+
+    #[test]
+    fn test_data_with_sample_annotations() {
+        // Test Data struct integration with SampleAnnotations
+        let mut data = Data::test();
+
+        let mut sample_tags = HashMap::new();
+        sample_tags.insert(0, vec!["healthy".to_string()]);
+
+        let sample_annotations = SampleAnnotations {
+            tag_column_names: vec!["condition".to_string()],
+            sample_tags,
+        };
+
+        data.sample_annotations = Some(sample_annotations);
+
+        assert!(data.sample_annotations.is_some());
+        let annotations = data.sample_annotations.unwrap();
+        assert_eq!(
+            annotations.sample_tags.get(&0),
+            Some(&vec!["healthy".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_train_test_split_preserves_total_size() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = Data::test();
+
+        let test_ratio = 0.3;
+        let total = data.sample_len;
+
+        let (train, test) = data.train_test_split(test_ratio, &mut rng, None);
+
+        assert_eq!(
+            train.sample_len + test.sample_len,
+            total,
+            "Total number of samples must be preserved after split"
+        );
+    }
+
+    #[test]
+    fn test_train_test_split_preserves_class_distribution() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = Data::specific_test(100, 20); // 100 samples, 20 features
+
+        let test_ratio = 0.25;
+        let (train, test) = data.train_test_split(test_ratio, &mut rng, None);
+
+        let orig_class0 = data.y.iter().filter(|&&y| y == 0).count();
+        let orig_class1 = data.y.iter().filter(|&&y| y == 1).count();
+
+        let train_class0 = train.y.iter().filter(|&&y| y == 0).count();
+        let train_class1 = train.y.iter().filter(|&&y| y == 1).count();
+
+        let test_class0 = test.y.iter().filter(|&&y| y == 0).count();
+        let test_class1 = test.y.iter().filter(|&&y| y == 1).count();
+
+        assert_eq!(
+            train_class0 + test_class0,
+            orig_class0,
+            "Total number of class 0 samples must be preserved across train and test"
+        );
+        assert_eq!(
+            train_class1 + test_class1,
+            orig_class1,
+            "Total number of class 1 samples must be preserved across train and test"
+        );
+
+        // Optional: check approximate ratio preservation with some tolerance
+        let orig_ratio0 = orig_class0 as f64 / data.sample_len as f64;
+        let train_ratio0 = train_class0 as f64 / train.sample_len as f64;
+        let test_ratio0 = test_class0 as f64 / test.sample_len as f64;
+
+        assert!(
+            (train_ratio0 - orig_ratio0).abs() < 0.1,
+            "Train class 0 ratio deviates too much from original (orig={:.3}, train={:.3})",
+            orig_ratio0,
+            train_ratio0
+        );
+        assert!(
+            (test_ratio0 - orig_ratio0).abs() < 0.1,
+            "Test class 0 ratio deviates too much from original (orig={:.3}, test={:.3})",
+            orig_ratio0,
+            test_ratio0
+        );
+    }
+
+    #[test]
+    fn test_train_test_split_reproducibility() {
+        let data = Data::specific_test(50, 10);
+        let test_ratio = 0.2;
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(123);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(123);
+
+        let (train1, test1) = data.train_test_split(test_ratio, &mut rng1, None);
+        let (train2, test2) = data.train_test_split(test_ratio, &mut rng2, None);
+
+        assert_eq!(
+            train1.samples, train2.samples,
+            "Train splits should be identical for the same seed"
+        );
+        assert_eq!(
+            test1.samples, test2.samples,
+            "Test splits should be identical for the same seed"
+        );
+    }
+
+    #[test]
+    fn test_train_test_split_no_overlap() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = Data::test();
+        let test_ratio = 0.4;
+
+        let (train, test) = data.train_test_split(test_ratio, &mut rng, None);
+
+        for s in &train.samples {
+            assert!(
+                !test.samples.contains(s),
+                "Sample '{}' should not appear in both train and test sets",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_train_test_split_with_stratify_by_keeps_annotation_levels() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut data = Data::specific_test(60, 10);
+
+        // Build batch annotations: even index = "A", odd index = "B"
+        let values: Vec<String> = (0..data.sample_len)
+            .map(|i| {
+                if i % 2 == 0 {
+                    "A".to_string()
+                } else {
+                    "B".to_string()
+                }
+            })
+            .collect();
+
+        let annotations = create_sample_annotations(data.sample_len, "batch", values);
+        data.sample_annotations = Some(annotations);
+
+        let test_ratio = 0.3;
+        let (train, test) = data.train_test_split(test_ratio, &mut rng, Some("batch"));
+
+        // Count levels in original data
+        let annot = data.sample_annotations.as_ref().unwrap();
+        let col_idx = annot
+            .tag_column_names
+            .iter()
+            .position(|c| c == "batch")
+            .unwrap();
+
+        let mut total_a = 0;
+        let mut total_b = 0;
+        for i in 0..data.sample_len {
+            let v = &annot.sample_tags[&i][col_idx];
+            if v == "A" {
+                total_a += 1;
+            } else {
+                total_b += 1;
+            }
+        }
+
+        // Count in train + test
+        let count_levels = |d: &Data| {
+            let a = d
+                .sample_annotations
+                .as_ref()
+                .unwrap()
+                .sample_tags
+                .iter()
+                .filter(|(_, tags)| tags[col_idx] == "A")
+                .count();
+            let b = d
+                .sample_annotations
+                .as_ref()
+                .unwrap()
+                .sample_tags
+                .iter()
+                .filter(|(_, tags)| tags[col_idx] == "B")
+                .count();
+            (a, b)
+        };
+
+        let (train_a, train_b) = count_levels(&train);
+        let (test_a, test_b) = count_levels(&test);
+
+        assert_eq!(
+            train_a + test_a,
+            total_a,
+            "Total count of batch=A should be preserved across train and test"
+        );
+        assert_eq!(
+            train_b + test_b,
+            total_b,
+            "Total count of batch=B should be preserved across train and test"
+        );
+    }
+
+    #[test]
+    fn test_train_test_split_preserves_class_by_annotation_counts() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        // Build a controlled dataset: 80 samples, 4 groups of 20:
+        // (class 0, batch A), (class 0, batch B), (class 1, batch A), (class 1, batch B)
+        let total_samples = 80;
+        let num_features = 10;
+        let mut data = Data::specific_test(total_samples, num_features);
+
+        // Overwrite y to make class-balanced
+        data.y = (0..total_samples)
+            .map(|i| if i < total_samples / 2 { 0 } else { 1 })
+            .collect();
+
+        // Batch annotation alternating A/B
+        let annotation_values: Vec<String> = (0..total_samples)
+            .map(|i| {
+                if i % 2 == 0 {
+                    "A".to_string()
+                } else {
+                    "B".to_string()
+                }
+            })
+            .collect();
+
+        let annotations = create_sample_annotations(total_samples, "batch", annotation_values);
+        data.sample_annotations = Some(annotations);
+
+        let test_ratio = 0.25;
+        let (train, test) = data.train_test_split(test_ratio, &mut rng, Some("batch"));
+
+        let annot = data.sample_annotations.as_ref().unwrap();
+        let col_idx = annot
+            .tag_column_names
+            .iter()
+            .position(|c| c == "batch")
+            .unwrap();
+
+        // Original counts for (class, batch)
+        let mut orig_counts = std::collections::HashMap::new();
+        for i in 0..data.sample_len {
+            let c = data.y[i];
+            let b = &annot.sample_tags[&i][col_idx];
+            let key = format!("class{}_batch{}", c, b);
+            *orig_counts.entry(key).or_insert(0) += 1;
+        }
+
+        // Helper to count in a split
+        let count_in_split = |d: &Data| {
+            let annot = d.sample_annotations.as_ref().unwrap();
+            let mut counts = std::collections::HashMap::new();
+            for i in 0..d.sample_len {
+                let c = d.y[i];
+                let b = &annot.sample_tags[&i][col_idx];
+                let key = format!("class{}_batch{}", c, b);
+                *counts.entry(key).or_insert(0) += 1;
+            }
+            counts
+        };
+
+        let train_counts = count_in_split(&train);
+        let test_counts = count_in_split(&test);
+
+        // Sum train+test and compare to original
+        let mut merged_counts = std::collections::HashMap::new();
+        for (k, v) in train_counts.iter().chain(test_counts.iter()) {
+            *merged_counts.entry(k.clone()).or_insert(0) += *v;
+        }
+
+        assert_eq!(
+            merged_counts, orig_counts,
+            "Joint distribution of (class, batch) should be preserved across train and test"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Sample annotations are required for stratified split by annotation")]
+    fn test_train_test_split_panics_without_annotations_when_stratify_by_is_set() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = Data::test();
+
+        let _ = data.train_test_split(0.3, &mut rng, Some("batch"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Stratification column 'nonexistent' not found")]
+    fn test_train_test_split_panics_with_wrong_annotation_column() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut data = Data::test();
+
+        let annotations = create_sample_annotations(
+            data.sample_len,
+            "batch",
+            vec!["A".to_string(); data.sample_len],
+        );
+        data.sample_annotations = Some(annotations);
+
+        let _ = data.train_test_split(0.3, &mut rng, Some("nonexistent"));
+    }
+
+    #[test]
+    fn test_train_test_split_preserves_feature_metadata() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let data = Data::test();
+
+        let (train, test) = data.train_test_split(0.5, &mut rng, None);
+
+        assert_eq!(
+            train.features, data.features,
+            "Train set must preserve original feature names"
+        );
+        assert_eq!(
+            test.features, data.features,
+            "Test set must preserve original feature names"
+        );
+        assert_eq!(
+            train.feature_len, data.feature_len,
+            "Train set must preserve feature_len"
+        );
+        assert_eq!(
+            test.feature_len, data.feature_len,
+            "Test set must preserve feature_len"
+        );
+    }
+
+    pub fn create_sample_annotations(
+        sample_len: usize,
+        stratify_column_name: &str,
+        values: Vec<String>,
+    ) -> SampleAnnotations {
+        assert_eq!(sample_len, values.len(), "Length mismatch");
+
+        let mut sample_tags: HashMap<usize, Vec<String>> = HashMap::new();
+
+        for i in 0..sample_len {
+            sample_tags.insert(i, vec![values[i].clone()]);
+        }
+
+        SampleAnnotations {
+            tag_column_names: vec![stratify_column_name.to_string()],
+            sample_tags,
+        }
+    }
+
+    #[test]
+    fn test_subset_correctly_remaps_sample_annotations() {
+        // Create a dataset with sample annotations
+        let mut data = Data::specific_test(10, 5); // 10 samples, 5 features
+
+        // Assign sample annotations with distinct values for each sample
+        let annotation_values: Vec<String> = (0..10).map(|i| format!("Sample_{}", i)).collect();
+
+        let annotations = create_sample_annotations(10, "sample_id", annotation_values.clone());
+        data.sample_annotations = Some(annotations);
+
+        // Select a subset of samples: indices [1, 3, 7, 9]
+        let selected_indices = vec![1, 3, 7, 9];
+        let subset = data.subset(selected_indices.clone());
+
+        // Verify that subset has correct sample_len
+        assert_eq!(
+            subset.sample_len,
+            selected_indices.len(),
+            "Subset should have {} samples",
+            selected_indices.len()
+        );
+
+        // Verify that sample_annotations are present in the subset
+        assert!(
+            subset.sample_annotations.is_some(),
+            "Subset should preserve sample_annotations"
+        );
+
+        let subset_annot = subset.sample_annotations.as_ref().unwrap();
+
+        // Verify column names are preserved
+        assert_eq!(
+            subset_annot.tag_column_names,
+            vec!["sample_id".to_string()],
+            "Annotation column names should be preserved"
+        );
+
+        // Verify that annotations are correctly remapped to new indices
+        for (new_idx, &old_idx) in selected_indices.iter().enumerate() {
+            let expected_value = format!("Sample_{}", old_idx);
+            let actual_value = &subset_annot.sample_tags[&new_idx][0];
+
+            assert_eq!(
+                actual_value, &expected_value,
+                "Annotation for new index {} should correspond to old index {} (expected '{}', got '{}')",
+                new_idx, old_idx, expected_value, actual_value
+            );
+        }
+
+        // Verify that the number of annotation entries matches subset size
+        assert_eq!(
+            subset_annot.sample_tags.len(),
+            selected_indices.len(),
+            "Number of annotation entries should match subset size"
+        );
+
+        // Verify that all new indices [0..n) are present in sample_tags
+        for i in 0..subset.sample_len {
+            assert!(
+                subset_annot.sample_tags.contains_key(&i),
+                "Annotation for new index {} should exist",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_subset_with_multiple_annotation_columns() {
+        let mut data = Data::specific_test(8, 3); // 8 samples, 3 features
+
+        // Create annotations with multiple columns
+        let mut sample_tags: HashMap<usize, Vec<String>> = HashMap::new();
+        for i in 0..8 {
+            sample_tags.insert(
+                i,
+                vec![
+                    format!("Batch_{}", i % 2),  // Column 0: batch
+                    format!("Center_{}", i % 3), // Column 1: center
+                    format!("Cohort_{}", i / 4), // Column 2: cohort
+                ],
+            );
+        }
+
+        let annotations = SampleAnnotations {
+            tag_column_names: vec![
+                "batch".to_string(),
+                "center".to_string(),
+                "cohort".to_string(),
+            ],
+            sample_tags,
+        };
+        data.sample_annotations = Some(annotations);
+
+        // Select subset: [0, 2, 5, 7]
+        let selected = vec![0, 2, 5, 7];
+        let subset = data.subset(selected.clone());
+
+        let subset_annot = subset.sample_annotations.as_ref().unwrap();
+
+        // Verify all column names are preserved
+        assert_eq!(
+            subset_annot.tag_column_names.len(),
+            3,
+            "All annotation columns should be preserved"
+        );
+
+        // Verify annotations for each selected sample
+        let expected_annotations = vec![
+            vec!["Batch_0", "Center_0", "Cohort_0"], // old index 0 -> new index 0
+            vec!["Batch_0", "Center_2", "Cohort_0"], // old index 2 -> new index 1
+            vec!["Batch_1", "Center_2", "Cohort_1"], // old index 5 -> new index 2
+            vec!["Batch_1", "Center_1", "Cohort_1"], // old index 7 -> new index 3
+        ];
+
+        for (new_idx, expected) in expected_annotations.iter().enumerate() {
+            let actual = &subset_annot.sample_tags[&new_idx];
+            assert_eq!(
+                actual, expected,
+                "Annotations at new index {} should match expected values",
+                new_idx
+            );
+        }
+    }
+
+    #[test]
+    fn test_subset_without_sample_annotations() {
+        let data = Data::specific_test(10, 5);
+
+        // Ensure no sample annotations
+        assert!(data.sample_annotations.is_none());
+
+        let subset = data.subset(vec![0, 2, 4]);
+
+        // Verify that subset also has no annotations
+        assert!(
+            subset.sample_annotations.is_none(),
+            "Subset should have no annotations when original data has none"
+        );
+
+        assert_eq!(subset.sample_len, 3);
+    }
+
+    #[test]
+    fn test_subset_empty_selection_preserves_annotation_structure() {
+        let mut data = Data::specific_test(5, 3);
+
+        let annotations = create_sample_annotations(5, "group", vec!["A".to_string(); 5]);
+        data.sample_annotations = Some(annotations);
+
+        // Empty subset
+        let subset = data.subset(vec![]);
+
+        assert_eq!(subset.sample_len, 0);
+
+        // Annotations structure should exist but be empty
+        let subset_annot = subset.sample_annotations.as_ref().unwrap();
+        assert_eq!(
+            subset_annot.tag_column_names,
+            vec!["group".to_string()],
+            "Column names should be preserved even with empty subset"
+        );
+        assert_eq!(
+            subset_annot.sample_tags.len(),
+            0,
+            "sample_tags should be empty for empty subset"
+        );
+    }
+
+    #[test]
+    fn test_subset_preserves_annotation_after_train_test_split() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut data = Data::specific_test(20, 5);
+
+        // Add annotations
+        let annotation_values: Vec<String> = (0..20)
+            .map(|i| {
+                if i < 10 {
+                    "GroupA".to_string()
+                } else {
+                    "GroupB".to_string()
+                }
+            })
+            .collect();
+
+        let annotations = create_sample_annotations(20, "treatment", annotation_values);
+        data.sample_annotations = Some(annotations);
+
+        // Perform train/test split with stratification
+        let (train, test) = data.train_test_split(0.3, &mut rng, Some("treatment"));
+
+        // Both train and test should have sample_annotations
+        assert!(
+            train.sample_annotations.is_some(),
+            "Train set should have annotations"
+        );
+        assert!(
+            test.sample_annotations.is_some(),
+            "Test set should have annotations"
+        );
+
+        let train_annot = train.sample_annotations.as_ref().unwrap();
+        let test_annot = test.sample_annotations.as_ref().unwrap();
+
+        // Verify that indices are correctly remapped in both splits
+        for i in 0..train.sample_len {
+            assert!(
+                train_annot.sample_tags.contains_key(&i),
+                "Train annotation should have key for index {}",
+                i
+            );
+        }
+
+        for i in 0..test.sample_len {
+            assert!(
+                test_annot.sample_tags.contains_key(&i),
+                "Test annotation should have key for index {}",
+                i
+            );
+        }
+
+        // Verify that all annotations are either "GroupA" or "GroupB"
+        for tags in train_annot.sample_tags.values() {
+            let val = &tags[0];
+            assert!(
+                val == "GroupA" || val == "GroupB",
+                "Train annotation should be GroupA or GroupB, got {}",
+                val
+            );
+        }
+
+        for tags in test_annot.sample_tags.values() {
+            let val = &tags[0];
+            assert!(
+                val == "GroupA" || val == "GroupB",
+                "Test annotation should be GroupA or GroupB, got {}",
+                val
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Sample annotations are required for stratified split by annotation")]
+    fn test_traintestsplit_panic_on_missing_annotations() {
+        let mut data = Data::test_with_these_features(&[0, 1, 2, 3]);
+        data.sample_len = 10;
+        data.y = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
+        data.sample_annotations = None;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let _ = data.train_test_split(0.3, &mut rng, Some("batch"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Sample index")]
+    fn test_traintestsplit_panic_on_incomplete_annotation_line() {
+        let mut data = Data::test_with_these_features(&[0, 1, 2, 3]);
+        data.sample_len = 3;
+        data.y = vec![0, 1, 1];
+        let mut sample_tags = HashMap::new();
+        sample_tags.insert(0, vec!["control".to_string()]);
+        sample_tags.insert(1, vec!["treatment".to_string(), "batch1".to_string()]);
+        sample_tags.insert(2, vec!["treatment".to_string()]);
+
+        data.sample_annotations = Some(SampleAnnotations {
+            tag_column_names: vec!["group".to_string(), "batch".to_string(), "time".to_string()],
+            sample_tags,
+        });
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let _ = data.train_test_split(0.3, &mut rng, Some("time"));
     }
 }

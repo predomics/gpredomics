@@ -256,5 +256,5 @@ fn main() {
     info!("\n=== Generation Complete ===");
     info!("Experiments saved in: {}", version_dir);
     info!("\nTo test compatibility, run:");
-    info!("  cargo test --test test_serialization_compatibility");
+    info!("  cargo test --test test_serialization_compatibility -- --no-capture --test-threads=1");
 }
