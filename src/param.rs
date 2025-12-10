@@ -231,8 +231,8 @@ pub struct BEAM {
     pub kmin: usize,
     #[serde(default = "kmax_default")]
     pub kmax: usize,
-    #[serde(default = "best_models_ci_alpha_default")]
-    pub best_models_ci_alpha: f64,
+    #[serde(default = "best_models_criterion_default")]
+    pub best_models_criterion: f64,
     #[serde(default = "max_nb_of_models_default")]
     pub max_nb_of_models: usize,
 }
@@ -646,4 +646,7 @@ fn ga_mut_non_null_pct_default() -> f64 {
 }
 fn holdout_ratio_default() -> f64 {
     0.2
+}
+fn best_models_criterion_default() -> f64 {
+    10.0
 }
