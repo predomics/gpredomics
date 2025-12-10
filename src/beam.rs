@@ -1,4 +1,3 @@
-// BE CAREFUL : the adaptation of the Predomics beam algorithm for Gpredomics is still under development
 use crate::cinfo;
 use crate::cv::CV;
 use crate::data::Data;
@@ -158,6 +157,8 @@ fn pop_from_combinations(
 
                 // Convert to Binary if all features are positives
                 let has_negative = tmp_ind.features.values().any(|&coef| coef < 0);
+                let has_positive = tmp_ind.features.values().any(|&coef| coef > 0);
+
                 if !has_negative && (tmp_ind.language == TERNARY_LANG) {
                     tmp_ind.features.retain(|_, &mut coeff| coeff > 0);
                     if !languages.contains(&BINARY_LANG) {
@@ -165,12 +166,18 @@ fn pop_from_combinations(
                     };
                     tmp_ind.language = BINARY_LANG;
                 } else if !has_negative && (tmp_ind.language == RATIO_LANG) {
+                    // RATIO without negatives would be X/0 (NaN) - reject
                     tmp_ind.features = HashMap::new();
                 }
 
                 // Ter & Ratio without any positive features are meaningless
-                let has_positive = tmp_ind.features.values().any(|&coef| coef > 0);
-                if !has_positive
+                // For RATIO, we also need BOTH positive AND negative features
+                if tmp_ind.language == RATIO_LANG {
+                    // RATIO requires both positive (numerator) and negative (denominator)
+                    if !has_positive || !has_negative {
+                        tmp_ind.features = HashMap::new();
+                    }
+                } else if !has_positive
                     && (tmp_ind.language == TERNARY_LANG || tmp_ind.language == RATIO_LANG)
                 {
                     tmp_ind.features = HashMap::new();
@@ -244,6 +251,206 @@ fn select_features_from_best(best_pop: &Population) -> Vec<usize> {
     features.extend(unique_features.into_iter());
 
     features
+}
+
+/// Select features based on their frequency in the best models
+///
+/// Features are selected if they appear in at least `min_freq_pct`% of the best models,
+/// OR if they appear in any of the top `top_models_pct`% of the best models.
+///
+/// # Arguments
+/// * `best_pop` - Population of best models (sorted by fit)
+/// * `min_freq_pct` - Minimum frequency percentage for a feature to be kept (e.g., 10.0 for 10%)
+/// * `top_models_pct` - Percentage of top models whose features are all kept (e.g., 10.0 for top 10%)
+fn select_features_from_best_with_frequency(
+    best_pop: &Population,
+    min_freq_pct: f64,
+    top_models_pct: f64,
+) -> Vec<usize> {
+    if best_pop.individuals.is_empty() {
+        return vec![];
+    }
+
+    let total_models = best_pop.individuals.len();
+    let min_freq_count = (total_models as f64 * min_freq_pct / 100.0).ceil() as usize;
+    let top_models_count = ((total_models as f64 * top_models_pct / 100.0)
+        .ceil()
+        .max(1.0)) as usize;
+
+    // Count feature occurrences across all best models
+    let mut feature_counts: HashMap<usize, usize> = HashMap::new();
+    for individual in &best_pop.individuals {
+        for &feature_idx in individual.features.keys() {
+            *feature_counts.entry(feature_idx).or_insert(0) += 1;
+        }
+    }
+
+    // Collect features from top models
+    let mut top_features = HashSet::new();
+    for individual in best_pop.individuals.iter().take(top_models_count) {
+        for &feature_idx in individual.features.keys() {
+            top_features.insert(feature_idx);
+        }
+    }
+
+    // Select features: either frequent enough OR in top models
+    let mut selected_features = HashSet::new();
+    for (&feature_idx, &count) in &feature_counts {
+        if count >= min_freq_count || top_features.contains(&feature_idx) {
+            selected_features.insert(feature_idx);
+        }
+    }
+
+    let features: Vec<usize> = selected_features.into_iter().collect();
+
+    debug!(
+        "Features kept: {} (min_freq: {}/{} models, top {}% = {} models, {} features from top models)",
+        features.len(),
+        min_freq_count,
+        total_models,
+        top_models_pct,
+        top_models_count,
+        top_features.len()
+    );
+
+    features
+}
+
+/// Select features for RATIO language with balanced positive/negative selection (R-like approach)
+///
+/// This function replicates the R getFeatures2Keep() logic:
+/// 1. Separates features by sign (positive vs negative coefficients)
+/// 2. For each sign, applies three cumulative criteria (OR logic):
+///    - Feature appears in at least 1 model of veryBest (top top_models_pct%)
+///    - Feature frequency > threshold (min_freq_pct%)
+///    - Feature is in the top nb_best/2 for that sign
+/// 3. Guarantees at least 50% of top features from each sign are kept
+///
+/// # Arguments
+/// * `best_pop` - Population of best models (sorted by fit)
+/// * `min_freq_pct` - Minimum frequency percentage threshold (default 1.0 in R)
+/// * `top_models_pct` - Percentage defining "veryBest" models (default 10.0)
+/// * `nb_best` - Number of best features per sign to consider (typically best_pop.len())
+fn select_features_for_ratio(
+    best_pop: &Population,
+    min_freq_pct: f64,
+    top_models_pct: f64,
+    nb_best: usize,
+) -> Vec<usize> {
+    if best_pop.individuals.is_empty() {
+        return vec![];
+    }
+
+    let total_models = best_pop.individuals.len();
+    let min_freq_count = (total_models as f64 * min_freq_pct / 100.0).ceil().max(1.0) as usize;
+    let top_models_count = ((total_models as f64 * top_models_pct / 100.0)
+        .ceil()
+        .max(1.0)) as usize;
+    let half_nb_best = (nb_best / 2).max(1);
+
+    // Separate feature counts by sign
+    let mut positive_counts: HashMap<usize, usize> = HashMap::new();
+    let mut negative_counts: HashMap<usize, usize> = HashMap::new();
+
+    for individual in &best_pop.individuals {
+        for (&feature_idx, &coeff) in &individual.features {
+            if coeff > 0 {
+                *positive_counts.entry(feature_idx).or_insert(0) += 1;
+            } else if coeff < 0 {
+                *negative_counts.entry(feature_idx).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Collect features from veryBest (top models)
+    let mut very_best_positive = HashSet::new();
+    let mut very_best_negative = HashSet::new();
+
+    for individual in best_pop.individuals.iter().take(top_models_count) {
+        for (&feature_idx, &coeff) in &individual.features {
+            if coeff > 0 {
+                very_best_positive.insert(feature_idx);
+            } else if coeff < 0 {
+                very_best_negative.insert(feature_idx);
+            }
+        }
+    }
+
+    // Sort features by frequency for each sign
+    let mut sorted_positive: Vec<(usize, usize)> = positive_counts
+        .iter()
+        .map(|(&idx, &count)| (idx, count))
+        .collect();
+    sorted_positive.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut sorted_negative: Vec<(usize, usize)> = negative_counts
+        .iter()
+        .map(|(&idx, &count)| (idx, count))
+        .collect();
+    sorted_negative.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    // Get top half_nb_best features for each sign
+    let top_positive_features: HashSet<usize> = sorted_positive
+        .iter()
+        .take(half_nb_best)
+        .map(|(idx, _)| *idx)
+        .collect();
+
+    let top_negative_features: HashSet<usize> = sorted_negative
+        .iter()
+        .take(half_nb_best)
+        .map(|(idx, _)| *idx)
+        .collect();
+
+    // Apply three criteria (OR logic) for positive features
+    let mut selected_positive = HashSet::new();
+    for (&feature_idx, &count) in &positive_counts {
+        let in_very_best = very_best_positive.contains(&feature_idx);
+        let freq_above_threshold = count >= min_freq_count;
+        let in_top_half = top_positive_features.contains(&feature_idx);
+
+        if in_very_best || freq_above_threshold || in_top_half {
+            selected_positive.insert(feature_idx);
+        }
+    }
+
+    // Apply three criteria (OR logic) for negative features
+    let mut selected_negative = HashSet::new();
+    for (&feature_idx, &count) in &negative_counts {
+        let in_very_best = very_best_negative.contains(&feature_idx);
+        let freq_above_threshold = count >= min_freq_count;
+        let in_top_half = top_negative_features.contains(&feature_idx);
+
+        if in_very_best || freq_above_threshold || in_top_half {
+            selected_negative.insert(feature_idx);
+        }
+    }
+
+    // Guarantee at least 50% of top features from each sign (mask mechanism)
+    for (idx, _) in sorted_positive.iter().take(half_nb_best / 2) {
+        selected_positive.insert(*idx);
+    }
+    for (idx, _) in sorted_negative.iter().take(half_nb_best / 2) {
+        selected_negative.insert(*idx);
+    }
+
+    // Combine positive and negative features
+    let mut all_features: Vec<usize> = selected_positive.into_iter().collect();
+    all_features.extend(selected_negative.into_iter());
+
+    debug!(
+        "Features kept for RATIO: {} ({} positive, {} negative) | threshold: {}/{} models, veryBest: top {}% = {} models, nb_best/2: {}",
+        all_features.len(),
+        all_features.iter().filter(|&&idx| positive_counts.contains_key(&idx)).count(),
+        all_features.iter().filter(|&&idx| negative_counts.contains_key(&idx)).count(),
+        min_freq_count,
+        total_models,
+        top_models_pct,
+        top_models_count,
+        half_nb_best
+    );
+
+    all_features
 }
 
 pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Param) -> Individual {
@@ -459,9 +666,23 @@ pub fn iterative_growth(
         );
 
         // Compute best population
-        let best_pop = pop.select_best_population(param.beam.best_models_ci_alpha);
+        // If best_models_ci_alpha > 1, use percentage-based selection (Predomics-like approach)
+        // Otherwise, use FBM (Family of Best Models) with binomial confidence interval
+        let best_pop = if param.beam.best_models_criterion > 1.0 {
+            debug!(
+                "Using percentage-based selection: top {:.1}% models",
+                param.beam.best_models_criterion
+            );
+            pop.select_first_pct(param.beam.best_models_criterion).0
+        } else {
+            debug!(
+                "Using FBM selection with alpha = {}",
+                param.beam.best_models_criterion
+            );
+            pop.select_best_population(param.beam.best_models_criterion)
+        };
         debug!(
-            "Kept {:?} individuals from the family of best models",
+            "Kept {:?} individuals from the best models",
             best_pop.individuals.len()
         );
 
@@ -536,7 +757,21 @@ pub fn grow(
     let pattern_ind = generate_individual(data, TERNARY_LANG, RAW_TYPE, param);
 
     // Get pertinent features to use it for the new iteration
-    let features_to_keep = select_features_from_best(&best_pop);
+    // If best_models_ci_alpha > 1, use frequency-based feature selection
+    // Otherwise, keep all unique features from best models
+    let features_to_keep = if param.beam.best_models_criterion > 1.0 {
+        // Check if RATIO language is used - requires special balanced selection
+        let languages: Vec<u8> = param.general.language.split(",").map(language).collect();
+        if languages.contains(&RATIO_LANG) {
+            // Use R-like approach with 1% threshold and balanced pos/neg selection
+            select_features_for_ratio(&best_pop, 1.0, 10.0, best_pop.individuals.len())
+        } else {
+            // For non-RATIO languages, use 1% threshold (R default)
+            select_features_from_best_with_frequency(&best_pop, 1.0, 10.0)
+        }
+    } else {
+        select_features_from_best(&best_pop)
+    };
 
     let combinations = match param.beam.method {
         BeamMethod::LimitedExhaustive => combine(features_to_keep, epoch, data, param),
@@ -572,7 +807,7 @@ pub fn grow(
 }
 
 // Generate new combinations Mk + 1 feature_to_keep for next step
-// Combinations are limited both by kept Mk maximum (param.beam.max_nb_of_models) and features_to_keep (param.beam.best_models_ci_alpha)
+// Combinations are limited both by kept Mk maximum (param.beam.max_nb_of_models) and features_to_keep (param.beam.best_models_criterion)
 // Combinations are currently generated at each epoch in each languages and data_type
 pub fn increment(
     best_pop: Population,
@@ -614,7 +849,7 @@ pub fn increment(
 }
 
 // Generate all possible combinations between the features_to_keep
-// Combinations are limited by features_to_keep (by param.beam.best_models_ci_alpha)
+// Combinations are limited by features_to_keep (by param.beam.best_models_criterion)
 // These features can be limited with param.beam.max_nb_of_models
 pub fn combine(
     features_to_keep: Vec<usize>,
@@ -1376,6 +1611,249 @@ mod tests {
         assert_eq!(features.len(), 2);
         assert!(features.contains(&10));
         assert!(features.contains(&20));
+    }
+
+    #[test]
+    fn test_select_features_from_best_with_frequency_basic() {
+        let mut pop = Population::new();
+
+        // Create 10 individuals with overlapping features
+        for i in 0..10 {
+            let mut ind = Individual::new();
+            ind.fit = 0.9 - (i as f64 * 0.01); // Decreasing fit
+
+            // Feature 0 appears in all (100%)
+            // Feature 1 appears in first 5 (50%)
+            // Feature 2 appears in first 2 (20%)
+            // Feature 3 appears only in first 1 (10%)
+            ind.features.insert(0, 1);
+            if i < 5 {
+                ind.features.insert(1, 1);
+            }
+            if i < 2 {
+                ind.features.insert(2, 1);
+            }
+            if i < 1 {
+                ind.features.insert(3, 1);
+            }
+
+            pop.individuals.push(ind);
+        }
+
+        // Test with min_freq=10%, top=10%
+        let features = select_features_from_best_with_frequency(&pop, 10.0, 10.0);
+
+        // Feature 0: 100% frequency → kept
+        // Feature 1: 50% frequency → kept
+        // Feature 2: 20% frequency → kept
+        // Feature 3: 10% frequency OR in top 10% (1 model) → kept
+        assert!(features.contains(&0), "Feature 0 should be kept (100%)");
+        assert!(features.contains(&1), "Feature 1 should be kept (50%)");
+        assert!(features.contains(&2), "Feature 2 should be kept (20%)");
+        assert!(
+            features.contains(&3),
+            "Feature 3 should be kept (in top 10%)"
+        );
+    }
+
+    #[test]
+    fn test_select_features_from_best_with_frequency_threshold() {
+        let mut pop = Population::new();
+
+        // Create 10 individuals
+        for i in 0..10 {
+            let mut ind = Individual::new();
+            ind.fit = 0.9 - (i as f64 * 0.01);
+
+            // Feature 0: appears 2 times (20%) - above 10% threshold
+            if i < 2 {
+                ind.features.insert(0, 1);
+            }
+            // Feature 1: appears 1 time (10%) - at threshold
+            if i < 1 {
+                ind.features.insert(1, 1);
+            }
+            // Feature 2: appears 0 times in top 90%, but all have feature 99
+            ind.features.insert(99, 1);
+
+            pop.individuals.push(ind);
+        }
+
+        let features = select_features_from_best_with_frequency(&pop, 10.0, 10.0);
+
+        assert!(features.contains(&0), "Feature 0 at 20% should be kept");
+        assert!(
+            features.contains(&1),
+            "Feature 1 at 10% or in top 10% should be kept"
+        );
+        assert!(features.contains(&99), "Feature 99 at 100% should be kept");
+    }
+
+    #[test]
+    fn test_select_features_from_best_with_frequency_empty() {
+        let pop = Population::new();
+        let features = select_features_from_best_with_frequency(&pop, 10.0, 10.0);
+        assert!(
+            features.is_empty(),
+            "Empty population should return no features"
+        );
+    }
+
+    #[test]
+    fn test_select_features_from_best_with_frequency_single_model() {
+        let mut pop = Population::new();
+        let mut ind = Individual::new();
+        ind.features.insert(5, 1);
+        ind.features.insert(10, -1);
+        ind.fit = 0.95;
+        pop.individuals.push(ind);
+
+        let features = select_features_from_best_with_frequency(&pop, 10.0, 10.0);
+
+        // With 1 model, it's both 100% frequency and top 10%
+        assert_eq!(features.len(), 2);
+        assert!(features.contains(&5));
+        assert!(features.contains(&10));
+    }
+
+    #[test]
+    fn test_pop_from_combinations_ratio_requires_both_signs() {
+        let ind = create_test_individual_for_test_pop_from_combinations();
+
+        let combinations = vec![
+            vec![0, 1], // (0,1), (1,-1) → valid RATIO (has both signs)
+            vec![0, 2], // (0,1), (2,1) → invalid RATIO (only positive)
+        ];
+
+        let mut param = Param::default();
+        param.general.language = "ratio".to_string();
+        param.general.data_type = "raw".to_string();
+
+        let generated = pop_from_combinations(combinations, ind, 2, &param);
+
+        // Should only generate the combination with both signs
+        assert!(
+            !generated.individuals.is_empty(),
+            "Should generate at least one RATIO individual"
+        );
+
+        for individual in &generated.individuals {
+            assert_eq!(individual.language, RATIO_LANG, "All should be RATIO");
+
+            // Verify each individual has both positive and negative coefficients
+            let has_positive = individual.features.values().any(|&c| c > 0);
+            let has_negative = individual.features.values().any(|&c| c < 0);
+
+            assert!(
+                has_positive && has_negative,
+                "RATIO individual must have both positive and negative features, found: {:?}",
+                individual.features
+            );
+            assert_eq!(individual.k, 2, "Should have k=2");
+        }
+    }
+
+    #[test]
+    fn test_select_features_for_ratio_balanced_selection() {
+        let mut pop = Population::new();
+
+        // Create 20 individuals with various positive/negative features
+        for i in 0..20 {
+            let mut ind = Individual::new();
+            ind.fit = 0.95 - (i as f64 * 0.01); // Decreasing fit
+
+            // Positive features (appear with different frequencies)
+            if i < 18 {
+                ind.features.insert(0, 1);
+            } // 90% frequency
+            if i < 10 {
+                ind.features.insert(1, 1);
+            } // 50% frequency
+            if i < 4 {
+                ind.features.insert(2, 1);
+            } // 20% frequency
+            if i < 1 {
+                ind.features.insert(3, 1);
+            } // 5% frequency
+
+            // Negative features (appear with different frequencies)
+            if i < 16 {
+                ind.features.insert(10, -1);
+            } // 80% frequency
+            if i < 8 {
+                ind.features.insert(11, -1);
+            } // 40% frequency
+            if i < 3 {
+                ind.features.insert(12, -1);
+            } // 15% frequency
+            if i < 1 {
+                ind.features.insert(13, -1);
+            } // 5% frequency
+
+            pop.individuals.push(ind);
+        }
+
+        let features = select_features_for_ratio(&pop, 1.0, 10.0, 20);
+
+        // Should select features from both signs
+        assert!(
+            features.contains(&0),
+            "High frequency positive feature should be kept"
+        );
+        assert!(
+            features.contains(&10),
+            "High frequency negative feature should be kept"
+        );
+
+        // Count positive and negative features
+        let pos_count = features.iter().filter(|&&f| f < 10).count();
+        let neg_count = features.iter().filter(|&&f| f >= 10).count();
+
+        assert!(pos_count > 0, "Should have positive features");
+        assert!(neg_count > 0, "Should have negative features");
+
+        debug!(
+            "RATIO selection: {} positive, {} negative features",
+            pos_count, neg_count
+        );
+    }
+
+    #[test]
+    fn test_select_features_for_ratio_guarantees_top_features() {
+        let mut pop = Population::new();
+
+        // Create population where some features are rare but important
+        for i in 0..10 {
+            let mut ind = Individual::new();
+            ind.fit = 0.9 - (i as f64 * 0.01);
+
+            // Top model has rare positive feature
+            if i == 0 {
+                ind.features.insert(99, 1); // Rare positive
+            }
+
+            // All models have common features
+            ind.features.insert(0, 1); // Common positive
+            ind.features.insert(10, -1); // Common negative
+
+            pop.individuals.push(ind);
+        }
+
+        let features = select_features_for_ratio(&pop, 1.0, 10.0, 10);
+
+        // Feature 99 appears in veryBest (top 10%) so should be kept
+        assert!(
+            features.contains(&99),
+            "Feature in veryBest should be kept even if rare"
+        );
+        assert!(
+            features.contains(&0),
+            "Common positive feature should be kept"
+        );
+        assert!(
+            features.contains(&10),
+            "Common negative feature should be kept"
+        );
     }
 
     #[test]

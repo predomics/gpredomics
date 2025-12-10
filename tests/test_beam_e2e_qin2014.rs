@@ -84,7 +84,7 @@ fn create_qin2014_beam_params() -> Param {
     param.beam.method = BeamMethod::LimitedExhaustive;
     param.beam.kmin = 2;
     param.beam.kmax = 5; // Small for quick tests
-    param.beam.best_models_ci_alpha = 0.001; // Very small (low = more models kept)
+    param.beam.best_models_criterion = 0.001; // Very small (low = more models kept)
     param.beam.max_nb_of_models = 10000;
 
     // GA settings (not used for Beam but need default)
@@ -497,7 +497,7 @@ fn test_beam_qin2014_best_models_ci_alpha() {
 
     // Test with strict alpha (fewer models selected)
     let mut param_strict = create_qin2014_beam_params();
-    param_strict.beam.best_models_ci_alpha = 0.05; // High value (high = fewer models)
+    param_strict.beam.best_models_criterion = 0.05; // High value (high = fewer models)
     param_strict.beam.kmax = 4;
 
     let running1 = Arc::new(AtomicBool::new(true));
@@ -505,7 +505,7 @@ fn test_beam_qin2014_best_models_ci_alpha() {
 
     // Test with relaxed alpha (more models selected)
     let mut param_relaxed = create_qin2014_beam_params();
-    param_relaxed.beam.best_models_ci_alpha = 0.001; // Low value (low = more models)
+    param_relaxed.beam.best_models_criterion = 0.001; // Low value (low = more models)
     param_relaxed.beam.kmax = 4;
 
     let running2 = Arc::new(AtomicBool::new(true));
@@ -755,7 +755,7 @@ fn test_beam_qin2014_cv_enabled() {
     // Beam small interval
     param.beam.kmin = 2;
     param.beam.kmax = 4;
-    param.beam.best_models_ci_alpha = 0.01; // permissive to ensure some models per fold
+    param.beam.best_models_criterion = 0.01; // permissive to ensure some models per fold
     param.beam.max_nb_of_models = 2000;
 
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -866,7 +866,7 @@ fn test_beam_qin2014_gpu_vs_cpu() {
     param_cpu.general.seed = 99999;
     param_cpu.beam.kmin = 2;
     param_cpu.beam.kmax = 4;
-    param_cpu.beam.best_models_ci_alpha = 0.1;
+    param_cpu.beam.best_models_criterion = 0.1;
 
     println!("Running Beam on CPU...");
     let running_cpu = Arc::new(AtomicBool::new(true));
@@ -878,7 +878,7 @@ fn test_beam_qin2014_gpu_vs_cpu() {
     param_gpu.general.seed = 99999;
     param_gpu.beam.kmin = 2;
     param_gpu.beam.kmax = 4;
-    param_gpu.beam.best_models_ci_alpha = 0.1;
+    param_gpu.beam.best_models_criterion = 0.1;
     param_gpu.gpu.fallback_to_cpu = true;
 
     println!("Running Beam on GPU (or CPU fallback)...");
@@ -928,7 +928,7 @@ fn test_beam_qin2014_all_language_datatype_combinations() {
             param.general.seed = 777;
             param.beam.kmin = 2;
             param.beam.kmax = 3;
-            param.beam.best_models_ci_alpha = 0.001; // Very permissive to ensure models
+            param.beam.best_models_criterion = 0.001; // Very permissive to ensure models
 
             let running = Arc::new(AtomicBool::new(true));
             let experiment = run(&param, running);
