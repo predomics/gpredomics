@@ -13,19 +13,19 @@ Class cirrhosis: score > 0.270
 Rejection zone (95% CI): score ∈ [0.120; 0.270]
 score = (msp_0049 + msp_0313 + msp_0380 + msp_0385 + msp_0581 + msp_0602c + msp_0768 + msp_0881 + msp_0884 + msp_0977 + msp_1127 + msp_1453 + msp_1543 + msp_1789 + msp_1793 + msp_1799) / (msp_0017 + msp_0034 + msp_0047 + msp_0048 + msp_0062 + msp_0063 + msp_0088 + msp_0089 + msp_0144 + msp_0151 + msp_0194 + msp_0196 + msp_0198 + msp_0205 + msp_0236 + msp_0263 + msp_0306 + msp_0381 + msp_0450 + msp_0464 + msp_0468 + msp_0558 + msp_0572 + msp_0757 + msp_0763 + msp_0852 + msp_0898 + msp_0917 + msp_1021 + msp_1093 + msp_1139 + msp_1185 + msp_1275 + msp_1323 + msp_1881 + 1e-5)
 ```
-There, the rejection zone is defined between ` 0.120` and `0.270`.
+There, the rejection zone is defined between `0.120` and `0.270`.
 
 Concretely, for each epoch, the threshold of each model is estimated on the full dataset and on a number of
 resampled datasets (the number of bootstrap iterations given by `threshold_ci_n_bootstrap`). This yields an empirical
 distribution of the threshold and allows estimating how variable the threshold is; from that we derive the model's
 uncertainty on individual samples. The confidence zone is controlled by `threshold_ci_alpha`: lowering alpha increases
-the confidence level (1 − alpha) and therefore tends to widen the confidence interval (so decreasing alpha makes the
+the confidence level (1 − α) and therefore tends to widen the confidence interval (so decreasing alpha makes the
 rejection zone larger).
 
-Due to the necessity of computing `threshold_ci_n_bootstrap`, threshold confidence interval has cost of **O(B × N)** where 
-B is the number of bootstrap iterations and N the sample size. However, note that even if Gpredomics does accept smaller values 
-(the minimal enforced value is 100), it emits warnings when B < 1000 and again when B < 2000. In other words: while small
-B is allowed for quick tests, production use should rely on ≥ 1000 (≥ 2000 is even safer). 
+Due to the necessity of computing `threshold_ci_n_bootstrap`, threshold confidence interval has cost of **$O$($B$ × $N$)** where 
+$B$ is the number of bootstrap iterations and N the sample size. However, note that even if Gpredomics does accept smaller values 
+(the minimal enforced value is 100), it emits warnings when $B$ < 1000 and again when $B$ < 2000. In other words: while small
+$B$ is allowed for quick tests, production use should rely on ≥ 1000 (≥ 2000 is even safer). 
 
 ## Penalization
 
@@ -48,7 +48,7 @@ rejection rate (more decisive models) are favored by evolution compared to model
 - **Very large datasets** (N > 10,000) where threshold is stable and CI computation becomes expensive
 - **Streaming/real-time predictions** where abstention is not operationally feasible
 
-## Statistical implementation
+## To go further - Statistical implementation
 
 The implementation uses a stratified resampling strategy and a percentile-based confidence interval construction. Key
 points:
@@ -93,4 +93,4 @@ points:
 - Bootstrap methodology: Efron, B. & Tibshirani, R. J. (1993). An Introduction to the Bootstrap. Chapman & Hall/CRC.
 - Subsampling correction: Politis, D. N., Romano, J. P., & Wolf, M. (1999). Subsampling. Springer.
 
-*Last updated: v0.7.4*
+*Last updated: v0.7.6*
