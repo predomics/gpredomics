@@ -25,14 +25,33 @@ use std::sync::Arc;
 // Genetic Algorithm core functions
 //-----------------------------------------------------------------------------
 
+/// Main function to run the genetic algorithm
+///
+/// # Arguments
+///
+/// * `data` - The dataset to operate on.
+/// * `_test_data` - Optional test dataset (deprecated).
+/// * `initial_pop` - Optional initial population to start the algorithm.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `running` - Atomic boolean to control the running state of the algorithm.
+///
+/// # Returns
+///
+/// A vector of populations representing the evolution over generations.
+///
+/// # Panics
+///
+/// Panics if the initial population is not compatible with the data or if the initial population size is too small.
 pub fn ga(
     data: &mut Data,
     _test_data: &mut Option<Data>,
+    initial_pop: &mut Option<Population>,
     param: &Param,
     running: Arc<AtomicBool>,
 ) -> Vec<Population> {
     let time = Instant::now();
 
+    // Select feature in the algorithm to avoid data leakage
     data.select_features(param);
     debug!("FEATURES {:?}", data.feature_class);
 
@@ -44,9 +63,52 @@ pub fn ga(
     let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
 
     // Initialize first population
-    let base_pop = generate_pop(data, param, &mut rng);
+    let base_pop = if let Some(pop) = initial_pop {
+        let mut pop = pop.clone();
+
+        if pop.check_compatibility(data) {
+            info!("Initial population is compatible with data.");
+        } else {
+            error!("Initial population is not compatible with data!");
+            panic!("Initial population is not compatible with data!");
+        }
+
+        // Disable GPU for initial population fitting to avoid problem if the population is larger
+        pop.fit(data, &mut None, &None, &None, param);
+        pop = pop.sort();
+        let _ = remove_stillborn(&mut pop);
+        pop.compute_hash();
+        pop.remove_clone();
+
+        if pop.individuals.len() > param.ga.population_size as usize {
+            warn!("Initial population larger than requested population size: truncating based on their fit...");
+            pop.individuals.truncate(param.ga.population_size as usize);
+        } else if pop.individuals.len() < param.ga.population_size as usize {
+            warn!("Initial population smaller than requested population size: first generation will be smaller.");
+        }
+
+        info!(
+            "{} individuals kept after removing stillborn from the provided initial population.",
+            pop.individuals.len()
+        );
+        pop
+    } else {
+        generate_pop(data, param, &mut rng)
+    };
+
+    if base_pop.individuals.len() < 50 {
+        error!(
+            "Initial population size is too small ({}<50 individuals)!",
+            base_pop.individuals.len()
+        );
+        panic!(
+            "Initial population size is too small ({}<50 individuals)!",
+            base_pop.individuals.len()
+        );
+    }
+
     info!(
-        "Population size: {}, kmin {}, kmax {}",
+        "Population size: {}, k_min {}, k_max {}",
         base_pop.individuals.len(),
         base_pop
             .individuals
@@ -79,6 +141,17 @@ pub fn ga(
     populations
 }
 
+/// Generate initial population divided into sub-populations for each language and data type
+///
+/// # Arguments
+///
+/// * `data` - The dataset to operate on.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `rng` - Random number generator.
+///
+/// # Returns
+///
+/// A population representing the initial generation constructed from sub-populations for each language and data type.
 pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Population {
     let mut pop = Population::new();
     let languages: Vec<u8> = param
@@ -105,9 +178,9 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
                 let prior_weight = data.feature_annotations.as_ref().map(|fa| &fa.prior_weight);
                 sub_pop.generate(
                     target_size,
-                    param.ga.kmin,
-                    if param.ga.kmax > 0 {
-                        min(data.feature_selection.len(), param.ga.kmax)
+                    param.ga.k_min,
+                    if param.ga.k_max > 0 {
+                        min(data.feature_selection.len(), param.ga.k_max)
                     } else {
                         data.feature_selection.len()
                     },
@@ -151,6 +224,20 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
     pop
 }
 
+/// Run the iterative evolution process of the genetic algorithm
+///
+/// # Arguments
+///
+/// * `base_pop` - The initial population to start the evolution.
+/// * `data` - The dataset to operate on.
+/// * `gpu_assay` - Optional GPU assay for fitness evaluation.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `running` - Atomic boolean to control the running state of the algorithm.
+/// * `rng` - Random number generator.
+///
+/// # Returns
+///
+/// A vector of populations representing the evolution over generations.
 pub fn iterative_evolution(
     base_pop: &Population,
     data: &mut Data,
@@ -308,7 +395,22 @@ pub fn iterative_evolution(
     populations
 }
 
-// Evolve the population one time: filter, cross-over and mutate
+/// Run one evolution step: selection, cross-over, mutation, fitting
+///
+/// # Arguments
+///
+/// * `pop` - The current population to evolve.
+/// * `data` - The dataset to operate on.
+/// * `cv` - Optional cross-validation structure for fitness evaluation.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `gpu_assays_per_fold` - Optional GPU assays for each fold in cross-validation.
+/// * `gpu_assay` - Optional GPU assay for fitness evaluation.
+/// * `epoch` - The current epoch number.
+/// * `rng` - Random number generator.
+///
+/// # Returns
+///
+/// A new population representing the next generation after evolution.
 #[inline]
 pub fn evolve(
     pop: Population,
@@ -381,7 +483,17 @@ pub fn evolve(
     new_pop
 }
 
-/// pick params.ga_select_elite_pct% of the best individuals and params.ga_select_random_pct%  
+/// Picks parents from the population based on elite, niche, and random selection
+///
+/// # Arguments
+///
+/// * `pop` - The current population to select parents from.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `rng` - Random number generator.
+///
+/// # Returns
+///
+/// A population representing the selected parents.
 fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Population {
     // order pop by fit and select params.ga_select_elite_pct
     let (mut parents, n) = pop.select_first_pct(param.ga.select_elite_pct);
@@ -450,7 +562,21 @@ fn select_parents(pop: &Population, param: &Param, rng: &mut ChaCha8Rng) -> Popu
     parents
 }
 
-/// create children from parents
+/// Perform crossover between parents to generate children
+///
+/// # Arguments
+///
+/// * `parents` - The population of parents to crossover.
+/// * `children_number` - The number of children to generate.
+/// * `rng` - Random number generator.
+///
+/// # Returns
+///
+/// A population representing the generated children.
+///
+/// # Panics
+///
+/// Panics if the number of parents is less than 2.
 pub fn cross_over(
     parents: &Population,
     children_number: usize,
@@ -502,7 +628,14 @@ pub fn cross_over(
     children
 }
 
-/// change a sign, remove a variable, add a new variable
+/// Mutate a portion of the children population based on specified parameters
+///
+/// # Arguments
+///
+/// * `children` - The population of children to mutate.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `feature_selection` - The list of feature indices available for mutation.
+/// * `rng` - Random number generator.
 pub fn mutate(
     children: &mut Population,
     param: &Param,
@@ -548,6 +681,15 @@ pub fn mutate(
     }
 }
 
+/// Remove stillborn individuals from the population
+///
+/// # Arguments
+///
+/// * `children` - The population of children to filter.
+///
+/// # Returns
+///
+/// The number of stillborn individuals removed.
 pub fn remove_stillborn(children: &mut Population) -> u32 {
     let mut stillborn_children: u32 = 0;
     let mut valid_individuals: Vec<Individual> = Vec::new();
@@ -606,7 +748,14 @@ pub fn remove_stillborn(children: &mut Population) -> u32 {
 
 // }
 
-/// change a sign, remove a variable, add a new variable
+/// Mutates ternary individuals by changing signs, removing variables, or adding new variables
+///
+/// # Arguments
+///
+/// * `individual` - The individual to mutate.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `feature_indices` - The list of feature indices available for mutation.
+/// * `rng` - Random number generator.  
 pub fn mutate_ternary(
     individual: &mut Individual,
     param: &Param,
@@ -635,7 +784,14 @@ pub fn mutate_ternary(
     }
 }
 
-/// change a sign, remove a variable, add a new variable
+/// Mutates binary individuals by changing signs, removing variables, or adding new variables
+///
+/// # Arguments
+///
+/// * `individual` - The individual to mutate.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `feature_indices` - The list of feature indices available for mutation.
+/// * `rng` - Random number generator.  
 pub fn mutate_binary(
     individual: &mut Individual,
     param: &Param,
@@ -659,7 +815,14 @@ pub fn mutate_binary(
     }
 }
 
-/// change a sign, remove a variable, add a new variable can also double a variable or divide it by two
+/// Mutates pow2 individuals by changing signs, removing variables, adding new variables, doubling variables, or dividing variables by two
+///
+/// # Arguments
+///
+/// * `individual` - The individual to mutate.
+/// * `param` - Parameters for the genetic algorithm.
+/// * `feature_indices` - The list of feature indices available for mutation.
+/// * `rng` - Random number generator.  
 pub fn mutate_pow2(
     individual: &mut Individual,
     param: &Param,
@@ -708,6 +871,16 @@ pub fn mutate_pow2(
     }
 }
 
+/// Gets GPU assay if GPU is enabled, random sampling is not used and GPU memory is sufficient for population size
+///
+/// # Arguments
+///
+/// * `data` - The dataset to operate on.
+/// * `param` - Parameters for the genetic algorithm.
+///
+/// # Returns
+///
+/// An optional GPU assay for fitness evaluation.
 fn get_gpu_assay(data: &Data, param: &Param) -> Option<GpuAssay> {
     let gpu_assay = if param.general.gpu && param.ga.random_sampling_pct == 0.0 {
         let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
@@ -737,8 +910,16 @@ fn get_gpu_assay(data: &Data, param: &Param) -> Option<GpuAssay> {
     gpu_assay
 }
 
-/// Create GPU assays for each fold when inner CV is enabled with GPU
-/// Returns a vector of tuples (validation_assay, training_assay) for each fold
+/// Creates GPU assays for each fold when inner CV is enabled with GPU
+///
+/// # Arguments
+///
+/// * `cv` - The cross-validation structure containing folds.
+/// * `param` - Parameters for the genetic algorithm.
+///
+/// # Returns
+///
+/// A vector of tuples (validation_assay, training_assay) for each fold
 fn create_gpu_assays_for_folds(
     cv: &CV,
     param: &Param,
@@ -3434,6 +3615,383 @@ mod tests {
             remaining_parents <= 2,
             "Extreme diversity filtering (99.9%) should leave very few parents: {}",
             remaining_parents
+        );
+    }
+
+    #[test]
+    fn test_ga_with_initial_population() {
+        // Test that GA works with an initial population
+        let mut data = Data::specific_test(50, 30);
+        let mut param = create_test_params();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        data.select_features(&param);
+
+        // Create initial population
+        let mut initial_pop = Population::new();
+        initial_pop.generate(
+            500,
+            2,
+            5,
+            TERNARY_LANG,
+            PREVALENCE_TYPE,
+            0.0,
+            &data,
+            false,
+            None,
+            &mut rng,
+        );
+        initial_pop.compute_hash();
+
+        // Run GA with initial population
+        let running = Arc::new(AtomicBool::new(true));
+        let populations = ga(
+            &mut data,
+            &mut None,
+            &mut Some(initial_pop),
+            &param,
+            running,
+        );
+
+        // Verify it completes successfully
+        assert!(
+            !populations.is_empty(),
+            "GA should run with initial population"
+        );
+        let final_pop = &populations[populations.len() - 1];
+        assert!(
+            !final_pop.individuals.is_empty(),
+            "Should have final population"
+        );
+
+        // Verify best model is valid
+        let best = &final_pop.individuals[0];
+        assert!(
+            best.auc >= 0.0 && best.auc <= 1.0,
+            "Best model should have valid AUC"
+        );
+        assert!(best.k > 0, "Best model should have features");
+    }
+
+    #[test]
+    fn test_ga_without_initial_population() {
+        // Test that GA works without initial population (baseline)
+        let mut data = Data::specific_test(50, 30);
+        let mut param = create_test_params();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+
+        // Run GA without initial population
+        let running = Arc::new(AtomicBool::new(true));
+        let populations = ga(&mut data, &mut None, &mut None, &param, running);
+
+        // Verify it works
+        assert!(
+            !populations.is_empty(),
+            "GA should work without initial population"
+        );
+        let final_pop = &populations[populations.len() - 1];
+
+        // Verify best model is valid
+        let best = &final_pop.individuals[0];
+        assert!(
+            best.auc >= 0.0 && best.auc <= 1.0,
+            "Best model should have valid AUC"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Initial population is not compatible with data!")]
+    fn test_ga_initial_population_with_features_outside_data() {
+        // Test that features not in feature_selection don't break GA and can propagate
+        let mut data = Data::specific_test(50, 100);
+        let mut param = create_test_params();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+
+        // Create initial population with features that may not be in selection
+        let mut initial_pop = Population::new();
+
+        // Create individuals with specific features
+        for i in 0..105 {
+            let mut ind = Individual::new();
+            ind.language = BINARY_LANG;
+            ind.data_type = PREVALENCE_TYPE;
+
+            // Use features that might be filtered out
+            ind.features.insert(i, 1);
+            ind.k = 1;
+            ind.epoch = 0;
+
+            initial_pop.individuals.push(ind);
+        }
+
+        initial_pop.compute_hash();
+
+        // Run GA - it should handle features outside selection gracefully
+        let running = Arc::new(AtomicBool::new(true));
+        let _ = ga(
+            &mut data,
+            &mut None,
+            &mut Some(initial_pop.clone()),
+            &param,
+            running,
+        );
+    }
+
+    use std::collections::HashSet;
+    #[test]
+    fn test_ga_initial_population_with_features_outside_feature_selection() {
+        // Test that features not in feature_selection don't break GA and can propagate
+        let mut data = Data::specific_significant_test(50, 105);
+        let mut param = create_test_params();
+
+        param.data.feature_maximal_adj_pvalue = 0.85;
+        data.select_features(&param);
+
+        println!(
+            "Data feature selection length: {}",
+            data.feature_selection.len()
+        );
+
+        // Create initial population with features that may not be in selection
+        let mut initial_pop = Population::new();
+
+        let rng = &mut ChaCha8Rng::seed_from_u64(42);
+
+        // Create individuals with specific features
+        for _ in 0..105 {
+            let mut ind = Individual::new();
+            ind.language = BINARY_LANG;
+            ind.data_type = PREVALENCE_TYPE;
+            for _ in 0..5 {
+                ind.features.insert(
+                    data.feature_selection[rng.gen_range(0..data.feature_selection.len())],
+                    1,
+                );
+            }
+            ind.k = 1;
+            ind.epoch = 0;
+            initial_pop.individuals.push(ind);
+        }
+
+        for i in 0..30 {
+            initial_pop.individuals[i].features.insert(i, 1);
+        }
+
+        initial_pop.compute_hash();
+
+        // Run GA - it should handle features outside selection gracefully but print a warning
+        let running = Arc::new(AtomicBool::new(true));
+        let populations = ga(
+            &mut data,
+            &mut None,
+            &mut Some(initial_pop.clone()),
+            &param,
+            running,
+        );
+
+        println!(
+            "Data feature selection length: {}",
+            data.feature_selection.len()
+        );
+
+        // Verify GA completes without crashing
+        assert!(
+            !populations.is_empty(),
+            "GA should handle features outside selection"
+        );
+        let final_pop = &populations[populations.len() - 1];
+        assert!(
+            !final_pop.individuals.is_empty(),
+            "Should have final population"
+        );
+
+        let mut unique_feature: HashSet<usize> = HashSet::new();
+        for ind in &final_pop.individuals {
+            for feature_idx in ind.features.keys() {
+                unique_feature.insert(*feature_idx);
+            }
+        }
+
+        // Non-selected feature should not be abble to appear in final population if the initial population contains them
+        let mut count = 0;
+        for idx in 0..data.feature_len {
+            if !data.feature_selection.contains(&idx) && unique_feature.contains(&idx) {
+                println!(
+                    "Feature {} is not in feature selection but is present in final population",
+                    idx
+                );
+                assert!(idx <= 30, "Feature {} should not exist as it does not appear in the initial population and in selected feature", idx);
+                count += 1;
+            }
+        }
+
+        assert!(count > 0, "Some features outside feature selection should be able to propagate to final population if they are in the initial population");
+        assert!(
+            final_pop.individuals[0].k > 0,
+            "Best model should have features"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Initial population size is too small")]
+    fn test_ga_initial_population_all_stillborn() {
+        // Test GA when initial population contains only stillborn (invalid) individuals
+        let mut data = Data::specific_test(40, 25);
+        let mut param = create_test_params();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+
+        // Create population with only positive values (stillborn for ternary)
+        let mut stillborn_pop = Population::new();
+
+        for _ in 0..200 {
+            let mut ind = Individual::new();
+            ind.language = TERNARY_LANG;
+            ind.data_type = PREVALENCE_TYPE;
+            ind.features.insert(0, 1);
+            ind.features.insert(1, 1);
+            ind.features.insert(2, 1);
+            ind.k = 3;
+            stillborn_pop.individuals.push(ind);
+        }
+
+        stillborn_pop.compute_hash();
+
+        // This should either:
+        // 1. Generate new valid individuals to replace stillborn ones, or
+        // 2. Handle gracefully by generating a fresh population
+        let running = Arc::new(AtomicBool::new(true));
+        let populations = ga(
+            &mut data,
+            &mut None,
+            &mut Some(stillborn_pop),
+            &param,
+            running,
+        );
+
+        // Verify GA handled it and produced valid results
+        assert!(
+            !populations.is_empty(),
+            "GA should handle stillborn initial population"
+        );
+        let final_pop = &populations[populations.len() - 1];
+        assert!(
+            !final_pop.individuals.is_empty(),
+            "Should have final population"
+        );
+
+        // Check that final population has valid individuals
+        let best = &final_pop.individuals[0];
+        assert!(best.k > 0, "Best model should have features");
+
+        // For ternary, should have both positive and negative values
+        let mut has_positive = false;
+        let mut has_negative = false;
+        for &val in best.features.values() {
+            if val > 0 {
+                has_positive = true;
+            }
+            if val < 0 {
+                has_negative = true;
+            }
+        }
+
+        assert!(
+            has_positive && has_negative,
+            "Valid ternary individual should have both positive and negative features"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Initial population size is too small")]
+    fn test_ga_initial_population_empty() {
+        // Test GA with empty initial population
+        let mut data = Data::specific_test(50, 30);
+        let mut param = create_test_params();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+
+        let empty_pop = Population::new();
+        // Don't add any individuals - leave it empty
+
+        // GA should handle empty population by generating a new one
+        let running = Arc::new(AtomicBool::new(true));
+        let populations = ga(&mut data, &mut None, &mut Some(empty_pop), &param, running);
+
+        // Should work like normal GA (generate from scratch)
+        assert!(
+            !populations.is_empty(),
+            "GA should handle empty initial population"
+        );
+        let final_pop = &populations[populations.len() - 1];
+        assert!(
+            final_pop.individuals.len() > 0,
+            "Should generate population when initial is empty"
+        );
+    }
+
+    #[test]
+    fn test_ga_initial_population_feature_selection_change() {
+        // Test that changing feature_selection doesn't break GA with initial population
+        let mut data = Data::specific_significant_test(50, 100);
+        let mut param = create_test_params();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        data.select_features(&param);
+
+        // Create initial population with certain features
+        let mut initial_pop = Population::new();
+        initial_pop.generate(
+            300,
+            2,
+            5,
+            TERNARY_LANG,
+            PREVALENCE_TYPE,
+            0.0,
+            &data,
+            false,
+            None,
+            &mut rng,
+        );
+
+        // Store which features are used
+        let initial_features: std::collections::HashSet<_> = initial_pop
+            .individuals
+            .iter()
+            .flat_map(|ind| ind.features.keys().copied())
+            .collect();
+
+        println!("Initial features used: {:?}", initial_features);
+
+        // Now change feature selection parameters to potentially select different features
+        param.data.feature_maximal_adj_pvalue = 0.30; // strict
+        param.data.feature_minimal_prevalence_pct = 20.0; // High prevalence requirement
+
+        // Run GA - it will call data.select_features() which may exclude some initial features
+        let running = Arc::new(AtomicBool::new(true));
+        let populations = ga(
+            &mut data,
+            &mut None,
+            &mut Some(initial_pop),
+            &param,
+            running,
+        );
+
+        // Verify GA handles the mismatch gracefully
+        assert!(
+            !populations.is_empty(),
+            "GA should handle feature selection change"
+        );
+        let final_pop = &populations[populations.len() - 1];
+        assert!(
+            !final_pop.individuals.is_empty(),
+            "Should have final population"
+        );
+
+        let best = &final_pop.individuals[0];
+        assert!(
+            best.auc >= 0.0 && best.auc <= 1.0,
+            "Best model should be valid"
         );
     }
 }

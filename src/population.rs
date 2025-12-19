@@ -13,7 +13,7 @@ use crate::utils::{
     precompute_bootstrap_indices, PrecomputedBootstrap,
 };
 use crate::utils::{mad, mean_and_std, median};
-use log::warn;
+use log::{error, warn};
 use rand::prelude::SliceRandom;
 use rand::RngCore;
 use rand::SeedableRng;
@@ -23,31 +23,103 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
+/// Group of [`Individual`]s
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Population {
+    /// Individuals in the population grouped together
     pub individuals: Vec<Individual>,
 }
 
 impl Population {
-    /// Provides a help message describing the `Population` struct and its fields.
-    pub fn help() -> &'static str {
-        "
-        Population Struct:
-        -----------------
-        Represents a population consisting of multiple individuals, 
-        with associated feature metadata.
+    /// Checks compatibility of this population with data.
+    /// Each individual in the population is checked for compatibility with the provided data.
+    /// Incompatibility is determined by the individual's own `check_compatibility` method.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data to check compatibility against.
+    ///
+    /// # Returns
+    ///
+    /// A boolean indicating whether all individuals are compatible with the data.
+    ///
+    /// # Errors and Warnings
+    ///
+    /// Logs an error if the data has no features or samples.
+    /// Logs a warning if the population is empty.
+    ///
+    /// Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # let population = Population::new();
+    /// # let data = Data::new();
+    /// let compatible = population.check_compatibility(&data);
+    /// ```
+    pub fn check_compatibility(&self, data: &Data) -> bool {
+        // Check data is valid
+        if data.feature_len == 0 {
+            error!("Data has no features (feature_len = 0)");
+            return false;
+        }
+        if data.sample_len == 0 {
+            error!("Data has no samples (sample_len = 0)");
+            return false;
+        }
 
-        Fields:
-        - individuals: Vec<Individual>
-            A vector containing the individuals in the population. 
-            Each individual represents an entity with a set of attributes or features.
+        // Warn if population is empty
+        if self.individuals.is_empty() {
+            warn!("Population is empty");
+            return true; // Not an error, just a warning
+        }
 
-        - feature_names: HashMap<u32, String>
-            A map between feature indices (u32) and their corresponding names (String).
-            This provides a human-readable label for each feature in the population.
-        "
+        let mut all_compatible = true;
+        let mut incompatible_count = 0;
+
+        // Check each individual using its own check_compatibility method
+        for individual in self.individuals.iter() {
+            if !individual.check_compatibility(data) {
+                incompatible_count += 1;
+                all_compatible = false;
+            }
+        }
+
+        if incompatible_count > 0 {
+            error!(
+                "Population: {} out of {} individuals are incompatible with data",
+                incompatible_count,
+                self.individuals.len()
+            );
+        }
+
+        all_compatible
     }
 
+    /// Generates a display string for the population in a human-readable format.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The training data used for evaluation.
+    /// * `data_to_test` - Optional test data for additional evaluation.
+    /// * `param` - Parameters influencing the display format.
+    ///
+    /// # Returns
+    ///
+    /// A formatted string representing the population's metrics.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::param::Param;
+    /// # let mut population = Population::new();
+    /// # let train_data = Data::new();
+    /// # let test_data = Data::new();
+    /// # let params = Param::default();
+    /// let display_str = population.display(&train_data, Some(&test_data), &params);
+    /// ```
     pub fn display(&mut self, data: &Data, data_to_test: Option<&Data>, param: &Param) -> String {
         if param.general.algo == "mcmc" {
             let other_set = if data_to_test.is_some() {
@@ -173,18 +245,46 @@ impl Population {
         }
     }
 
+    //// Generates a new, empty Population with no individuals.
+    ///
+    /// # Returns
+    ///
+    /// A new `Population` instance with an empty individuals vector.
     pub fn new() -> Population {
         Population {
             individuals: Vec::new(),
         }
     }
 
+    /// Computes the hash for each individual in the population.
+    /// This method iterates over all individuals and invokes their `compute_hash` method.
+    ///
+    /// Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # let mut population = Population::new();
+    /// population.compute_hash();
+    /// ```
     pub fn compute_hash(&mut self) {
         for individual in &mut self.individuals {
             individual.compute_hash();
         }
     }
 
+    /// Removes duplicate individuals (clones) from the population based on their hash values.
+    ///
+    /// # Returns
+    ///
+    /// The number of clones that were removed from the population.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # let mut population = Population::new();
+    /// let num_clones_removed = population.remove_clone();
+    /// ```
     pub fn remove_clone(&mut self) -> u32 {
         let mut clone_number: u32 = 0;
         let mut unique_individuals: Vec<Individual> = Vec::new();
@@ -204,6 +304,31 @@ impl Population {
         clone_number
     }
 
+    /// Fits the population to the provided data, applying penalties as specified in the parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The training data used for fitting.
+    /// * `_test_data` - Optional test data for additional evaluation (deprecated)
+    /// * `gpu_assay` - Optional GPU assay for accelerated computations
+    /// *  `_test_assay` - Optional GPU assay for test data (deprecated)
+    /// * `param` - Parameters influencing the fitting process.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::gpu::GpuAssay;
+    /// # use gpredomics::param::Param;
+    /// # let mut population = Population::new();
+    /// # let train_data = Data::new();
+    /// # let mut test_data = Data::new();
+    /// # let params = Param::default();
+    /// # let gpu_assay: Option<GpuAssay> = None;
+    /// # let test_assay: Option<GpuAssay> = None;
+    /// population.fit(&train_data, &mut Some(test_data), &gpu_assay, &test_assay, &params);
+    /// ```
     pub fn fit(
         &mut self,
         data: &Data,
@@ -216,6 +341,24 @@ impl Population {
         self.penalize(data, param);
     }
 
+    /// Applies penalties to the fitness scores of individuals in the population based on various criteria.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The training data used for evaluation.
+    /// * `param` - Parameters influencing the penalty application.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::param::Param;
+    /// # let mut population = Population::new();
+    /// # let train_data = Data::new();
+    /// # let params = Param::default();
+    /// population.penalize(&train_data, &params);
+    /// ```
     pub fn penalize(&mut self, data: &Data, param: &Param) {
         self.individuals.par_iter_mut().for_each(|i| {
             // k
@@ -259,6 +402,31 @@ impl Population {
         });
     }
 
+    /// Fits the population to the provided data without applying penalties.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The training data used for fitting.
+    /// * `_test_data` - Optional test data for additional evaluation (deprecated)
+    /// * `gpu_assay` - Optional GPU assay for accelerated computations
+    /// *  `_test_assay` - Optional GPU assay for test data (deprecated)
+    /// * `param` - Parameters influencing the fitting process.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::gpu::GpuAssay;
+    /// # use gpredomics::param::Param;
+    /// # let mut population = Population::new();
+    /// # let train_data = Data::new();
+    /// # let mut test_data = Data::new();
+    /// # let params = Param::default();
+    /// # let gpu_assay: Option<GpuAssay> = None;
+    /// # let test_assay: Option<GpuAssay> = None;
+    /// population.fit_without_penalty(&train_data, &mut Some(test_data), &gpu_assay, &test_assay, &params);
+    /// ```
     pub fn fit_without_penalty(
         &mut self,
         data: &Data,
@@ -407,12 +575,25 @@ impl Population {
             })
     }
 
+    /// Sorts the population based on individuals' fitness scores, handling special cases for NaN and infinite values.
+    ///
+    /// # Returns
+    ///
+    /// The sorted `Population` instance.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # let population = Population::new();
+    /// let sorted_population = population.sort();
+    /// ```
     pub fn sort(mut self) -> Self {
         use std::cmp::Reverse;
-        const TIE_EPS: f64 = 1e-6; // tolérance de comparaison inter-backends
+        const TIE_EPS: f64 = 1e-6; // tolerance for tie-breaking
 
         self.individuals.sort_by_key(|ind| {
-            // Catégories: 0=+inf, 1=finis, 2=-inf, 3=NaN (ordre ascendant => +inf en premier)
+            // Case: 0=+inf, 1=finite, 2=-inf, 3=NaN (ascending order => +inf first)
             let cat: u8 = if ind.fit.is_nan() {
                 3
             } else if ind.fit.is_infinite() {
@@ -425,7 +606,7 @@ impl Population {
                 1
             };
 
-            // Quantification symétrique du fit par pas d’epsilon
+            // Symmetric quantification of fit by epsilon step
             let qfit: i64 = if cat == 1 {
                 let v = (ind.fit / TIE_EPS).round();
                 if v > (i64::MAX as f64) {
@@ -439,13 +620,34 @@ impl Population {
                 0
             };
 
-            // Ordre composite: catégorie asc, fit quantifié desc, hash desc
+            // Composite order: category asc, quantified fit desc, hash desc
             (cat, Reverse(qfit), Reverse(ind.hash))
         });
 
         self
     }
 
+    /// Fits the population using cross-validation folds, applying penalties based on overfitting.
+    ///
+    /// # Arguments
+    ///
+    /// * `cv` - The cross-validation structure containing folds.
+    /// * `param` - Parameters influencing the fitting process.
+    /// * `gpu_assays` - Vector of GPU assays for each fold.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::cv::CV;
+    /// # use gpredomics::param::Param;
+    /// # use gpredomics::gpu::GpuAssay;
+    /// # let mut population = Population::new();
+    /// # let cv = CV::new();
+    /// # let params = Param::default();
+    /// # let gpu_assays: Vec<(Option<GpuAssay>, Option<GpuAssay>)> = vec![];
+    /// population.fit_on_folds(&cv, &params, &gpu_assays);
+    /// ```
     pub fn fit_on_folds(
         &mut self,
         cv: &CV,
@@ -492,6 +694,23 @@ impl Population {
         self.penalize(&cv.training_sets[0], param);
     }
 
+    /// Selects the best individuals in the population based on a confidence interval for the evaluation metric.
+    /// This method returns the Family of Best Models (FBM) by selecting individuals whose fitness exceeds is statistically non-distinguishable from the best individual's fitness.
+    ///
+    /// # Arguments
+    /// * `alpha` - Significance level for the confidence interval.
+    ///
+    /// # Returns
+    ///
+    /// A new `Population` instance containing the best individuals.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # let population = Population::new();
+    /// let best_population = population.select_best_population(0.05);
+    /// ```
     pub fn select_best_population(&self, alpha: f64) -> Population {
         // (Family of best models)
         // This function return a population containing only individuals with a Fit greater than the best individual evaluation metric lower bound
@@ -502,7 +721,6 @@ impl Population {
         // Collect evaluation score == ind.fit
         for ind in &self.individuals {
             eval.push(ind.fit)
-            //eval = ind.fit - (k_penalty * spar) -> it is useful as fit already take k_penalty in account ?
         }
 
         // Return empty population if no individuals
@@ -512,35 +730,64 @@ impl Population {
 
         // Control the distribution of evaluation metric
         if &eval[0] > &1.0 || &eval[0] < &0.0 {
-            warn!("Evaluation metric should be in the [0, 1] interval to compute Family of Best Models!");
-            warn!("Keeping only Top 5%...");
-            best_pop = self.select_first_pct(5.0).0;
-        } else {
-            let (lower_bound, _, _) = conf_inter_binomial(eval[0], self.individuals.len(), alpha);
-
+            warn!("Evaluation metric should be in the [0, 1] interval to compute Family of Best Models! Using AUC instead of fitness...");
+            eval = vec![];
             for ind in &self.individuals {
-                if ind.fit > lower_bound {
-                    best_pop.individuals.push(ind.clone());
-                }
-                // indivduals are theoricaly sorted by fit
-                else {
-                    break;
-                }
+                eval.push(ind.auc)
+            }
+        }
+
+        let (lower_bound, _, _) = conf_inter_binomial(eval[0], self.individuals.len(), alpha);
+
+        for ind in &self.individuals {
+            if ind.fit > lower_bound {
+                best_pop.individuals.push(ind.clone());
+            }
+            // indivduals are theoricaly sorted by fit
+            else {
+                break;
             }
         }
 
         best_pop
     }
 
-    /// Populate the population with a set of random individuals
+    /// Populates the population with a set of random individuals.
     ///
     /// This is the unified function that handles both uniform and weighted feature selection.
     /// Use `prior_weight` parameter to enable weighted selection, or pass `None` for uniform selection.
+    ///
+    /// # Arguments
+    ///
+    /// * `population_size` - The number of individuals to generate.
+    /// * `k_min` - Minimum number of features per individual.
+    /// * `k_max` - Maximum number of features per individual.
+    /// * `language` - The language type for the individuals.
+    /// * `data_type` - The data type for the individuals.
+    /// * `epsilon` - Epsilon parameter for the individuals.
+    /// * `data` - The data used for feature selection.
+    /// * `threshold_ci` - Whether to compute threshold confidence intervals.
+    /// * `prior_weight` - Optional reference to a HashMap for weighted feature selection.
+    /// * `rng` - Random number generator.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::individual::BINARY_LANG;
+    /// # use rand::SeedableRng;
+    /// # use rand_chacha::ChaCha8Rng;
+    /// # let mut population = Population::new();
+    /// # let data = Data::new();
+    /// # let mut rng = ChaCha8Rng::from_entropy();
+    /// population.generate(100, 5, 20, BINARY_LANG, 0, 0.1, &data, true, None, &mut rng);
+    /// ```
     pub fn generate(
         &mut self,
         population_size: u32,
-        kmin: usize,
-        kmax: usize,
+        k_min: usize,
+        k_max: usize,
         language: u8,
         data_type: u8,
         epsilon: f64,
@@ -551,8 +798,8 @@ impl Population {
     ) {
         for _ in 0..population_size {
             self.individuals.push(Individual::random_select(
-                kmin,
-                kmax,
+                k_min,
+                k_max,
                 &data.feature_selection,
                 &data.feature_class,
                 language,
@@ -565,43 +812,41 @@ impl Population {
         }
     }
 
-    /// Populate the population with weighted feature selection
+    /// Adds individuals from another population to the current population.
     ///
-    /// **Deprecated:** Use `generate` with `prior_weight = Some(...)` instead.
-    #[deprecated(since = "0.7.5", note = "Use generate with prior_weight parameter")]
-    pub fn generate_weighted(
-        &mut self,
-        population_size: u32,
-        kmin: usize,
-        kmax: usize,
-        language: u8,
-        data_type: u8,
-        epsilon: f64,
-        data: &Data,
-        threshold_ci: bool,
-        prior_weight: &HashMap<usize, f64>,
-        rng: &mut ChaCha8Rng,
-    ) {
-        self.generate(
-            population_size,
-            kmin,
-            kmax,
-            language,
-            data_type,
-            epsilon,
-            data,
-            threshold_ci,
-            Some(prior_weight),
-            rng,
-        )
-    }
-
-    /// add some individuals in the population
+    /// # Arguments
+    ///
+    /// * `population` - The population whose individuals are to be added.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # let mut population = Population::new();
+    /// # let other_population = Population::new();
+    /// population.add(other_population);
+    /// ```
     pub fn add(&mut self, population: Population) {
         self.individuals.extend(population.individuals);
     }
 
-    /// select first element of a (sorted) population
+    /// Extracts the top percentage of individuals from the population based on their order.
+    ///
+    /// # Arguments
+    ///
+    /// * `pct` - The percentage of individuals to select (0-100).
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing the new `Population` with the selected individuals and the number of individuals selected.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # let population = Population::new();
+    /// let (top_population, n_selected) = population.select_first_pct(10.0);
+    /// ```
     pub fn select_first_pct(&self, pct: f64) -> (Population, usize) {
         let n: usize = (self.individuals.len() as f64 * pct / 100.0) as usize;
 
@@ -613,6 +858,28 @@ impl Population {
         )
     }
 
+    /// Selects a random subset of individuals from the population above a specified index.
+    ///
+    /// # Arguments
+    ///
+    /// * `pct` - The percentage of individuals to select (0-100).
+    /// * `n` - The index above which individuals are considered for selection.
+    /// * `rng` - Random number generator.
+    ///
+    /// # Returns
+    ///
+    /// A new `Population` containing the randomly selected individuals.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use rand::SeedableRng;
+    /// # use rand_chacha::ChaCha8Rng;
+    /// # let population = Population::new();
+    /// # let mut rng = ChaCha8Rng::from_entropy();
+    /// let random_population = population.select_random_above_n(10.0, 5, &mut rng);
+    /// ```
     pub fn select_random_above_n(&self, pct: f64, n: usize, rng: &mut ChaCha8Rng) -> Population {
         let k = (self.individuals.len() as f64 * pct / 100.0) as usize;
 
@@ -624,6 +891,18 @@ impl Population {
         }
     }
 
+    /// Computes all evaluation metrics for each individual in the population using the provided data and fitting method.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data used for evaluation.
+    /// * `method` - The fitting method used for evaluation.
+    ///
+    /// # Examples
+    ///  
+    /// ```ignore
+    /// population.compute_all_metrics(&data, &FitFunction::auc);
+    /// ```
     pub fn compute_all_metrics(&mut self, data: &Data, method: &FitFunction) {
         // Precompute bootstrap indices if any individual needs threshold CI
         let precomputed_bootstrap: Option<PrecomputedBootstrap> =
@@ -669,7 +948,30 @@ impl Population {
         });
     }
 
-    // Genealogy functions
+    /// Retrieves an individual from the population based on its hash value.
+    ///
+    /// # Arguments
+    ///
+    /// * `hash` - The hash value of the individual to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing a reference to the `Individual` if found, or `None` if not found.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the hash values of individuals have not been computed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # let population = Population::new();
+    /// # let hash_value = 12345u64;
+    /// if let Some(individual) = population.get_ind_from_hash(hash_value) {
+    ///     // Use the individual
+    /// }
+    /// ```
     pub fn get_ind_from_hash(&self, hash: u64) -> Option<&Individual> {
         assert!(
             self.individuals[0].hash != 0,
@@ -678,9 +980,44 @@ impl Population {
         self.individuals.par_iter().find_any(|ind| ind.hash == hash)
     }
 
-    /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
-    /// uses mean decreased AUC
-    pub fn compute_pop_oob_feature_importance(
+    /// Computes Mean Decreased Accuracy (MDA) feature importance for the population.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data used for evaluation.
+    /// * `permutations` - The number of permutations to perform for MDA calculation.
+    /// * `main_rng` - The main random number generator for reproducibility.
+    /// * `aggregation_method` - The method used for aggregating individual importances.
+    /// * `scaled_importance` - Whether to scale the importance values by feature prevalence.
+    /// * `cascade` - Whether to include individual-level importances in the final result.
+    /// * `population_id` - Optional identifier for the population.
+    ///
+    /// # Returns
+    ///
+    /// An `ImportanceCollection` containing the computed feature importances.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::experiment::ImportanceAggregation;
+    /// # use rand::SeedableRng;
+    /// # use rand_chacha::ChaCha8Rng;
+    /// # let population = Population::new();
+    /// # let data = Data::new();
+    /// # let mut rng = ChaCha8Rng::from_entropy();
+    /// let importance_collection = population.compute_pop_mda_feature_importance(
+    ///     &data,
+    ///     100,
+    ///     &mut rng,
+    ///     &ImportanceAggregation::mean,
+    ///     true,
+    ///     false,
+    ///     Some(1),
+    /// );
+    /// ```
+    pub fn compute_pop_mda_feature_importance(
         &self,
         data: &Data,
         permutations: usize,
@@ -723,11 +1060,11 @@ impl Population {
         let mut order: Vec<usize> = (0..self.individuals.len()).collect();
         order.sort_by_key(|&i| self.individuals[i].hash);
 
-        // Use Individual::compute_oob_feature_importance for each individual
+        // Use Individual::compute_mda_feature_importance for each individual
         let individual_results: Vec<_> = order
             .par_iter()
             .map(|&idx| {
-                self.individuals[idx].compute_oob_feature_importance(
+                self.individuals[idx].compute_mda_feature_importance(
                     data,
                     permutations,
                     &all_features,
@@ -824,6 +1161,24 @@ impl Population {
         }
     }
 
+    /// Performs Bayesian prediction by averaging the predictions of all individuals in the population.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data used for prediction.
+    ///
+    /// # Returns
+    ///
+    /// A vector of predicted probabilities for each sample.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # let population = Population::new();
+    /// # let data = Data::new();
+    /// let predictions = population.bayesian_predict(&data);
+    /// ```
     pub fn bayesian_predict(&self, data: &Data) -> Vec<f64> {
         let mut bayesian_prob: Vec<f64> = vec![0.0; data.sample_len];
         for ind in &self.individuals {
@@ -841,6 +1196,13 @@ impl Population {
         bayesian_prob
     }
 
+    /// Classifies samples based on Bayesian prediction probabilities and a specified threshold.
+    ///  
+    /// # Arguments
+    ///
+    /// * `data` - The data used for classification.
+    /// * `threshold` - The threshold for classification.
+    ///
     pub fn bayesian_class(&self, data: &Data, threshold: f64) -> Vec<u8> {
         let probs = self.bayesian_predict(data);
         probs
@@ -849,6 +1211,15 @@ impl Population {
             .collect()
     }
 
+    /// Computes ROC and evaluation metrics based on Bayesian predictions.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data used for evaluation.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing AUC, accuracy, sensitivity, specificity, PPV, and NPV.
     pub fn bayesian_compute_roc_and_metrics(&self, data: &Data) -> (f64, f64, f64, f64, f64, f64) {
         compute_roc_and_metrics_from_value(
             &self.bayesian_predict(data),
@@ -858,6 +1229,16 @@ impl Population {
         )
     }
 
+    /// Computes AUC, accuracy, sensitivity, and specificity based on Bayesian predictions and a specified threshold.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data used for evaluation.
+    /// * `threshold` - The threshold for classification.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing AUC, accuracy, sensitivity, and specificity.
     pub fn bayesian_compute_metrics(&self, data: &Data, threshold: f64) -> (f64, f64, f64, f64) {
         let (acc, se, sp, _) = compute_metrics_from_classes(
             &self.bayesian_class(data, threshold),
@@ -872,6 +1253,27 @@ impl Population {
         )
     }
 
+    /// Filters the population based on signed Jaccard dissimilarity between individuals.
+    ///
+    /// Niches can be considered to group individuals by family and data type before filtering.
+    /// This will group individuals into two niches: linear family (Binary, Ternary, Pow2) & Ratio family and filter within each niche.
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - The dissimilarity threshold (0-100).
+    /// * `considere_niche` - Whether to consider family niches during filtering.
+    ///
+    /// # Returns
+    ///
+    /// A new `Population` instance containing the filtered individuals.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # let population = Population::new();
+    /// let filtered_population = population.filter_by_signed_jaccard_dissimilarity(30.0, true);
+    /// ```
     pub fn filter_by_signed_jaccard_dissimilarity(
         &self,
         threshold: f64,
@@ -958,7 +1360,27 @@ impl Population {
         }
     }
 
-    // This function is linked to voting.
+    /// Generates a formatted string displaying the prevalence of features in the population.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data containing feature information.
+    /// * `nb_features` - The number of top features to display (0 for all).
+    ///
+    /// # Returns
+    ///
+    /// A formatted string representing the feature prevalence table.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # let population = Population::new();
+    /// # let data = Data::new();
+    /// let prevalence_table = population.display_feature_prevalence(&data, 10);
+    /// println!("{}", prevalence_table);
+    /// ```
     pub fn display_feature_prevalence(&self, data: &Data, nb_features: usize) -> String {
         if self.individuals.is_empty() {
             return "No expert in population".to_string();
@@ -1115,9 +1537,32 @@ impl Population {
         result
     }
 
-    /// Prune all individuals in the population by OOB permutation importance.
+    /// Prunes all individuals in the population based on feature importance using parallel processing.
+    ///
     /// Applies `Individual::prune_by_importance` to each individual in parallel.
-    /// Returns &mut Self for chaining.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data used for importance calculation.
+    /// * `n_perm` - The number of permutations for importance calculation.
+    /// * `base_rng_seed` - The base random seed for reproducibility.
+    /// * `threshold` - Optional threshold for pruning.
+    /// * `quantile` - Optional quantile range for pruning.
+    /// * `min_k` - Minimum number of features to retain.
+    ///
+    /// # Returns
+    ///
+    /// A mutable reference to the `Population` for chaining.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::population::Population;
+    /// # use gpredomics::data::Data;
+    /// # let mut population = Population::new();
+    /// # let data = Data::new();
+    /// population.prune_all_by_importance(&data, 100, 42, Some(0.01), None, 5);
+    /// ```
     pub fn prune_all_by_importance(
         &mut self,
         data: &Data,
@@ -1169,6 +1614,11 @@ mod tests {
     use std::{collections::HashMap, f64::MAX};
 
     impl Population {
+        /// Generates a test population with predefined individuals for testing purposes.
+        ///
+        /// # Returns
+        ///
+        /// A `Population` instance containing test individuals.
         pub fn test() -> Population {
             let mut pop = Population {
                 individuals: Vec::new(),
@@ -1210,6 +1660,16 @@ mod tests {
             pop
         }
 
+        /// Generates a test population with a specified number of individuals, each having overlapping features.
+        ///
+        /// # Arguments
+        ///
+        /// * `num_individuals` - The number of individuals to generate.
+        /// * `features_per_individual` - The number of features each individual should have.
+        ///
+        /// # Returns
+        ///
+        /// A `Population` instance containing the generated individuals.
         pub fn test_with_n_overlapping_features(
             num_individuals: usize,
             features_per_individual: usize,
@@ -1249,6 +1709,15 @@ mod tests {
             Population { individuals }
         }
 
+        /// Generates a test population with individuals having specified features.
+        ///
+        /// # Arguments
+        ///
+        /// * `feature_indices` - A slice of feature indices to be included in the individuals.
+        ///
+        /// # Returns
+        ///
+        /// A `Population` instance containing the generated individuals.
         pub fn test_with_these_features(feature_indices: &[usize]) -> Population {
             let mut pop = Population::new();
             for &feature_idx in feature_indices {
@@ -1869,13 +2338,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_basic_population_scope() {
+    fn test_compute_pop_mda_feature_importance_basic_population_scope() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let pop = Population::test_with_n_overlapping_features(3, 2);
         let data = create_simple_test_data(10, 10);
         let agg_method = ImportanceAggregation::mean;
 
-        let importances = pop.compute_pop_oob_feature_importance(
+        let importances = pop.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng,
@@ -1899,7 +2368,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_prevalence_calculation() {
+    fn test_compute_pop_mda_feature_importance_prevalence_calculation() {
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         let mut pop = Population {
             individuals: Vec::new(),
@@ -1938,7 +2407,7 @@ mod tests {
         let data = create_simple_test_data(15, 3);
         let agg_method = ImportanceAggregation::mean;
 
-        let importances = pop.compute_pop_oob_feature_importance(
+        let importances = pop.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng,
@@ -1964,7 +2433,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_handles_empty_values() {
+    fn test_compute_pop_mda_feature_importance_handles_empty_values() {
         let mut rng = ChaCha8Rng::seed_from_u64(555);
         let mut pop = Population {
             individuals: Vec::new(),
@@ -1983,7 +2452,7 @@ mod tests {
         let data = create_simple_test_data(10, 5); // Only 0-4 features
         let agg_method = ImportanceAggregation::mean;
 
-        let importances = pop.compute_pop_oob_feature_importance(
+        let importances = pop.compute_pop_mda_feature_importance(
             &data,
             3,
             &mut rng,
@@ -1999,13 +2468,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_cascade_mode_includes_individuals() {
+    fn test_compute_pop_mda_feature_importance_cascade_mode_includes_individuals() {
         let pop = Population::test_with_n_overlapping_features(2, 3);
         let data = create_simple_test_data(8, 8);
         let agg_method = ImportanceAggregation::mean;
 
         let mut rng1 = ChaCha8Rng::seed_from_u64(789);
-        let no_cascade = pop.compute_pop_oob_feature_importance(
+        let no_cascade = pop.compute_pop_mda_feature_importance(
             &data,
             3,
             &mut rng1,
@@ -2016,7 +2485,7 @@ mod tests {
         );
 
         let mut rng2 = ChaCha8Rng::seed_from_u64(789);
-        let with_cascade = pop.compute_pop_oob_feature_importance(
+        let with_cascade = pop.compute_pop_mda_feature_importance(
             &data,
             3,
             &mut rng2,
@@ -2061,7 +2530,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_empty_population() {
+    fn test_compute_pop_mda_feature_importance_empty_population() {
         let mut rng = ChaCha8Rng::seed_from_u64(999);
         let pop = Population {
             individuals: Vec::new(),
@@ -2069,7 +2538,7 @@ mod tests {
         let data = create_simple_test_data(10, 10);
         let agg_method = ImportanceAggregation::mean;
 
-        let importances = pop.compute_pop_oob_feature_importance(
+        let importances = pop.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng,
@@ -2086,12 +2555,12 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_aggregation_methods() {
+    fn test_compute_pop_mda_feature_importance_aggregation_methods() {
         let pop = Population::test_with_n_overlapping_features(5, 2);
         let data = create_simple_test_data(15, 6);
 
         let mut rng1 = ChaCha8Rng::seed_from_u64(111);
-        let mean_result = pop.compute_pop_oob_feature_importance(
+        let mean_result = pop.compute_pop_mda_feature_importance(
             &data,
             4,
             &mut rng1,
@@ -2102,7 +2571,7 @@ mod tests {
         );
 
         let mut rng2 = ChaCha8Rng::seed_from_u64(111);
-        let median_result = pop.compute_pop_oob_feature_importance(
+        let median_result = pop.compute_pop_mda_feature_importance(
             &data,
             4,
             &mut rng2,
@@ -2131,7 +2600,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_reproducibility_hash_sorting() {
+    fn test_compute_pop_mda_feature_importance_reproducibility_hash_sorting() {
         let mut pop = Population {
             individuals: Vec::new(),
         };
@@ -2155,7 +2624,7 @@ mod tests {
         let mut rng1 = ChaCha8Rng::seed_from_u64(222);
         let mut rng2 = ChaCha8Rng::seed_from_u64(222);
 
-        let result1 = pop.compute_pop_oob_feature_importance(
+        let result1 = pop.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng1,
@@ -2164,7 +2633,7 @@ mod tests {
             false,
             None,
         );
-        let result2 = pop.compute_pop_oob_feature_importance(
+        let result2 = pop.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng2,
@@ -2186,14 +2655,14 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_population_id_assignment() {
+    fn test_compute_pop_mda_feature_importance_population_id_assignment() {
         let pop = Population::test_with_n_overlapping_features(3, 2);
         let data = create_simple_test_data(12, 5);
         let agg_method = ImportanceAggregation::mean;
 
         // ✅ Test with specific population ID
         let mut rng1 = ChaCha8Rng::seed_from_u64(333);
-        let with_id = pop.compute_pop_oob_feature_importance(
+        let with_id = pop.compute_pop_mda_feature_importance(
             &data,
             4,
             &mut rng1,
@@ -2205,7 +2674,7 @@ mod tests {
 
         // ✅ Test with None (should default to 0)
         let mut rng2 = ChaCha8Rng::seed_from_u64(333);
-        let without_id = pop.compute_pop_oob_feature_importance(
+        let without_id = pop.compute_pop_mda_feature_importance(
             &data,
             4,
             &mut rng2,
@@ -2225,7 +2694,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_feature_collection_across_individuals() {
+    fn test_compute_pop_mda_feature_importance_feature_collection_across_individuals() {
         let mut rng = ChaCha8Rng::seed_from_u64(444);
         let mut pop = Population {
             individuals: Vec::new(),
@@ -2256,7 +2725,7 @@ mod tests {
         let data = create_simple_test_data(10, 5);
         let agg_method = ImportanceAggregation::mean;
 
-        let importances = pop.compute_pop_oob_feature_importance(
+        let importances = pop.compute_pop_mda_feature_importance(
             &data,
             3,
             &mut rng,
@@ -2281,7 +2750,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_zero_permutations() {
+    fn test_compute_pop_mda_feature_importance_zero_permutations() {
         let rng = ChaCha8Rng::seed_from_u64(666);
         let pop = Population::test_with_n_overlapping_features(2, 2);
         let data = create_simple_test_data(8, 5);
@@ -2290,7 +2759,7 @@ mod tests {
         // Edge case: zero permutations (should be handled by individual level)
         let result = std::panic::catch_unwind(|| {
             let mut rng_clone = rng.clone();
-            pop.compute_pop_oob_feature_importance(
+            pop.compute_pop_mda_feature_importance(
                 &data,
                 0,
                 &mut rng_clone,
@@ -2309,7 +2778,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_disjoint_individuals() {
+    fn test_compute_pop_mda_feature_importance_disjoint_individuals() {
         let mut pop = Population {
             individuals: Vec::new(),
         };
@@ -2329,7 +2798,7 @@ mod tests {
         let agg_method = ImportanceAggregation::mean;
 
         let mut rng = ChaCha8Rng::seed_from_u64(789);
-        let importances = pop.compute_pop_oob_feature_importance(
+        let importances = pop.compute_pop_mda_feature_importance(
             &data,
             3,
             &mut rng,
@@ -2349,7 +2818,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_scaling_behavior() {
+    fn test_compute_pop_mda_feature_importance_scaling_behavior() {
         let pop1 = Population::test_with_n_overlapping_features(4, 2);
         let data = create_simple_test_data(12, 8);
         let agg_method = ImportanceAggregation::median;
@@ -2357,7 +2826,7 @@ mod tests {
         let mut rng1 = ChaCha8Rng::seed_from_u64(456);
         let mut rng2 = ChaCha8Rng::seed_from_u64(456);
 
-        let unscaled = pop1.compute_pop_oob_feature_importance(
+        let unscaled = pop1.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng1,
@@ -2366,7 +2835,7 @@ mod tests {
             false,
             None,
         );
-        let scaled = pop1.compute_pop_oob_feature_importance(
+        let scaled = pop1.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng2,
@@ -2391,12 +2860,12 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_pop_oob_feature_importance_dispersion_calculation() {
+    fn test_compute_pop_mda_feature_importance_dispersion_calculation() {
         let pop = Population::test_with_n_overlapping_features(3, 2);
         let data = create_simple_test_data(12, 6);
 
         let mut rng1 = ChaCha8Rng::seed_from_u64(123);
-        let mean_result = pop.compute_pop_oob_feature_importance(
+        let mean_result = pop.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng1,
@@ -2407,7 +2876,7 @@ mod tests {
         );
 
         let mut rng2 = ChaCha8Rng::seed_from_u64(123);
-        let median_result = pop.compute_pop_oob_feature_importance(
+        let median_result = pop.compute_pop_mda_feature_importance(
             &data,
             5,
             &mut rng2,

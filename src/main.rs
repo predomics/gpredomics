@@ -75,9 +75,10 @@ fn main() {
         match Experiment::load_auto(&experiment_path) {
             Ok(mut experiment) => {
                 if let Some(output_path) = &args.export_params {
-                    let yaml = serde_yaml::to_string(&experiment.parameters)
-                        .expect("Failed to serialize parameters");
-                    std::fs::write(output_path, yaml).expect("Failed to write parameters file");
+                    experiment
+                        .parameters
+                        .save(output_path)
+                        .expect("Failed to export parameters");
                     info!("Parameters exported to {}", output_path);
                     return;
                 }
@@ -173,6 +174,7 @@ fn main() {
     logger.flush();
 }
 
+/// Command line arguments parser
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {

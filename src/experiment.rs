@@ -15,30 +15,49 @@ use serde::{Deserialize, Serialize};
 // Importance structures and methods
 //-----------------------------------------------------------------------------
 
+/// Scope at which feature importance is computed
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ImportanceScope {
-    // Importance can be computed on : an individual (oob), a population (FBM), a collection of population (between folds)
-    Collection,                     // Collection of populations <=> Inter-folds FBM
-    Population { id: usize },       // Intra-fold FBM (ID = Fold number)
-    Individual { model_hash: u64 }, // Individual
+    /// Aggregated across all populations (e.g., inter-fold FBM results).
+    Collection,
+    /// Specific to a single population
+    Population {
+        /// Population ID, e.g., fold number in CV
+        id: usize,
+    },
+    /// Specific to a single individual model
+    Individual {
+        /// Model hash
+        model_hash: u64,
+    },
 }
 
+/// Type of feature importance computed
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ImportanceType {
+    /// Mean Decrease in Accuracy (permutation importance)
     MDA,
+    /// Prevalence at the population level
     PrevalencePop,
+    /// Prevalence at the cross-validation level
     PrevalenceCV,
+    /// Coefficient values
     Coefficient,
+    /// Posterior probability from Bayesian MCMC
     PosteriorProbability,
 }
 
+/// Method used to aggregate importance values
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
 pub enum ImportanceAggregation {
+    /// Mean aggregation
     mean,
+    /// Median aggregation
     median,
 }
 
+// To-do: re-implement these structs if needed later
 // pub struct FeatureImportance {
 //     // pub scope: ImportanceScope,
 //     pub mda: Vec<Importance>, // cv/pop level
@@ -60,32 +79,53 @@ pub enum ImportanceAggregation {
 //     pub prevalence_cv_pct: Vec<Importance>,  // cv level
 // }
 
+/// Feature importance complete information
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Importance {
+    /// Type of importance
     pub importance_type: ImportanceType,
+    /// Index of the feature whose importance is computed
     pub feature_idx: usize,
+    /// Scope of importance
     pub scope: ImportanceScope,
+    /// Aggregation method used
     pub aggreg_method: Option<ImportanceAggregation>,
+    /// Importance value
     pub importance: f64,
+    /// Whether the importance is scaled
     pub is_scaled: bool,
+    /// Dispersion of the importance value
     pub dispersion: f64,
+    /// Percentage of the scope covered
     pub scope_pct: f64,
-    pub direction: Option<usize>, // the associated class for MCMC & Coefficient
+    /// If applicable, direction of the importance
+    pub direction: Option<usize>,
 }
 
+/// Collection of feature importances
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ImportanceCollection {
+    /// Vector of computed importances
     pub importances: Vec<Importance>,
 }
 
 impl ImportanceCollection {
+    /// Creates a new empty ImportanceCollection
     pub fn new() -> ImportanceCollection {
         ImportanceCollection {
             importances: Vec::new(),
         }
     }
 
-    // Return importances associated with a feature
+    /// Returns importances associated with a feature
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - Index of the feature
+    ///
+    /// # Returns
+    ///
+    /// ImportanceCollection containing importances for the specified feature
     pub fn feature(&self, idx: usize) -> ImportanceCollection {
         let importances = self
             .importances
@@ -97,7 +137,35 @@ impl ImportanceCollection {
         ImportanceCollection { importances }
     }
 
-    // Return importances associated with a scope and/or type
+    /// Filters importances based on scope and type
+    ///
+    /// # Arguments
+    ///
+    /// * `scope` - Optional scope to filter by
+    /// * `imp_type` - Optional importance type to filter by
+    ///
+    /// # Returns
+    ///
+    /// ImportanceCollection containing filtered importances
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::experiment::{ImportanceCollection, Importance, ImportanceType, ImportanceScope, ImportanceAggregation};
+    /// let importance_collection = ImportanceCollection::new();
+    ///
+    /// // Fill importance_collection with data
+    /// // importance_collection.importances.push(Importance { feature_idx: 0, importance_type: ImportanceType::MDA, scope: ImportanceScope::Population { id: 0 }, aggreg_method: Some(ImportanceAggregation::mean), importance: 0.5, is_scaled: true, dispersion: 0.1, scope_pct: 1.0, direction: None });
+    /// // importance_collection.importances.push(Importance { feature_idx: 1, importance_type: ImportanceType::Coefficient, scope: ImportanceScope::Collection, aggreg_method: Some(ImportanceAggregation::median), importance: 0.3, is_scaled: false, dispersion: 0.2, scope_pct: 0.8, direction: Some(1) });
+    ///
+    /// // Filter by scope and type
+    /// let filtered = importance_collection.filter(Some(ImportanceScope::Population { id: 0 }), Some(ImportanceType::MDA));
+    /// // assert_eq!(filtered.importances.len(), 1);
+    /// // assert_eq!(filtered.importances[0].feature_idx, 0);
+    /// // assert_eq!(filtered.importances[0].importance_type, ImportanceType::MDA);
+    /// // assert!(matches!(filtered.importances[0].scope, ImportanceScope::Population { id: 0 }));
+    /// ```
+    ///
     pub fn filter(
         &self,
         scope: Option<ImportanceScope>,
@@ -131,6 +199,36 @@ impl ImportanceCollection {
         ImportanceCollection { importances }
     }
 
+    /// Retrieves the top percentage of features based on importance.
+    ///
+    ///  # Arguments
+    ///
+    /// * `pct` - Percentage of top features to retrieve (between 0.0 and 1.0).
+    ///
+    /// # Returns
+    ///
+    /// ImportanceCollection containing the top percentage of features.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pct` is not between 0.0 and 1.0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::experiment::{ImportanceCollection, Importance, ImportanceType, ImportanceScope, ImportanceAggregation};
+    /// let mut importance_collection = ImportanceCollection::new();
+    /// // Fill importance_collection with data
+    /// // importance_collection.importances.push(Importance { feature_idx: 0, importance_type: ImportanceType::MDA, scope: ImportanceScope::Population { id: 0 }, aggreg_method: Some(ImportanceAggregation::mean), importance: 0.5, is_scaled: true, dispersion: 0.1, scope_pct: 1.0, direction: None });
+    /// // importance_collection.importances.push(Importance { feature_idx: 1, importance_type: ImportanceType::Coefficient, scope: ImportanceScope::Collection, aggreg_method: Some(ImportanceAggregation::median), importance: 0.3, is_scaled: false, dispersion: 0.2, scope_pct: 0.8, direction: Some(1) });
+    /// // importance_collection.importances.push(Importance { feature_idx: 2, importance_type: ImportanceType::MDA, scope: ImportanceScope::Collection, aggreg_method: Some(ImportanceAggregation::mean), importance: 0.7, is_scaled: true, dispersion: 0.15, scope_pct: 0.9, direction: None });
+    ///
+    /// // Get top 50% features
+    /// let top_features = importance_collection.get_top(0.5);
+    /// // assert_eq!(top_features.importances.len(), 2);
+    /// // assert_eq!(top_features.importances[0].feature_idx, 2); // importance 0.7
+    /// // assert_eq!(top_features.importances[1].feature_idx, 0); // importance 0.5
+    /// ```
     pub fn get_top(&self, pct: f64) -> ImportanceCollection {
         assert!((0.0..=1.0).contains(&pct));
         let mut subset = self.importances.clone();
@@ -142,6 +240,16 @@ impl ImportanceCollection {
         }
     }
 
+    /// Displays feature importance in terminal format.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Reference to the Data object.
+    /// * `nb_features` - Number of features to display.
+    ///
+    /// # Returns
+    ///
+    /// String containing the formatted feature importance display.
     pub fn display_feature_importance_terminal(&self, data: &Data, nb_features: usize) -> String {
         let mut map: std::collections::HashMap<usize, (f64, f64)> =
             std::collections::HashMap::new();
@@ -184,37 +292,69 @@ impl ImportanceCollection {
 // Experiment structures and methods
 //-----------------------------------------------------------------------------
 
+/// Experiment associated metadata
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ExperimentMetadata {
-    MCMC { trace: MCMCAnalysisTrace },
-    Jury { jury: Jury },
+    /// Bayesian MCMC trace to analyze posterior distributions
+    MCMC {
+        /// Complete MCMC analysis trace
+        trace: MCMCAnalysisTrace,
+    },
+    /// Voting Jury results
+    Jury {
+        /// Jury population
+        jury: Jury,
+    },
 }
 
+/// Complete experiment data and results
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Experiment {
+    /// Experiment ID, i.e., timestamp and algorithm
     pub id: String,
+    /// Timestamp of the experiment
     pub timestamp: String,
+    /// Gpredomics version and git hash used
     pub gpredomics_version: String,
+    /// Parameters used
     pub parameters: Param,
 
-    // Data
+    /// Training data
     pub train_data: Data,
+    /// If provided, test data
     pub test_data: Option<Data>,
 
-    // Results
-    // In CV-mode, Vec<Vec<Population>>.len() = outer_folds, in non-CV mode Vec<Vec<Population>>.len() = 1
+    /// In CV-mode, Vec<Vec<Population>>.len() = outer_folds, in non-CV mode Vec<Vec<Population>>.len() = 1
     pub collections: Vec<Vec<Population>>,
+
+    /// The best final population after training, i.e. the last generation for non-CV genetic algorithm and the best max_nb_of_models across k for non-CV beam.
+    /// In CV-mode, the best models are extracted from above population (FBM) per fold and merged.
     pub final_population: Option<Population>,
+
+    /// If requested, computed feature importance collection
     pub importance_collection: Option<ImportanceCollection>,
 
+    /// In CV-mode, stores the train/validation IDs per fold to reconstruct CV object
     pub cv_folds_ids: Option<Vec<(Vec<String>, Vec<String>)>>,
 
-    // Metadata
+    /// Execution time in seconds
     pub execution_time: f64,
+
+    /// If available, other metadata associated with the experiment
     pub others: Option<ExperimentMetadata>,
 }
 
 impl Experiment {
+    /// Computes feature importance for the experiment.
+    ///
+    /// Handles both cross-validation (CV) and non-CV modes.
+    ///
+    /// In non-CV mode, computes importance on the final population's Family of Best Models (FBM).
+    /// In CV mode, reconstructs the CV object and computes intra-fold and inter-fold importances.
+    ///
+    /// # Panics
+    ///
+    /// Panics if CV reconstruction fails or if CV fold IDs are missing when expected.
     pub fn compute_importance(&mut self) {
         let mut rng = ChaCha8Rng::seed_from_u64(self.parameters.general.seed);
         if matches!(self.cv_folds_ids, None) {
@@ -224,9 +364,9 @@ impl Experiment {
                     .as_ref()
                     .unwrap()
                     .select_best_population(self.parameters.cv.cv_best_models_ci_alpha)
-                    .compute_pop_oob_feature_importance(
+                    .compute_pop_mda_feature_importance(
                         &self.train_data,
-                        self.parameters.importance.n_permutations_oob,
+                        self.parameters.importance.n_permutations_mda,
                         &mut rng,
                         &self.parameters.importance.importance_aggregation,
                         self.parameters.importance.scaled_importance,
@@ -248,9 +388,9 @@ impl Experiment {
                     Ok(cv) => {
                         debug!("Computing Intra-fold and Inter-fold importances...");
                         self.importance_collection = Some(
-                            cv.compute_cv_oob_feature_importance(
+                            cv.compute_cv_mda_feature_importance(
                                 &self.parameters,
-                                self.parameters.importance.n_permutations_oob,
+                                self.parameters.importance.n_permutations_mda,
                                 &mut rng,
                                 &self.parameters.importance.importance_aggregation,
                                 self.parameters.importance.scaled_importance,
@@ -269,6 +409,15 @@ impl Experiment {
         }
     }
 
+    /// Generates a formatted string displaying the experiment results.
+    ///
+    /// # Returns
+    ///
+    /// String containing the formatted experiment results.
+    ///
+    /// # Panics
+    ///
+    /// Panics if CV reconstruction fails or if no final population is available.
     pub fn display_results(&self) -> String {
         let mut text = String::new();
         text.push_str(&format!(
@@ -380,6 +529,24 @@ impl Experiment {
         text
     }
 
+    /// Evaluates the final population on a new dataset.
+    ///
+    /// # Arguments
+    ///
+    /// * `X_path` - Path to the feature data file.
+    /// * `y_path` - Path to the label data file.
+    ///
+    /// # Panics
+    ///
+    /// Panics if loading the new data fails or if the new data is not compatible with the training data.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::experiment::Experiment;
+    /// let mut experiment = Experiment::load_auto("experiment.mp").unwrap();
+    /// experiment.evaluate_on_new_dataset("new_X.csv", "new_y.csv");
+    /// ```
     pub fn evaluate_on_new_dataset(&mut self, X_path: &str, y_path: &str) {
         let mut new_data = Data::new();
 
@@ -426,6 +593,7 @@ impl Experiment {
         }
     }
 
+    /// Saves the experiment in a suitable format based on file extension.
     pub fn save_auto<P: AsRef<std::path::Path>>(
         &self,
         path: P,
@@ -449,7 +617,7 @@ impl Experiment {
         }
     }
 
-    /// Save to JSON
+    /// Saves to JSON (human readable, but may have slight inaccuracies for decimal values)
     fn save_json<P: AsRef<std::path::Path>>(
         &self,
         path: P,
@@ -460,7 +628,7 @@ impl Experiment {
         Ok(())
     }
 
-    /// Save to messagepack (R and Rust compatible)
+    /// Saves as MessagePack (language interoperable)
     fn save_messagepack<P: AsRef<std::path::Path>>(
         &self,
         path: P,
@@ -473,7 +641,7 @@ impl Experiment {
         Ok(())
     }
 
-    /// Save as bincode (Rust compatible only)
+    /// Saves as Bincode (compact binary, Rust-only)
     fn save_bincode<P: AsRef<std::path::Path>>(
         &self,
         path: P,
@@ -483,6 +651,15 @@ impl Experiment {
         Ok(())
     }
 
+    /// Loads the experiment from a file, automatically detecting the format based on file extension.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the experiment file.
+    ///
+    /// # Returns
+    ///
+    /// Result containing the loaded Experiment or an error.
     pub fn load_auto<P: AsRef<std::path::Path>>(
         path: P,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -501,12 +678,14 @@ impl Experiment {
         }
     }
 
+    /// Loads from JSON format
     fn load_json<P: AsRef<std::path::Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
         let experiment: Experiment = serde_json::from_str(&content)?;
         Ok(experiment)
     }
 
+    /// Loads from MessagePack format
     fn load_messagepack<P: AsRef<std::path::Path>>(
         path: P,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -515,6 +694,7 @@ impl Experiment {
         Ok(experiment)
     }
 
+    /// Loads from Bincode format
     fn load_bincode<P: AsRef<std::path::Path>>(
         path: P,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -523,6 +703,17 @@ impl Experiment {
         Ok(experiment)
     }
 
+    /// Attempts to load the experiment using multiple formats as a fallback mechanism.
+    ///
+    /// Tries MessagePack, then Bincode, and finally JSON.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the experiment file.
+    ///
+    /// # Returns
+    ///
+    /// Result containing the loaded Experiment or an error if all formats fail.
     fn load_with_fallback<P: AsRef<std::path::Path>>(
         path: P,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -543,6 +734,14 @@ impl Experiment {
         Err("Unable to load the experience".into())
     }
 
+    /// Computes voting results using the final population.
+    ///
+    /// If there is more than one expert in the final population, a Jury is created and evaluated.
+    /// The results are stored in the `others` field of the Experiment.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no final population available.
     pub fn compute_voting(&mut self) {
         let mut jury;
         let mut voting_pop = self.final_population.clone().unwrap();
@@ -838,6 +1037,7 @@ mod tests {
     }
 
     impl Experiment {
+        /// Creates a test Experiment instance for testing purposes
         pub fn test() -> Experiment {
             Experiment {
                 id: "test_exp_001".to_string(),

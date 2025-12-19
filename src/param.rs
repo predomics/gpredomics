@@ -9,53 +9,89 @@ use std::io::BufReader;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
+
+/// Fit function options for model evaluation
 pub enum FitFunction {
+    /// Area Under the Curve (AUC) of the Receiver Operating Characteristic (ROC)
     auc,
-    specificity,
+    /// True Positive Rate (TPR), also known as Sensitivity.
     sensitivity,
+    /// True Negative Rate (TNR), also known as Specificity.
+    specificity,
+    /// Matthews Correlation Coefficient (MCC)
     mcc,
+    /// Harmonic mean of precision and recall (F1 Score)
     f1_score,
+    /// Negative Predictive Value (NPV)
     npv,
+    /// Positive Predictive Value (PPV)
     ppv,
+    /// Geometric Mean of sensitivity and specificity
     g_mean,
 }
 
+/// GPU memory management policies
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum GpuMemoryPolicy {
+    /// Strict memory management policy.
     Strict,
+    /// Adapt used memory according to available resources.
     Adaptive,
+    /// Maximize used memory usage for optimal performance.
     Performance,
 }
 
-// Field definitions and associated default values
-
+/// Main parameter structure encompassing all configuration sections
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Param {
+    /// General parameters section
     #[serde(default)]
     pub general: General,
-    #[serde(default)]
-    pub voting: Voting,
+
+    /// Data loading and prefiltering parameters section
     #[serde(default)]
     pub data: Data,
-    #[serde(default)]
-    pub ga: GA,
-    #[serde(default)]
-    pub beam: BEAM,
-    #[serde(default)]
-    pub mcmc: MCMC,
+
+    /// Cross-validation parameters section
     #[serde(default)]
     pub cv: CV,
+
+    /// Genetic Algorithm parameters section
+    #[serde(default)]
+    pub ga: GA,
+
+    /// Beam search parameters section
+    #[serde(default)]
+    pub beam: BEAM,
+
+    /// MCMC parameters section
+    #[serde(default)]
+    pub mcmc: MCMC,
+
+    /// Voting ensemble parameters section
+    #[serde(default)]
+    pub voting: Voting,
+
+    /// Feature importance computation parameters section
     #[serde(default)]
     pub importance: Importance,
+
+    /// GPU memory management parameters section
     #[serde(default)]
     pub gpu: GPU,
+
+    /// Experimental features section
     #[serde(default)]
     pub experimental: Experimental,
+
+    /// Internal tag for parameter source identification
     #[serde(skip)]
     pub tag: String,
 }
 
+/// General parameters
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct General {
     #[serde(default = "seed_default")]
     pub seed: u64,
@@ -108,6 +144,7 @@ pub struct General {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct Data {
     #[serde(default = "empty_string")]
     pub X: String,
@@ -146,6 +183,7 @@ pub struct Data {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct CV {
     #[serde(default = "folds_default")]
     pub inner_folds: usize,
@@ -164,6 +202,7 @@ pub struct CV {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct Voting {
     #[serde(default = "false_default")]
     pub vote: bool,
@@ -186,6 +225,7 @@ pub struct Voting {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct GA {
     #[serde(default = "pop_size_default")]
     pub population_size: u32,
@@ -196,9 +236,11 @@ pub struct GA {
     #[serde(default = "max_age_best_model_default")]
     pub max_age_best_model: usize,
     #[serde(default = "one_default")]
-    pub kmin: usize,
-    #[serde(default = "kmax_default")]
-    pub kmax: usize,
+    #[serde(alias = "kmin")]
+    pub k_min: usize,
+    #[serde(default = "k_max_default")]
+    #[serde(alias = "kmax")]
+    pub k_max: usize,
     #[serde(default = "ga_elite_pct_default")]
     pub select_elite_pct: f64,
     #[serde(default = "zero_default")]
@@ -224,13 +266,16 @@ pub struct GA {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct BEAM {
     #[serde(default = "beam_method_default")]
     pub method: BeamMethod,
     #[serde(default = "one_default")]
-    pub kmin: usize,
-    #[serde(default = "kmax_default")]
-    pub kmax: usize,
+    #[serde(alias = "kmin")]
+    pub k_start: usize,
+    #[serde(default = "k_max_default")]
+    #[serde(alias = "kmax")]
+    pub k_stop: usize,
     #[serde(default = "best_models_criterion_default")]
     pub best_models_criterion: f64,
     #[serde(default = "max_nb_of_models_default")]
@@ -238,6 +283,7 @@ pub struct BEAM {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct MCMC {
     #[serde(default = "n_iter_default")]
     pub n_iter: usize,
@@ -252,6 +298,7 @@ pub struct MCMC {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct GPU {
     #[serde(default = "memory_policy_default")]
     pub memory_policy: GpuMemoryPolicy,
@@ -264,11 +311,12 @@ pub struct GPU {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct Importance {
     #[serde(default = "false_default")]
     pub compute_importance: bool,
-    #[serde(default = "n_permutations_oob_default")]
-    pub n_permutations_oob: usize,
+    #[serde(default = "n_permutations_mda_default")]
+    pub n_permutations_mda: usize,
     #[serde(default = "false_default")]
     pub scaled_importance: bool,
     #[serde(default = "importance_aggregation_default")]
@@ -276,6 +324,7 @@ pub struct Importance {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub struct Experimental {}
 
 // Default section definitions
@@ -352,11 +401,56 @@ impl Default for Param {
 }
 
 impl Param {
+    /// Creates a new Param instance with default values
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Saves param to a YAML file
+    ///
+    /// # Arguments
+    ///
+    /// * `param` - Reference to the Param struct to be saved.
+    /// * `output_file` - Path to the output YAML file.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), Box<dyn Error>>` - Ok if saving is successful, Err with an error otherwise.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use gpredomics::param::Param;
+    /// let params = Param::default();
+    /// params.save("output_param.yaml")?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+        let yaml = serde_yaml::to_string(self)?;
+        std::fs::write(path, yaml)?;
+        Ok(())
+    }
 }
 
+/// Loads and validates parameters from a YAML file.
+///
+/// # Arguments
+///
+/// * `param_file` - Path to the YAML parameter file.
+///
+/// # Returns
+///
+/// * `Result<Param, Box<dyn Error>>` - Loaded and validated parameters or an error.
+///
+/// # Errors
+///
+/// * Returns an error if the file cannot be read or if validation fails.
+///
+/// # Examples
+/// ```
+/// # use gpredomics::param::get;
+/// # let params = get("samples/tests/param.yaml".to_string())?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     let param_file_reader = File::open(param_file)?;
     let param_reader = BufReader::new(param_file_reader);
@@ -368,6 +462,27 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
     Ok(config)
 }
 
+/// Validates the provided parameters and issues warnings for potential misconfigurations.
+///
+/// # Arguments
+///
+/// * `param` - Mutable reference to the Param struct to be validated.
+///
+/// # Returns
+///
+/// * `Result<(), String>` - Ok if validation passes, Err with a message if validation fails.
+///
+/// # Warnings
+///
+/// * Issues warnings for specific parameter combinations that may lead to suboptimal performance or data leakage.
+///
+/// # Examples
+/// ```
+/// # use gpredomics::param::{Param, validate};
+/// let mut params = Param::default();
+/// validate(&mut params)?;
+/// # Ok::<(), String>(())
+/// ```
 pub fn validate(param: &mut Param) -> Result<(), String> {
     if param.general.log_base.len() > 0 {
         param.general.display_colorful = false;
@@ -492,7 +607,7 @@ fn validate_penalties(param: &mut Param) -> Result<(), String> {
     Ok(())
 }
 
-// Default value definitions
+/// Default value definitions
 
 fn seed_default() -> u64 {
     4815162342
@@ -551,7 +666,7 @@ fn log_level_default() -> String {
 fn folds_default() -> usize {
     5
 }
-fn n_permutations_oob_default() -> usize {
+fn n_permutations_mda_default() -> usize {
     100
 }
 fn importance_aggregation_default() -> ImportanceAggregation {
@@ -623,7 +738,7 @@ fn voting_default() -> VotingMethod {
 fn diversity_voting_default() -> f64 {
     5.0
 }
-fn kmax_default() -> usize {
+fn k_max_default() -> usize {
     200
 }
 fn pop_size_default() -> u32 {

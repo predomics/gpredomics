@@ -16,13 +16,16 @@ use std::sync::atomic::AtomicBool;
 
 /// Cross-validation dataset implementation for machine learning workflows.
 ///
-/// Splits data into N validation folds and creates N training subsets, each excluding
+/// Splits data into N validation folds and creates N training subsets, each excluding (k-1 vs 1 strategy)
 /// its corresponding validation fold. Supports stratified sampling to maintain class
 /// distribution balance across folds. May contain population collections derived from algorithms.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CV {
-    pub validation_folds: Vec<Data>,
+    /// Training sets corresponding to each validation fold.
     pub training_sets: Vec<Data>,
+    /// Validation folds created from the original dataset.
+    pub validation_folds: Vec<Data>,
+    /// Collections of populations for each fold after algorithm execution.
     pub fold_collections: Vec<Vec<Population>>,
 }
 
@@ -33,6 +36,7 @@ impl CV {
     /// maintains the same class distribution as the original dataset.
     ///
     /// # Arguments
+    ///
     /// * `data` - The dataset to split into folds  
     /// * `folds` - Number of validation folds to create
     /// * `rng` - Random number generator for stratified sampling
@@ -87,8 +91,10 @@ impl CV {
     /// * `stratify_by` - Column name in sample annotations to use for secondary stratification
     ///
     /// # Panics
-    /// Panics if the stratify_by column is not found in sample annotations or if
-    /// sample annotations are not available in the dataset.
+    /// Panics if:
+    ///
+    /// * the stratify_by column is not found in sample annotations
+    /// * sample annotations are not available in the dataset.
     pub fn new_stratified_by(
         data: &Data,
         folds: usize,
@@ -170,6 +176,16 @@ impl CV {
     }
 
     /// Creates a new cross-validation instance based on parameters.    
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The dataset to split into folds
+    /// * `param` - Parameters containing cross-validation settings
+    /// * `rng` - Random number generator for stratified sampling
+    /// * `k_folds` - Number of validation folds to create
+    ///
+    /// # Returns
+    /// Returns a `CV` instance configured according to the provided parameters.
     pub fn new_from_param(data: &Data, param: &Param, rng: &mut ChaCha8Rng, k_folds: usize) -> CV {
         if param.cv.stratify_by.len() > 0 && data.sample_annotations.is_some() {
             CV::new_stratified_by(data, k_folds, rng, param.cv.stratify_by.as_str())
@@ -185,10 +201,15 @@ impl CV {
     /// including AUC scores for training and validation sets.
     ///
     /// # Arguments
+    ///
     /// * `algo` - Algorithm function to execute on each training fold
     /// * `param` - Parameters to pass to the algorithm
     /// * `thread_number` - Number of threads to use in the thread pool
     /// * `running` - Atomic boolean flag for early termination control
+    ///
+    /// # Panics
+    ///
+    /// Panics if the algorithm does not return any populations for a fold.
     pub fn pass<F>(&mut self, algo: F, param: &Param, running: Arc<AtomicBool>)
     where
         F: Fn(&mut Data, &Param, Arc<AtomicBool>) -> Vec<Population> + Send + Sync,
@@ -262,7 +283,7 @@ impl CV {
     /// # Errors
     /// Returns an error if the number of fold collections, training sets, and
     /// validation folds are inconsistent.
-    pub fn compute_cv_oob_feature_importance(
+    pub fn compute_cv_mda_feature_importance(
         &self,
         cv_param: &Param,
         permutations: usize,
@@ -306,7 +327,7 @@ impl CV {
                 &self.training_sets[i]
             };
 
-            let fold_imp = fold_last_fbm.compute_pop_oob_feature_importance(
+            let fold_imp = fold_last_fbm.compute_pop_mda_feature_importance(
                 importance_data,
                 permutations,
                 main_rng,
@@ -381,20 +402,31 @@ impl CV {
 
     /// Extracts the `Family of Best Models` population for a specific fold.
     ///
-    /// Returns the `Family of Best Models` population from the specified fold.
     /// For beam search algorithms, selects the N best models within the collection.
     /// For other algorithms, returns the last population from the fold's evolution.
     /// Optionally refits the model on validation data.
     ///
     /// # Arguments
+    ///
     /// * `fold_idx` - Index of the fold to extract the model from
     /// * `param` - Parameters containing algorithm type and fitting options
     ///
     /// # Returns
+    ///
     /// Returns the final best model population for the specified fold.
     ///
     /// # Panics
+    ///
     /// Panics if `pass()` has not been called first or if fold_idx is invalid.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// # use gpredomics::cv::CV;
+    /// # use gpredomics::param::Param;
+    /// # let cv = CV::new();
+    /// # let param = Param::default();
+    /// let fbm_fold_0 = cv.extract_fold_fbm(0, &param);
+    /// ```
     pub fn extract_fold_fbm(&self, fold_idx: usize, param: &Param) -> Population {
         assert_ne!(
             self.fold_collections.len(),
@@ -404,7 +436,7 @@ impl CV {
 
         let mut pop: Population;
 
-        // For Beam, compute FBM on [kmin; kmax]
+        // For Beam, compute FBM on [k_min; k_max]
         if param.general.algo == "beam" {
             pop = beam::keep_n_best_model_within_collection(
                 &self.fold_collections[fold_idx],
@@ -431,13 +463,15 @@ impl CV {
         pop
     }
 
-    /// Gets f`Family of Best Models` from all folds and merges them into a single population.
+    /// Gets `Family of Best Models` from all folds and merges them into a single population.
     ///
     /// Collects the `Family of Best Models` from each fold, displays their
     /// performance information, and merges all individuals into a single population
     /// for overall analysis.
     ///
     /// # Arguments
+    ///
+    /// * `param` - Parameters containing algorithm settings
     ///
     /// # Returns
     /// Returns a merged population containing individuals from all `Family of Best Models`.
@@ -523,15 +557,18 @@ impl CV {
     /// sample names exist in the original dataset and that collection counts match.
     ///
     /// # Arguments
+    ///
     /// * `data` - Original dataset containing all samples
     /// * `fold_train_valid_names` - Tuples of (training_names, validation_names) for each fold
     /// * `fold_collections` - Pre-existing population collections for each fold
     ///
     /// # Returns
+    ///
     /// Returns `Ok(CV)` with reconstructed cross-validation structure, or `Err(String)`
     /// if reconstruction fails.
     ///
     /// # Errors
+    ///
     /// * Returns error if the number of name pairs doesn't match the number of collections
     /// * Returns error if any sample name cannot be found in the original dataset
     pub fn reconstruct(
@@ -588,6 +625,11 @@ mod tests {
     use std::collections::HashMap;
 
     impl CV {
+        /// Creates a test CV instance with predefined data and populations.
+        ///
+        /// # Returns
+        ///
+        /// Returns a `CV` instance with test data and populations for unit testing.
         pub fn test() -> CV {
             // Create training and validation sets
             let training_sets = vec![
@@ -972,14 +1014,14 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "No population available")]
-    fn test_compute_cv_oob_feature_importance_missing_fold_collections() {
+    fn test_compute_cv_mda_feature_importance_missing_fold_collections() {
         let mut cv = CV::test();
         cv.fold_collections = vec![];
 
         let cv_param = Param::default();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let _ = cv.compute_cv_oob_feature_importance(
+        let _ = cv.compute_cv_mda_feature_importance(
             &cv_param,
             5,
             &mut rng,
@@ -990,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_inconsistent_fold_sizes() {
+    fn test_compute_cv_mda_feature_importance_inconsistent_fold_sizes() {
         let mut cv = CV::test();
         cv.fold_collections = vec![vec![Population::test_with_these_features(&[0, 1])]];
         cv.training_sets = vec![Data::test_with_these_features(&[0, 1])];
@@ -1002,7 +1044,7 @@ mod tests {
         let cv_param = Param::default();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = cv.compute_cv_oob_feature_importance(
+        let result = cv.compute_cv_mda_feature_importance(
             &cv_param,
             5,
             &mut rng,
@@ -1019,7 +1061,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_aggregation_across_folds_mean() {
+    fn test_compute_cv_mda_feature_importance_aggregation_across_folds_mean() {
         use crate::ga;
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let data = Data::specific_test(40, 20);
@@ -1030,7 +1072,7 @@ mod tests {
         cv_param.data.feature_maximal_adj_pvalue = 1.0;
         cv.pass(
             |d: &mut Data, p: &Param, r: Arc<AtomicBool>| match p.general.algo.as_str() {
-                "ga" => ga::ga(d, &mut None, &cv_param, r),
+                "ga" => ga::ga(d, &mut None, &mut None, &cv_param, r),
                 _ => panic!("Such algorithm is not useful for the test."),
             },
             &cv_param,
@@ -1038,7 +1080,7 @@ mod tests {
         );
 
         let result = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng,
@@ -1067,14 +1109,14 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_aggregation_across_folds_median() {
+    fn test_compute_cv_mda_feature_importance_aggregation_across_folds_median() {
         let cv = CV::test();
         let mut cv_param = Param::default();
         cv_param.cv.cv_best_models_ci_alpha = 0.01; // Include most models in FBM
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng,
@@ -1097,14 +1139,14 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_scope_pct_calculation() {
+    fn test_compute_cv_mda_feature_importance_scope_pct_calculation() {
         let cv = CV::test();
         let mut cv_param = Param::default();
         cv_param.cv.cv_best_models_ci_alpha = 0.01; // Include most models in FBM
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng,
@@ -1130,7 +1172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_cascade_mode_includes_individual_importances() {
+    fn test_compute_cv_mda_feature_importance_cascade_mode_includes_individual_importances() {
         let cv = CV::test();
         let mut cv_param = Param::default();
         cv_param.cv.cv_best_models_ci_alpha = 0.01; // Include most models in FBM
@@ -1138,7 +1180,7 @@ mod tests {
 
         // cascade = true
         let result_cascade = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng,
@@ -1151,7 +1193,7 @@ mod tests {
         // cascade = false
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
         let result_no_cascade = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng2,
@@ -1182,7 +1224,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_on_validation_vs_training_data() {
+    fn test_compute_cv_mda_feature_importance_on_validation_vs_training_data() {
         use crate::ga;
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let data = Data::specific_test(50, 30);
@@ -1193,7 +1235,7 @@ mod tests {
         cv_param.data.feature_maximal_adj_pvalue = 1.0;
         cv.pass(
             |d: &mut Data, p: &Param, r: Arc<AtomicBool>| match p.general.algo.as_str() {
-                "ga" => ga::ga(d, &mut None, &cv_param, r),
+                "ga" => ga::ga(d, &mut None, &mut None, &cv_param, r),
                 _ => panic!("Such algorithm is not useful for the test."),
             },
             &cv_param,
@@ -1205,7 +1247,7 @@ mod tests {
 
         cv_param.cv.fit_on_valid = true;
         let result_validation = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng1,
@@ -1219,7 +1261,7 @@ mod tests {
         // on_validation = false
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
         let result_training = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng2,
@@ -1252,7 +1294,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_scaled_importance_flag() {
+    fn test_compute_cv_mda_feature_importance_scaled_importance_flag() {
         let cv = CV::test();
         let mut cv_param = Param::default();
         cv_param.cv.cv_best_models_ci_alpha = 0.01; // Include most models in FBM
@@ -1260,7 +1302,7 @@ mod tests {
         // scaled = true
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let result_scaled = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng1,
@@ -1273,7 +1315,7 @@ mod tests {
         // scaled = false
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
         let result_unscaled = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng2,
@@ -1305,7 +1347,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn test_compute_cv_oob_feature_importance_empty_fold_collections() {
+    fn test_compute_cv_mda_feature_importance_empty_fold_collections() {
         let mut cv = CV::test();
         cv.fold_collections = vec![vec![]];
         cv.training_sets = vec![];
@@ -1315,7 +1357,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng,
@@ -1332,14 +1374,14 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_feature_filtering_in_aggregation() {
+    fn test_compute_cv_mda_feature_importance_feature_filtering_in_aggregation() {
         let cv = CV::test();
         let mut cv_param = Param::default();
         cv_param.cv.cv_best_models_ci_alpha = 0.01; // Include most models in FBM
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng,
@@ -1368,14 +1410,14 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_cv_oob_feature_importance_population_id_assignment() {
+    fn test_compute_cv_mda_feature_importance_population_id_assignment() {
         let cv = CV::test();
         let mut cv_param = Param::default();
         cv_param.cv.cv_best_models_ci_alpha = 0.01; // Include most models in FBM
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &cv_param,
                 5,
                 &mut rng,
@@ -1429,7 +1471,7 @@ mod tests {
         assert!(cv.fold_collections.len() > 0);
 
         let importance_collection = cv
-            .compute_cv_oob_feature_importance(
+            .compute_cv_mda_feature_importance(
                 &param,
                 1,
                 &mut rng,

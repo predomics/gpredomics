@@ -6,21 +6,23 @@ use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use wgpu::{BindGroupEntry, BindingResource, CommandEncoderDescriptor, ComputePassDescriptor};
 
-/// Convert a HashMap<(row, col), f64> to CSR format for an R x C matrix.
-///
-/// - `mat_map`: A mapping from (row, col) -> value, representing nonzero entries.
-/// - `row_selection` : A mapping initial row -> index representing a selection of rows
-///
-/// Returns (row_ptr, col_idx, val):
-///   - `row_ptr` has length R+1.
-///   - `col_idx` and `val` each have length = total number of nonzeros.
-///   - For row r, the nonzero entries are in the index range [row_ptr[r] .. row_ptr[r+1])
-///     of col_idx/val.
+/// Converts a HashMap<(row, col), f64> to CSR format for an R x C matrix.
 ///
 /// Indices are stored as `u32`, and values as `f32`.
 ///
-/// Note: This function does no checks for out-of-bounds row/col in `mat_map`. If you want
-///       to ensure row < R and col < C, add boundary checks as needed.
+/// # Arguments
+///
+/// * `mat_map` - A mapping from (row, col) -> value, representing nonzero entries.
+/// * `row_selection` - A mapping initial row -> index representing a selection of rows
+///
+/// # Returns
+///
+/// A (row_ptr, col_idx, val): where `row_ptr` has length R+1, `col_idx` and `val` each have length = total number of nonzeros.
+/// For row r, the nonzero entries are in the index range [row_ptr[r] .. row_ptr[r+1]) of col_idx/val.
+///
+/// # Notes
+/// This function does no checks for out-of-bounds row/col in `mat_map`. If you want
+/// to ensure row < R and col < C, add boundary checks as needed.
 fn hashmap_to_csr(
     mat_map: &HashMap<(usize, usize), f64>,
     column_selection: &HashMap<usize, usize>,
@@ -113,18 +115,17 @@ fn hashmap_to_csr(
     (row_ptr, col_idx, val)
 }
 
-/// Convert a vector of hashmaps representing columns of a matrix B
-/// into CSC (Compressed Sparse Column) format with f32 values.
+/// Converts a vector of hashmaps representing columns of a matrix B into CSC (Compressed Sparse Column) format with f32 values.
 ///
-/// - `mat_cols`: length = number of columns, so column `c` is b_cols[c].
-/// - Each column is a HashMap<row_u8, value_f64>.
-/// - `R`: number of rows in B (optional boundary check).
+/// # Arguments
 ///
-/// Returns (col_ptr, row_idx, val):
-///   - `col_ptr`: length = num_cols + 1
-///   - `row_idx`, `val`: each length = total number of nonzeros
-///   - For column c, the nonzero entries are in index range [col_ptr[c] .. col_ptr[c+1])
-///     of `row_idx`/`val`.
+/// * `mat_cols` - length = number of columns, so column `c` is b_cols[c], each column is a HashMap<row_u8, value_f64>.
+/// * `R` - number of rows in B (optional boundary check).
+///
+/// # Returns
+///
+///  A (col_ptr, row_idx, val) where `col_ptr`: length = num_cols + 1, `row_idx`, `val`: each length = total number of nonzeros
+///  For column c, the nonzero entries are in index range [col_ptr[c] .. col_ptr[c+1]) of `row_idx`/`val`.
 fn vechash_to_csc(
     mat_cols: &Vec<HashMap<usize, i8>>,
     row_selection: &HashMap<usize, usize>,
@@ -208,8 +209,10 @@ struct MatrixMultParams {
     epsilon: f32, // possibly some padding
 }
 
+/// GPU-based assay computation using WGPU
 #[derive(Clone)]
 #[allow(dead_code)]
+#[allow(missing_docs)]
 pub struct GpuAssay {
     // WGPU core
     pub config: GPU,
@@ -263,6 +266,7 @@ impl GpuAssay {
         ))
     }
 
+    /// Log the current GPU memory status based on configuration and device limits.
     pub fn log_memory_status(&self) {
         log::debug!(
             "GPU Memory Policy: {:?} | Buffer: {}/{}MB | Total: {}/{}MB",
@@ -274,6 +278,19 @@ impl GpuAssay {
         );
     }
 
+    /// Asynchronous constructor for GpuAssay
+    ///
+    /// # Arguments
+    ///
+    /// * `x_map` - A HashMap representing the input data matrix in sparse format.
+    /// * `feature_selection` - A vector of selected feature indices.
+    /// * `samples` - The number of samples in the dataset.
+    /// * `max_model_nb` - The maximum number of models to be processed.
+    /// * `config` - A reference to the GPU configuration settings.
+    ///
+    /// # Returns
+    ///
+    /// An instance of `GpuAssay` initialized for GPU computations.
     pub async fn new_async(
         x_map: &HashMap<(usize, usize), f64>,
         feature_selection: &Vec<usize>,
@@ -602,6 +619,16 @@ impl GpuAssay {
         }
     }
 
+    /// Compute scores for a set of models on the GPU.
+    ///
+    /// # Arguments
+    ///
+    /// * `models` - A vector of `Individual` models to compute scores for.
+    /// * `threshold` - A threshold value used in score computation.
+    ///
+    /// # Returns
+    ///
+    /// A vector of computed scores as `f32`.
     pub fn compute_scores(&self, models: &Vec<Individual>, threshold: f32) -> Vec<f32> {
         let num_models = models.len();
         let (col_ptrMM, row_idxMM, valMM) = vechash_to_csc(
@@ -771,6 +798,15 @@ impl GpuAssay {
         }
     }
 
+    /// Get the maximum buffer size allowed by the GPU based on the configuration and hardware limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - A reference to the GPU configuration.
+    ///
+    /// # Returns
+    ///
+    /// The maximum buffer size in bytes.
     pub fn get_max_buffer_size(config: &GPU) -> u32 {
         pollster::block_on(async {
             let instance = wgpu::Instance::default();

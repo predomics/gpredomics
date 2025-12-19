@@ -1,3 +1,18 @@
+//! Utility functions and macros for the `gpredomics` library.
+//!
+//! This module provides a collection of helper functions and macros used throughout the
+//! codebase to facilitate data processing, statistical analysis, and system tasks.
+//!
+//! # Main Features
+//!
+//! * **Data Generation** – Tools for generating random vectors (e.g., [`generate_random_vector`]).
+//! * **Data Manipulation** – Functions for shuffling sparse matrices and balancing datasets.
+//! * **Statistics** – Computations for confidence intervals, Geyer rescaling and classification metrics.
+//! * **Serialization** – Utilities for efficient data handling and persistence.
+//!
+//! These utilities are designed to be efficient and are used internally by core algorithms
+//! to ensure consistency across the library.
+
 use crate::data::Data;
 use crate::experiment::ImportanceAggregation;
 use crate::individual::AdditionalMetrics;
@@ -16,7 +31,7 @@ use rayon::iter::ParallelIterator;
 use statrs::distribution::{ContinuousCDF, Normal};
 use std::collections::HashMap;
 
-/// a macro to declare simple Vec<String>
+/// Declare simple Vec<String>
 #[macro_export]
 macro_rules! string_vec {
     ($($x:expr),*) => {
@@ -66,19 +81,70 @@ pub fn strip_ansi_if_needed(text: &str, colorful: bool) -> String {
     }
 }
 
+/// Generates a random vector of [`i8`] with values in {-1, 0, 1}
+///
+/// # Arguments
+///
+/// * `reference_size` - Size of the vector to generate
+/// * `rng` - Random number generator
+///
+/// # Returns
+///
+/// A vector of size `reference_size` with random [`i8`] in {-1, 0, 1}
+///
+/// # Examples
+///
+/// ```
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// # use gpredomics::utils::generate_random_vector;
+/// let vec = generate_random_vector(10, &mut ChaCha8Rng::seed_from_u64(42));
+/// assert_eq!(vec.len(), 10);
+/// assert!(vec.iter().all(|&x| x == -1 || x == 0 || x == 1));
+/// ```
 pub fn generate_random_vector(reference_size: usize, rng: &mut ChaCha8Rng) -> Vec<i8> {
-    // chose k variables amount feature_selection
-    // set a random coeficient for these k variables
-    // Generate a vector of random values: 1, 0, or -1
     (0..reference_size).map(|_| rng.gen_range(-1..2)).collect()
 }
 
-/// a function used essentially in CV that split randomly a Vec<T> into p Vec<T> of approximatively the same size
+/// Splits a [`Vec<T>`] randomly into $p$ chunks of approximately the same size.
+///
+/// # Arguments
+///
+/// * `vec` - The original vector to split
+/// * `p` - Number of chunks to create
+/// * `rng` - Random number generator
+///
+/// # Returns
+///
+/// A vector containing `p` chunks of the original vector
+///
+/// # Panics
+///
+/// Panics if `p` is zero.
+///
+/// # Examples
+///
+/// ```
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// # use gpredomics::utils::split_into_balanced_random_chunks;
+/// let vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let chunks = split_into_balanced_random_chunks(vec, 3, &mut rng);
+///
+/// assert_eq!(chunks.len(), 3);
+/// // Check that all elements are preserved
+/// assert_eq!(chunks.iter().map(|c| c.len()).sum::<usize>(), 10);
+/// // Check balance: 10/3 = 3.33 -> chunks should be sizes [4, 3, 3] in some order
+/// assert!(chunks.iter().all(|c| c.len() == 3 || c.len() == 4));
+/// ```
 pub fn split_into_balanced_random_chunks<T: std::clone::Clone>(
     vec: Vec<T>,
     p: usize,
     rng: &mut ChaCha8Rng,
 ) -> Vec<Vec<T>> {
+    assert!(p > 0, "Number of chunks p must be greater than zero.");
+
     // Step 1: Shuffle the original vector
     let mut shuffled = vec;
     shuffled.shuffle(rng);
@@ -102,7 +168,41 @@ pub fn split_into_balanced_random_chunks<T: std::clone::Clone>(
     chunks
 }
 
-/// shuffle a feature
+/// Shuffles the values of a specific feature across all samples in a sparse [`HashMap`] matrix.
+///
+/// # Arguments
+///
+/// * `X` - Sparse matrix represented as `HashMap<(sample_index, feature_index), value>`.
+/// * `sample_len` - Total number of samples (rows) in the dataset.
+/// * `feature` - The index of the feature (column) to shuffle.
+/// * `rng` - Random number generator.
+///
+/// # Examples
+///
+/// ```
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// # use std::collections::HashMap;
+/// # use gpredomics::utils::shuffle_row;
+/// let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+/// X.insert((0, 0), 1.0);
+/// X.insert((1, 0), 2.0);
+/// X.insert((2, 0), 3.0);
+///
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// shuffle_row(&mut X, 3, 0, &mut rng);
+///
+/// // 1. Verify that we still have exactly 3 entries for this feature
+/// let values: Vec<f64> = (0..3)
+///     .filter_map(|i| X.get(&(i, 0)).copied())
+///     .collect();
+/// assert_eq!(values.len(), 3);
+///
+/// // 2. Verify that the set of values is preserved (1.0, 2.0, 3.0)
+/// assert!(values.contains(&1.0));
+/// assert!(values.contains(&2.0));
+/// assert!(values.contains(&3.0));
+/// ```
 pub fn shuffle_row(
     X: &mut HashMap<(usize, usize), f64>,
     sample_len: usize,
@@ -132,6 +232,32 @@ pub fn shuffle_row(
 // Statistical utilites
 //-----------------------------------------------------------------------------
 
+/// Computes the confidence interval for a binomial proportion using normal approximation
+///
+/// # Arguments
+///
+/// * `accuracy` - Observed accuracy (proportion of successes)
+/// * `n` - Sample size
+/// * `alpha` - Significance level (e.g., 0.05 for 95% CI)
+///
+/// # Returns
+///
+/// A tuple (lower_bound, accuracy, upper_bound)
+///
+/// # Panics
+///
+/// Panics if:
+///  * `n` is zero.
+///  * `accuracy` is not in the range $[0, 1]$.
+///  * `alpha` is not in the range $[0, 1]$.
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::conf_inter_binomial;
+/// let (lower, acc, upper) = conf_inter_binomial(0.8, 100, 0.05);
+/// assert!(lower < acc && acc < upper);
+/// ```
 pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f64) {
     assert!(
         n > 0,
@@ -162,7 +288,29 @@ pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f6
     (lower_bound, accuracy, upper_bound)
 }
 
-/// Compute AUC for binary class using Mann-Whitney U algorithm O(n log n)
+/// Computes Area Under the Curve (AUC) for binary classification using Mann-Whitney U algorithm O(n log n)
+///
+/// The Area Under the Receiver Operating Characteristic Curve (AUC-ROC) is a calculated using
+/// the Mann-Whitney U statistic, as the curve does not need to be constructed.
+///
+/// # Arguments
+///
+/// * `value` - Predicted scores or probabilities
+/// * `y` - True binary labels (0 or 1)
+///
+/// # Returns
+///
+/// AUC value between 0.0 and 1.0
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::compute_auc_from_value;
+/// let scores = vec![0.1, 0.4, 0.35, 0.8];
+/// let labels = vec![0, 0, 1, 1];
+/// let auc = compute_auc_from_value(&scores, &labels);
+/// assert!((auc - 0.75).abs() < 1e-6);
+/// ```
 pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
     let mut data: Vec<(f64, u8)> = value
         .iter()
@@ -211,6 +359,38 @@ pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
     u / (n1 as f64 * n0 as f64)
 }
 
+/// Computes accuracy, sensitivity, specificity and optional additional metrics from predicted classes
+///
+/// # Arguments
+///
+/// * `predicted` - Predicted class labels (0, 1, or 2 for uncertain)
+/// * `y` - True class labels (0 or 1)
+/// * `others_to_compute` - Array of booleans indicating which additional metrics to compute:
+///  [MCC, F1-score, NPV, PPV, G-mean]
+///
+/// # Returns
+///
+/// A tuple (accuracy, sensitivity, specificity, AdditionalMetrics)
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::compute_metrics_from_classes;
+/// # use gpredomics::individual::AdditionalMetrics;
+/// let predicted = vec![1, 0, 1, 1, 0, 2];
+/// let y = vec![1, 0, 0, 1, 0, 1];
+/// let others_to_compute = [true, true, false, true, true];
+/// let (accuracy, sensitivity, specificity, additional) =
+///    compute_metrics_from_classes(&predicted, &y, others_to_compute);
+/// assert!((accuracy - 0.8).abs() < 1e-6);
+/// assert!((sensitivity - 1.0).abs() < 1e-6);
+/// assert!((specificity - 0.6666667).abs() < 1e-6);
+/// assert!(additional.mcc.is_some());
+/// assert!(additional.f1_score.is_some());
+/// assert!(additional.npv.is_none());
+/// assert!(additional.ppv.is_some());
+/// assert!(additional.g_mean.is_some());
+/// ```
 pub fn compute_metrics_from_classes(
     predicted: &Vec<u8>,
     y: &Vec<u8>,
@@ -276,8 +456,43 @@ pub fn compute_metrics_from_classes(
     (accuracy, sensitivity, specificity, additional)
 }
 
-/// a function that compute accuracy, precision, sensitivity and rejection_rate
-/// return (accuracy, sensitivity, specificity, rejection_rate)
+/// Compute accuracy, precision, sensitivity and rejection_rate and optional additional metrics from predicted values and threshold
+///
+/// # Arguments
+///
+/// * `value` - Predicted scores or probabilities
+/// * `y` - True binary labels (0 or 1)
+/// * `threshold` - Decision threshold for classifying positive class
+/// * `threshold_ci` - Optional confidence interval for thresholding (lower_bound, upper_bound)
+/// * `others_to_compute` - Array of booleans indicating which additional metrics to compute:
+/// [MCC, F1-score, NPV, PPV, G-mean]
+///
+/// # Returns
+///
+/// A tuple (accuracy, sensitivity, specificity, rejection_rate, AdditionalMetrics)
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::compute_metrics_from_value;
+/// # use gpredomics::individual::AdditionalMetrics;
+/// let scores = vec![0.1, 0.4, 0.35, 0.8];
+/// let labels = vec![0, 0, 1, 1];
+/// let threshold = 0.5;
+/// let threshold_ci = None;
+/// let others_to_compute = [true, true, false, true, true];
+/// let (accuracy, sensitivity, specificity, rejection_rate, additional) =
+///   compute_metrics_from_value(&scores, &labels, threshold, threshold_ci, others_to_compute);
+/// assert!((accuracy - 0.75).abs() < 1e-6);
+/// assert!((sensitivity - 0.5).abs() < 1e-6);
+/// assert!((specificity - 1.0).abs() < 1e-6);
+/// assert!((rejection_rate - 0.0).abs() < 1e-6);
+/// assert!(additional.mcc.is_some());
+/// assert!(additional.f1_score.is_some());
+/// assert!(additional.npv.is_none());
+/// assert!(additional.ppv.is_some());
+/// assert!(additional.g_mean.is_some());
+/// ```
 pub fn compute_metrics_from_value(
     value: &[f64],
     y: &Vec<u8>,
@@ -317,6 +532,37 @@ pub fn compute_metrics_from_value(
     (acc, sens, spec, rejection_rate, additional)
 }
 
+/// Computes AUC-ROC and optimal threshold-based metrics based on a specified fit function
+///
+/// # Arguments
+///
+/// * `scores` - Predicted scores or probabilities
+/// * `y` - True binary labels (0 or 1)
+/// * `fit_function` - The fit function to optimize (AUC, MCC, Sensitivity, Specificity, F1-score, NPV, PPV, G-mean)
+/// * `penalties` - Optional penalties for sensitivity and specificity when using threshold balance
+///
+/// # Returns
+///
+/// A tuple (AUC, best_threshold, accuracy, sensitivity, specificity, best_objective_value)
+///
+/// # Examples
+///
+/// ```no_run
+/// # use gpredomics::utils::compute_roc_and_metrics_from_value;
+/// # use gpredomics::param::FitFunction;
+/// let scores = vec![0.1, 0.4, 0.35, 0.8];
+/// let labels = vec![0, 0, 1, 1];
+/// let fit_function = FitFunction::f1_score;
+/// let penalties = None;
+/// let (auc, best_threshold, accuracy, sensitivity, specificity, best_objective) =
+///   compute_roc_and_metrics_from_value(&scores, &labels, &fit_function, penalties);
+/// assert!((auc - 0.75).abs() < 1e-6);
+/// assert!((best_threshold - 0.35).abs() < 1e-6);
+/// assert!((accuracy - 0.75).abs() < 1e-6);
+/// assert!((sensitivity - 0.5).abs() < 1e-6);
+/// assert!((specificity - 1.0).abs() < 1e-6);
+/// assert!((best_objective - 0.5).abs() < 1e-6);
+/// ```
 pub fn compute_roc_and_metrics_from_value(
     scores: &[f64],
     y: &[u8],
@@ -529,6 +775,25 @@ fn apply_threshold_balance(sensitivity: f64, specificity: f64, penalties: Option
     }
 }
 
+/// Computes mean and standard deviation using Welford's algorithm
+///
+/// # Arguments
+///
+/// * `values` - Slice of [f64] values
+///
+/// # Returns
+///
+/// A tuple (mean, standard_deviation)
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::mean_and_std;
+/// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+/// let (mean, std) = mean_and_std(&data);
+/// assert!((mean - 3.0).abs() < 1e-6);
+/// assert!((std - 1.4142135).abs() < 1e-6);
+/// ```
 pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
     let mut n = 0.0;
     let (mut mean, mut m2) = (0.0, 0.0); // Welford
@@ -541,6 +806,24 @@ pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
     (mean, (m2 / n).sqrt())
 }
 
+/// Computes the median of a slice of f64 values
+///
+/// # Arguments
+///
+/// * `values` - Mutable slice of [f64] values
+///
+/// # Returns
+///
+/// The median value as f64
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::median;
+/// let mut data = vec![3.0, 1.0, 4.0, 2.0];
+/// let med = median(&mut data);
+/// assert!((med - 2.5).abs() < 1e-6);
+/// ```
 pub fn median(values: &mut [f64]) -> f64 {
     let mid = values.len() / 2;
 
@@ -564,6 +847,24 @@ pub fn median(values: &mut [f64]) -> f64 {
     }
 }
 
+/// Computes the Median Absolute Deviation (MAD) of a slice of f64 values
+///
+/// # Arguments
+///
+/// * `values` - Slice of [f64] values
+///
+/// # Returns
+///
+/// The MAD value as f64
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::mad;
+/// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+/// let mad_value = mad(&data);
+/// assert!((mad_value - 1.4826).abs() < 1e-4);
+/// ```
 pub fn mad(values: &[f64]) -> f64 {
     let mut dev: Vec<f64> = {
         let mut buf = values.to_vec();
@@ -572,16 +873,26 @@ pub fn mad(values: &[f64]) -> f64 {
     };
     1.4826 * median(&mut dev)
 }
-/// Stratify indices by class label
-///
-/// Returns (positive_indices, negative_indices) where each vector contains
-/// the indices of samples with label 1 and 0 respectively.
+
+/// Stratifies indices by class label
 ///
 /// # Arguments
+///
 /// - `y`: Binary class labels (0 or 1)
 ///
 /// # Returns
+///
 /// Tuple of (pos_indices, neg_indices)
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::stratify_indices_by_class;
+/// let y = vec![0, 1, 0, 1, 1, 0];
+/// let (pos_indices, neg_indices) = stratify_indices_by_class(&y);
+/// assert_eq!(pos_indices, vec![1, 3, 4]);
+/// assert_eq!(neg_indices, vec![0, 2, 5]);
+/// ```
 pub fn stratify_indices_by_class(y: &[u8]) -> (Vec<usize>, Vec<usize>) {
     let pos_indices: Vec<usize> = y
         .iter()
@@ -606,19 +917,44 @@ pub fn stratify_indices_by_class(y: &[u8]) -> (Vec<usize>, Vec<usize>) {
 /// When subsample_frac == 1.0, performs classic bootstrap with replacement.
 ///
 /// # Arguments
-/// - `pos_indices`: Indices of positive class samples
-/// - `neg_indices`: Indices of negative class samples
-/// - `subsample_frac`: Fraction of samples to draw from each class (0.0, 1.0]
-/// - `rng`: Random number generator
+///
+/// * `pos_indices`: Indices of positive class samples
+/// * `neg_indices`: Indices of negative class samples
+/// * `subsample_frac`: Fraction of samples to draw from each class (0.0, 1.0]
+/// * `rng`: Random number generator
 ///
 /// # Returns
+///
 /// Vector of sampled indices (positives followed by negatives)
+///
+/// # Panics
+///
+/// Panics if `subsample_frac` is not in the range (0.0, 1.0]
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::stratified_bootstrap_sample;
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let pos_indices = vec![0, 1, 2, 3, 4];
+/// let neg_indices = vec![5, 6, 7, 8, 9];
+/// let subsample_frac = 0.6;
+/// let sampled_indices = stratified_bootstrap_sample(&pos_indices, &neg_indices, subsample_frac, &mut rng);
+/// assert_eq!(sampled_indices.len(), 6); // 3 positives + 3 negatives
+/// ```
 pub fn stratified_bootstrap_sample(
     pos_indices: &[usize],
     neg_indices: &[usize],
     subsample_frac: f64,
     rng: &mut ChaCha8Rng,
 ) -> Vec<usize> {
+    assert!(
+        subsample_frac > 0.0 && subsample_frac <= 1.0,
+        "subsample_frac must be in the range (0.0, 1.0]"
+    );
+
     let n_pos_total = pos_indices.len();
     let n_neg_total = neg_indices.len();
 
@@ -662,7 +998,40 @@ pub fn stratified_bootstrap_sample(
     bootstrap_indices
 }
 
-/// Helper function to stratify indices by sample annotation column
+/// Stratifies indices by sample annotation column
+///
+/// # Arguments
+/// * `indices`: Vector of sample indices to stratify
+/// * `annot`: SampleAnnotations structure containing annotations
+/// * `col_idx`: Column index in annotations to use for stratification
+/// * `n_folds`: Number of folds to create
+/// * `rng`: Random number generator
+///
+/// # Returns
+///
+/// Vector of folds, each containing a vector of sample indices
+///
+/// # Panics
+///
+/// Panics if `col_idx` is out of bounds for the annotation tags
+///
+/// # Examples
+///
+/// ```no_run
+/// # use gpredomics::utils::stratify_by_annotation;
+/// # use gpredomics::data::SampleAnnotations;
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let annot = SampleAnnotations {
+///     sample_tags: vec![
+///         (0, vec!["A".to_string(), "X".to_string()]),
+///         (1, vec!["B".to_string(), "Y".to_string()]),
+///         (2, vec!["A".to_string(), "Y".to_string()]),
+///         (3, vec!["B".to_string(), "X".to_string()]),
+///     ].into_iter().collect(),
+///     tag_column_names: vec!["Type".to_string(), "Group".to_string()],
+/// };  
 pub fn stratify_by_annotation(
     indices: Vec<usize>,
     annot: &crate::data::SampleAnnotations,
@@ -695,7 +1064,7 @@ pub fn stratify_by_annotation(
     folds
 }
 
-/// Apply Geyer rescaling for confidence interval construction
+/// Applies Geyer rescaling for confidence interval construction
 ///
 /// Theory: Geyer (1992) "Practical Markov Chain Monte Carlo"
 /// For subsampling (m < n), we use the pivotal quantity:
@@ -703,16 +1072,33 @@ pub fn stratify_by_annotation(
 /// and then de-pivot with √n to get CI bounds.
 ///
 /// # Arguments
-/// - `bootstrap_statistics`: Raw bootstrap statistics (thresholds)
-/// - `center`: Central estimate (original threshold)
-/// - `is_subsampling`: Whether we're doing subsampling (m < n) or full bootstrap
-/// - `_sqrt_m`: Square root of subsample size (unused but kept for API consistency)
-/// - `sqrt_n`: Square root of full sample size
-/// - `lower_idx`: Index for lower quantile
-/// - `upper_idx`: Index for upper quantile
+///
+/// * `bootstrap_statistics`: Raw bootstrap statistics (thresholds)
+/// * `center`: Central estimate (original threshold)
+/// * `is_subsampling`: Whether we're doing subsampling (m < n) or full bootstrap
+/// * `_sqrt_m`: Square root of subsample size (unused but kept for API consistency)
+/// * `sqrt_n`: Square root of full sample size
+/// * `lower_idx`: Index for lower quantile
+/// * `upper_idx`: Index for upper quantile
 ///
 /// # Returns
+///
 /// (lower_bound, upper_bound) for the confidence interval
+///
+/// # Examples
+/// /// ```
+/// # use gpredomics::utils::geyer_rescale_ci;
+/// let bootstrap_stats = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+/// let center = 3.0;
+/// let is_subsampling = true;
+/// let sqrt_m = 2.23606797749979; // sqrt(5)
+/// let sqrt_n = 2.449489742783178; // sqrt(6)
+/// let lower_idx = 1; // 2.0
+/// let upper_idx = 3; // 4.0
+/// let (lower, upper) = geyer_rescale_ci(&bootstrap_stats, center, is_subsampling, sqrt_m, sqrt_n, lower_idx, upper_idx);
+/// assert!((lower - 2.183503419072273).abs() < 1e-6);
+/// assert!((upper - 3.816496580927726).abs() < 1e-6);
+/// ```
 pub fn geyer_rescale_ci(
     bootstrap_statistics: &[f64],
     center: f64,
@@ -740,14 +1126,39 @@ pub fn geyer_rescale_ci(
 /// This significantly improves performance when evaluating populations
 ///
 /// # Arguments
-/// - `y`: The class labels (used to stratify)
-/// - `n_bootstrap`: Number of bootstrap samples
-/// - `alpha`: Significance level for confidence intervals
-/// - `subsample_frac`: Fraction of data to use (1.0 = full bootstrap, < 1.0 = subsampling)
-/// - `rng`: Random number generator
+///
+/// * `y`: The class labels (used to stratify)
+/// * `n_bootstrap`: Number of bootstrap samples
+/// * `alpha`: Significance level for confidence intervals
+/// * `subsample_frac`: Fraction of data to use (1.0 = full bootstrap, < 1.0 = subsampling)
+/// * `rng`: Random number generator
 ///
 /// # Returns
+///
 /// A `PrecomputedBootstrap` structure containing all precomputed indices and statistics
+///
+/// # Panics
+///
+/// Panics if:
+/// - `subsample_frac` is not in (0.0, 1.0]
+/// - `n_bootstrap` is less than 100
+/// - `alpha` is not in (0.0, 1.0)
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::{precompute_bootstrap_indices, PrecomputedBootstrap};
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let y = vec![0, 1, 0, 1, 1, 0];
+/// let n_bootstrap = 1000;
+/// let alpha = 0.05;
+/// let subsample_frac = 0.8;
+/// let precomputed = precompute_bootstrap_indices(&y, n_bootstrap, alpha, subsample_frac, &mut rng);
+/// assert_eq!(precomputed.bootstrap_indices.len(), n_bootstrap);
+/// assert_eq!(precomputed.bootstrap_y_samples.len(), n_bootstrap);
+/// ```
 pub fn precompute_bootstrap_indices(
     y: &Vec<u8>,
     n_bootstrap: usize,
@@ -832,35 +1243,35 @@ pub fn precompute_bootstrap_indices(
 ///
 /// # Arguments
 ///
-/// - `value`: slice of scores/values used to build the ROC and select thresholds.
-/// - `y`: binary labels (0 or 1) corresponding to `value`.
-/// - `fit_function`: fitness function used to select the threshold (AUC, MCC, ...).
-/// - `penalties`: optional penalties used to balance sensitivity/specificity.
-/// - `n_bootstrap`: number of bootstrap samples to generate (must be > 100).
-/// - `alpha`: significance level for confidence intervals (e.g. 0.05 for 95% CI).
-/// - `subsample_frac`: fraction of samples to draw per class; when < 1.0
+/// * `value`: slice of scores/values used to build the ROC and select thresholds.
+/// * `y`: binary labels (0 or 1) corresponding to `value`.
+/// * `fit_function`: fitness function used to select the threshold (AUC, MCC, ...).
+/// * `penalties`: optional penalties used to balance sensitivity/specificity.
+/// * `n_bootstrap`: number of bootstrap samples to generate (must be > 100).
+/// * `alpha`: significance level for confidence intervals (e.g. 0.05 for 95% CI).
+/// * `subsample_frac`: fraction of samples to draw per class; when < 1.0
 ///   subsampling (without replacement) is used, when == 1.0 classic bootstrap
 ///   (with replacement) is used.
-/// - `rng`: random number generator (ChaCha8Rng) for reproducibility.
+/// * `rng`: random number generator (ChaCha8Rng) for reproducibility.
 ///
 /// # Returns
 ///
 /// A tuple containing:
-/// - `f64`: AUC computed on the full dataset,
-/// - `[f64; 3]`: thresholds as `[lower_threshold, center_threshold, upper_threshold]`,
-/// - `f64`: accuracy at the central threshold,
-/// - `f64`: sensitivity (recall) at the central threshold,
-/// - `f64`: specificity at the central threshold,
-/// - `f64`: objective value (according to `fit_function`) at the central threshold,
-/// - `f64`: rejection_rate (fraction of samples classified as "undecided") if a
+/// * `f64`: AUC computed on the full dataset,
+/// * `[f64; 3]`: thresholds as `[lower_threshold, center_threshold, upper_threshold]`,
+/// * `f64`: accuracy at the central threshold,
+/// * `f64`: sensitivity (recall) at the central threshold,
+/// * `f64`: specificity at the central threshold,
+/// * `f64`: objective value (according to `fit_function`) at the central threshold,
+/// * `f64`: rejection_rate (fraction of samples classified as "undecided") if a
 ///   confidence interval is used (0.0 otherwise).
 ///
 /// # Panics
 ///
-/// The function asserts the following preconditions:
-/// - `subsample_frac` must be in (0.0, 1.0],
-/// - `n_bootstrap` must be greater than 100 (and ideally greater than 1000),
-/// - `alpha` must be in (0.0, 1.0).
+/// Panics if:
+/// * `subsample_frac` is not in (0.0, 1.0],
+/// * `n_bootstrap` is smaller than 100,
+/// * `alpha` is not in (0.0, 1.0).
 ///
 /// # Notes
 ///
@@ -868,6 +1279,38 @@ pub fn precompute_bootstrap_indices(
 ///   (see `geyer_rescale_ci`): quantiles are computed on √m * (θ̂_b - θ̂) and
 ///   then de-pivoted by √n to obtain CI bounds.
 /// - Reproducibility is ensured when `rng` is initialized with a fixed seed.
+///
+/// # Examples
+///
+/// /// ```
+/// # use gpredomics::utils::compute_threshold_and_metrics_with_bootstrap;
+/// # use gpredomics::utils::FitFunction;
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// let mut rng = ChaCha8Rng::seed_from_u64(42);
+/// let value = vec![0.1, 0.4, 0.35, 0.8];
+/// let y = vec![0, 0, 1, 1];
+/// let n_bootstrap = 1000;
+/// let alpha = 0.05;
+/// let subsample_frac = 0.8;
+/// let (auc, thresholds, acc, se, sp, obj, rej) = compute_threshold_and_metrics_with_bootstrap(
+///     &value,
+///     &y,
+///     &FitFunction::auc,
+///     None,
+///     n_bootstrap,
+///     alpha,
+///     subsample_frac,
+///     &mut rng,
+/// );
+/// assert!((auc - 0.75).abs() < 1e-6);
+/// assert_eq!(thresholds.len(), 3);
+/// assert!(acc >= 0.0 && acc <= 1.0);
+/// assert!(se >= 0.0 && se <= 1.0);
+/// assert!(sp >= 0.0 && sp <= 1.0);
+/// assert!(obj >= -1.0 && obj <= 1.0);
+/// assert!(rej >= 0.0 && rej <= 1.0);
+/// ```
 pub fn compute_threshold_and_metrics_with_bootstrap(
     value: &[f64],
     y: &Vec<u8>,
@@ -1087,6 +1530,27 @@ pub fn compute_threshold_and_metrics_with_precomputed_bootstrap(
 // Display utilites
 //-----------------------------------------------------------------------------
 
+/// Generates a string legend for epoch display
+///
+/// # Arguments
+///
+/// * `param` - Reference to the Param structure containing display settings
+///
+/// # Returns
+///
+/// A formatted string representing the epoch legend
+///
+/// # Examples
+///
+/// ```no_run
+/// # use gpredomics::utils::display_epoch_legend;
+/// # use gpredomics::param::{Param, FitFunction};
+/// let mut param = Param::default();
+/// param.general.display_colorful = true;
+/// param.general.fit = FitFunction::auc;
+/// let legend = display_epoch_legend(&param);
+/// println!("{}", legend);
+/// ```
 pub fn display_epoch_legend(param: &Param) -> String {
     let legend = format!(
         "Legend:    [≠ diversity filter]    [↺ resampling]    [{}: {}]    [{}: penalized fit]",
@@ -1135,6 +1599,16 @@ pub fn display_epoch_legend(param: &Param) -> String {
     )
 }
 
+/// Generates a string representation of the current epoch's best model
+///
+/// # Arguments
+/// * `pop` - Reference to the [Population] structure containing individuals
+/// * `param` - Reference to the [Param] structure containing display settings
+/// * `epoch` - Current epoch number
+///
+/// # Returns
+///
+/// A formatted string representing the epoch's best model
 pub fn display_epoch(pop: &Population, param: &Param, epoch: usize) -> String {
     if pop.individuals.len() > 0 {
         let best_model = &pop.individuals[0];
@@ -1209,7 +1683,17 @@ pub fn display_epoch(pop: &Population, param: &Param, epoch: usize) -> String {
     }
 }
 
-// Graphical functions
+/// Generates a terminal display of feature importances with confidence intervals
+///
+/// # Arguments
+/// * `data` - Reference to the [Data] structure containing feature information
+/// * `final_importances` - [HashMap] of feature indices to (importance, std_dev)
+/// * `nb_features` - Number of top features to display
+/// * `aggregation_method` - Method used for aggregating importances
+///
+/// # Returns
+///
+/// A formatted string representing the feature importances
 pub fn display_feature_importance_terminal(
     data: &Data,
     final_importances: &HashMap<usize, (f64, f64)>,
@@ -1408,6 +1892,13 @@ pub fn display_feature_importance_terminal(
     result
 }
 
+/// Formats tick values for feature importance display
+///
+/// Arguments:
+/// * `value`: The tick value to format
+///
+/// Returns:
+/// A formatted string representation of the tick value
 fn format_tick_value(value: f64) -> String {
     let abs_value = value.abs();
 
@@ -1436,6 +1927,15 @@ fn format_tick_value(value: f64) -> String {
     }
 }
 
+/// Rounds a value up to a "nice" number (1, 2, 5, 10, etc.)
+///
+/// Arguments:
+///
+/// * `value`: The value to round up
+///
+/// Returns:
+///
+/// A rounded "nice" number
 fn round_up_nicely(value: f64) -> f64 {
     if value == 0.0 {
         return 0.1;
@@ -1463,6 +1963,15 @@ fn round_up_nicely(value: f64) -> f64 {
     }
 }
 
+/// Rounds a value down to a "nice" number (1, 2, 5, 10, etc.)
+///
+/// Arguments:
+///
+/// * `value`: The value to round down
+///
+/// Returns:
+///
+/// A rounded "nice" number
 fn round_down_nicely(value: f64) -> f64 {
     if value < 0.0 {
         return -round_up_nicely(value.abs());
@@ -1490,12 +1999,33 @@ fn round_down_nicely(value: f64) -> f64 {
 // Serialization utilites
 //-----------------------------------------------------------------------------
 
-// Serde functions for JSONize HashMaps
+/// Serde serialization/deserialization for HashMap with numeric keys
+///
+/// This module provides custom serialization and deserialization functions
+/// for HashMaps with numeric keys (usize and (usize, usize)) to ensure proper
+/// handling of JSON format, where keys must be strings.
+///
+/// # Submodules
+/// - `usize_i8`: Serialization for HashMap<usize, i8>
+/// - `usize_u8`: Serialization for HashMap<usize, u8>
+/// - `tuple_usize_f64`: Serialization for HashMap<(usize, usize), f64>
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::utils::serde_json_hashmap_numeric::usize_i8;
+/// # use std::collections::HashMap;
+/// # use serde_json;
+/// let mut map: HashMap<usize, i8> = HashMap::new();
+/// map.insert(1, -5);
+/// map.insert(2, 10);
+/// let serialized = serde_json::to_string(&map).unwrap();
+/// let deserialized: HashMap<usize, i8> = serde_json::from_str(&serialized).unwrap();
+/// assert_eq!(map, deserialized);
+/// ```
 pub mod serde_json_hashmap_numeric {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::collections::HashMap;
-
-    // ===== General =====
 
     /// HashMap<usize, T>
     pub fn serialize_usize<S, T>(map: &HashMap<usize, T>, serializer: S) -> Result<S::Ok, S::Error>
@@ -1570,12 +2100,11 @@ pub mod serde_json_hashmap_numeric {
         Ok(map)
     }
 
-    // ===== Specialized modules  =====
-
-    /// HashMap<usize, i8> (Individual.features)
+    /// HashMap<usize, i8> (Data.strand)
     pub mod usize_i8 {
         use super::*;
 
+        /// Serialize HashMap<usize, i8>
         pub fn serialize<S>(map: &HashMap<usize, i8>, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,
@@ -1583,6 +2112,7 @@ pub mod serde_json_hashmap_numeric {
             serialize_usize(map, serializer)
         }
 
+        /// Deserialize HashMap<usize, i8>
         pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<usize, i8>, D::Error>
         where
             D: Deserializer<'de>,
@@ -1595,6 +2125,7 @@ pub mod serde_json_hashmap_numeric {
     pub mod usize_u8 {
         use super::*;
 
+        /// Serialize HashMap<usize, u8>
         pub fn serialize<S>(map: &HashMap<usize, u8>, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,
@@ -1602,6 +2133,7 @@ pub mod serde_json_hashmap_numeric {
             serialize_usize(map, serializer)
         }
 
+        /// Deserialize HashMap<usize, u8>
         pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<usize, u8>, D::Error>
         where
             D: Deserializer<'de>,
@@ -1614,6 +2146,7 @@ pub mod serde_json_hashmap_numeric {
     pub mod tuple_usize_f64 {
         use super::*;
 
+        /// Serialize HashMap<(usize, usize), f64>
         pub fn serialize<S>(
             map: &HashMap<(usize, usize), f64>,
             serializer: S,
@@ -1624,6 +2157,7 @@ pub mod serde_json_hashmap_numeric {
             serialize_tuple_usize(map, serializer)
         }
 
+        /// Deserialize HashMap<(usize, usize), f64>
         pub fn deserialize<'de, D>(
             deserializer: D,
         ) -> Result<HashMap<(usize, usize), f64>, D::Error>
@@ -1635,7 +2169,7 @@ pub mod serde_json_hashmap_numeric {
     }
 }
 
-// unit tests
+/// Unit tests for utils module
 #[cfg(test)]
 mod tests {
     use super::*;

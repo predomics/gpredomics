@@ -16,51 +16,83 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+/// Methods available for feature preselection
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[allow(non_camel_case_types)]
 pub enum PreselectionMethod {
+    /// Wilcoxon rank-sum test
     wilcoxon,
+    /// Student's t-test
     studentt,
+    /// Bayesian Fisher's exact test
     bayesian_fisher,
 }
 
+/// Feature annotations structure for storing additional metadata related to features.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct FeatureAnnotations {
+    /// Names of the tag columns in the annotation file
     pub tag_column_names: Vec<String>,
+    /// Mapping from feature index to its associated tags
     pub feature_tags: HashMap<usize, Vec<String>>,
+    /// Mapping from feature index a prior weight influencing its selection during [`Population`] generation.
     pub prior_weight: HashMap<usize, f64>,
+    /// Mapping from feature index to its penalty value influencing the calculation of fitness score.
     pub feature_penalty: HashMap<usize, f64>,
 }
 
+/// Sample annotations structure for storing additional metadata related to samples.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct SampleAnnotations {
+    /// Names of the tag columns in the annotation file
     pub tag_column_names: Vec<String>,
+    /// Mapping from sample index to its associated tags
     pub sample_tags: HashMap<usize, Vec<String>>,
 }
 
+/// Main data structure for storing feature matrix, target values, and related metadata.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Data {
+    /// Feature matrix and associated coefficients
     #[serde(with = "serde_json_hashmap_numeric::tuple_usize_f64")]
-    pub X: HashMap<(usize, usize), f64>, // Matrix for feature values
-    pub y: Vec<u8>,            // Vector for target values
-    pub features: Vec<String>, // Feature names (from the first column of X.tsv)
-    pub samples: Vec<String>,
-    #[serde(with = "serde_json_hashmap_numeric::usize_u8")]
-    pub feature_class: HashMap<usize, u8>, // Sign for each feature
-    pub feature_selection: Vec<usize>,
+    pub X: HashMap<(usize, usize), f64>,
+    /// Feature names
+    pub features: Vec<String>,
+    /// Features count
     pub feature_len: usize,
-    pub sample_len: usize,
-    pub classes: Vec<String>,
-    #[serde(default)]
-    pub feature_significance: HashMap<usize, f64>,
+    /// Feature annotations if provided
     #[serde(default)]
     pub feature_annotations: Option<FeatureAnnotations>,
+
+    /// Features selected after statistical testing
+    pub feature_selection: Vec<usize>,
+    /// Features associated class signs after statistical testing
+    #[serde(with = "serde_json_hashmap_numeric::usize_u8")]
+    pub feature_class: HashMap<usize, u8>,
+    /// Features associated significance p-values/bayes factor after statistical testing
+    #[serde(default)]
+    pub feature_significance: HashMap<usize, f64>,
+
+    /// Sample real classes
+    pub y: Vec<u8>,
+    /// Sample names
+    pub samples: Vec<String>,
+    /// Samples count
+    pub sample_len: usize,
+    /// Sample annotations if provided
     #[serde(default)]
     pub sample_annotations: Option<SampleAnnotations>,
+
+    /// Class labels
+    pub classes: Vec<String>,
 }
 
 impl Data {
-    /// Create a new `Data` instance with default values
+    /// Creates a new `Data` instance.
+    ///
+    /// # Returns
+    ///
+    /// A new `Data` instance with initialized empty fields.
     pub fn new() -> Data {
         Data {
             X: HashMap::new(),
@@ -78,12 +110,39 @@ impl Data {
         }
     }
 
-    /// Check if another dataset is compatible with the current one
+    /// Checks if another dataset is compatible with the current one
+    ///
+    /// This method compares the features, feature length, and classes of two `Data` instances in order to determine compatibility
+    /// before proceeding with operations that require matching datasets like computing new predictions.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Another `Data` instance to compare with
+    ///
+    /// # Returns
+    ///
+    /// `true` if compatible, `false` otherwise
     pub fn check_compatibility(&self, other: &Data) -> bool {
         self.features == other.features
+            && self.feature_len == other.feature_len
+            && self.classes == other.classes
     }
 
-    /// Load data from `X.tsv` and `y.tsv` files.
+    /// Loads data from `X.tsv` and `y.tsv` files.
+    ///
+    /// # Arguments
+    ///
+    /// * `X_path` - Path to the feature matrix file
+    /// * `y_path` - Path to the target values file
+    /// * `features_in_rows` - Boolean indicating if features are in rows (true) or columns (false)
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if successful, or an error if loading fails
+    ///
+    /// # Errors
+    ///
+    /// * Returns error if file reading or parsing fails
     pub fn load_data(
         &mut self,
         X_path: &str,
@@ -97,7 +156,118 @@ impl Data {
         }
     }
 
-    /// Legacy format (current Gpredomics format): rows=features, columns=samples
+    /// Detects the delimiter used in a file based on extension
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the file
+    ///
+    /// # Returns
+    ///
+    /// `Ok(char)` with the detected delimiter, or an error if detection fails
+    fn detect_delimiter(path: &str) -> Result<char, Box<dyn Error>> {
+        let path_lower = path.to_lowercase();
+
+        // Check file extension for tab-delimited formats
+        if path_lower.ends_with(".txt")
+            || path_lower.ends_with(".tsv")
+            || path_lower.ends_with(".tab")
+        {
+            return Ok('\t');
+        }
+
+        // For .csv files, detect between comma and semicolon
+        if path_lower.ends_with(".csv") {
+            let file = File::open(path)?;
+            let mut reader = BufReader::new(file);
+            let mut first_line = String::new();
+            reader.read_line(&mut first_line)?;
+
+            let comma_count = first_line.matches(',').count();
+            let semicolon_count = first_line.matches(';').count();
+
+            if comma_count == 0 && semicolon_count == 0 {
+                return Err(format!(
+                    "Incompatible file format: no valid delimiter found in CSV file '{}'",
+                    path
+                )
+                .into());
+            }
+
+            if semicolon_count > comma_count {
+                return Ok(';');
+            } else {
+                return Ok(',');
+            }
+        }
+
+        // Unknown extension: fail immediately
+        Err(format!("Incompatible file format: unknown file extension for '{}'. Supported formats: .txt, .tsv, .tab, .csv", path).into())
+    }
+
+    /// Load y values from y file and reorder them to match the sample order
+    fn load_y_data(
+        &mut self,
+        y_path: &str,
+        trim_line: impl Fn(&str) -> &str,
+    ) -> Result<(), Box<dyn Error>> {
+        // Detect delimiter for y file
+        let delimiter_y = Self::detect_delimiter(y_path)?;
+        debug!("Detected delimiter for y: {:?}", delimiter_y);
+
+        // Open and read the y file
+        let file_y = File::open(y_path)?;
+        let reader_y = BufReader::new(file_y);
+
+        // Parse y file and store target values
+        let mut y_map = HashMap::new();
+        for line in reader_y.lines().skip(1) {
+            let line = line?;
+            let trimmed_line = trim_line(&line);
+            let mut fields = trimmed_line.split(delimiter_y);
+
+            // First field is the sample name
+            if let Some(sample_name) = fields.next() {
+                // Second field is the target value
+                if let Some(value) = fields.next() {
+                    let target: u8 = value.parse()?;
+                    y_map.insert(sample_name.to_string(), target);
+                }
+            }
+        }
+
+        // Reorder `y` to match the order of `samples` from X file
+        self.y = self
+            .samples
+            .iter()
+            .map(|sample_name| {
+                *y_map.get(sample_name).unwrap_or_else(|| {
+                    warn!(
+                        "No y value available for {}. Setting y to 2 for this sample.",
+                        sample_name
+                    );
+                    &2
+                })
+            })
+            .collect();
+
+        Ok(())
+    }
+
+    /// Loads data following Predomics Legacy format (current Gpredomics format): rows=features, columns=samples
+    ///
+    /// # Arguments
+    ///
+    /// * `X_path` - Path to the feature matrix file
+    /// * `y_path` - Path to the target values file
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if successful, or an error if loading fails
+    ///
+    /// # Errors
+    ///
+    /// * Returns error if file reading or parsing fails
     fn load_data_features_in_rows(
         &mut self,
         X_path: &str,
@@ -108,7 +278,19 @@ impl Data {
             line.trim_end_matches(['\n', '\r'])
         }
 
+        // Check if files exist
+        if !Path::new(X_path).exists() {
+            return Err(format!("File does not exist: {}", X_path).into());
+        }
+        if !Path::new(y_path).exists() {
+            return Err(format!("File does not exist: {}", y_path).into());
+        }
+
         info!("Loading files {} and {}...", X_path, y_path);
+
+        // Detect delimiter for X file
+        let delimiter_X = Self::detect_delimiter(X_path)?;
+        debug!("Detected delimiter for X: {:?}", delimiter_X);
 
         let file_X = File::open(X_path)?;
         let mut reader_X = BufReader::with_capacity(8 * 1024 * 1024, file_X);
@@ -118,7 +300,7 @@ impl Data {
         reader_X.read_line(&mut first_line)?;
         let trimmed_first_line = trim_line(&first_line);
         self.samples = trimmed_first_line
-            .split('\t')
+            .split(delimiter_X)
             .skip(1)
             .map(String::from)
             .collect();
@@ -134,7 +316,7 @@ impl Data {
         for (feature, line) in reader_X.lines().enumerate() {
             let line = line?;
             let trimmed_line = trim_line(&line);
-            let mut fields = trimmed_line.split('\t');
+            let mut fields = trimmed_line.split(delimiter_X);
 
             // First field is the feature name
             if let Some(feature_name) = fields.next() {
@@ -151,49 +333,37 @@ impl Data {
             }
         }
 
-        // Open and read the y.tsv file
-        let file_y = File::open(y_path)?;
-        let reader_y = BufReader::new(file_y);
-
-        // Parse y.tsv and store target values
-        let mut y_map = HashMap::new();
-        for line in reader_y.lines().skip(1) {
-            let line = line?;
-            let trimmed_line = trim_line(&line);
-            let mut fields = trimmed_line.split('\t');
-
-            // First field is the sample name
-            if let Some(sample_name) = fields.next() {
-                // Second field is the target value
-                if let Some(value) = fields.next() {
-                    let target: u8 = value.parse()?;
-                    y_map.insert(sample_name.to_string(), target);
-                }
-            }
-        }
-
-        // Reorder `y` to match the order of `samples` from X.tsv
-        self.y = self
-            .samples
-            .iter()
-            .map(|sample_name| {
-                *y_map.get(sample_name).unwrap_or_else(|| {
-                    warn!(
-                        "No y value available for {}. Setting y to 2 for this sample.",
-                        sample_name
-                    );
-                    &2
-                })
-            })
-            .collect();
+        // Load y data
+        self.load_y_data(y_path, trim_line)?;
 
         self.feature_len = self.features.len();
         self.sample_len = self.samples.len();
 
+        // Validate that we have sufficient data (likely parsing error if < 3)
+        if self.feature_len < 3 {
+            return Err(format!("Failed to read data: only {} feature(s) found. This likely indicates a parsing error. Please check the file format and delimiter.", self.feature_len).into());
+        }
+        if self.sample_len < 3 {
+            return Err(format!("Failed to read data: only {} sample(s) found. This likely indicates a parsing error. Please check the file format and delimiter.", self.sample_len).into());
+        }
+
         Ok(())
     }
 
-    /// Standard ML format: rows=samples, columns=features
+    /// Loads data following standard ML format: rows=samples, columns=features
+    ///
+    /// # Arguments
+    ///
+    /// * `X_path` - Path to the feature matrix file
+    /// * `y_path` - Path to the target values file
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if successful, or an error if loading fails
+    ///
+    /// # Errors
+    ///
+    /// * Returns error if file reading or parsing fails
     fn load_data_features_in_columns(
         &mut self,
         X_path: &str,
@@ -204,7 +374,19 @@ impl Data {
             line.trim_end_matches(['\n', '\r'])
         }
 
+        // Check if files exist
+        if !Path::new(X_path).exists() {
+            return Err(format!("File does not exist: {}", X_path).into());
+        }
+        if !Path::new(y_path).exists() {
+            return Err(format!("File does not exist: {}", y_path).into());
+        }
+
         info!("Loading files {} and {}...", X_path, y_path);
+
+        // Detect delimiter for X file
+        let delimiter_X = Self::detect_delimiter(X_path)?;
+        debug!("Detected delimiter for X: {:?}", delimiter_X);
 
         let file_X = File::open(X_path)?;
         let mut reader_X = BufReader::with_capacity(8 * 1024 * 1024, file_X);
@@ -214,7 +396,7 @@ impl Data {
         reader_X.read_line(&mut first_line)?;
         let trimmed_first_line = trim_line(&first_line);
         self.features = trimmed_first_line
-            .split('\t')
+            .split(delimiter_X)
             .skip(1)
             .map(String::from)
             .collect();
@@ -230,7 +412,7 @@ impl Data {
         for (sample, line) in reader_X.lines().enumerate() {
             let line = line?;
             let trimmed_line = trim_line(&line);
-            let mut fields = trimmed_line.split('\t');
+            let mut fields = trimmed_line.split(delimiter_X);
 
             // First field is the sample name
             if let Some(sample_name) = fields.next() {
@@ -247,52 +429,51 @@ impl Data {
             }
         }
 
-        // Open and read the y.tsv file
-        let file_y = File::open(y_path)?;
-        let reader_y = BufReader::new(file_y);
-
-        // Parse y.tsv and store target values
-        let mut y_map = HashMap::new();
-        for line in reader_y.lines().skip(1) {
-            let line = line?;
-            let trimmed_line = trim_line(&line);
-            let mut fields = trimmed_line.split('\t');
-
-            // First field is the sample name
-            if let Some(sample_name) = fields.next() {
-                // Second field is the target value
-                if let Some(value) = fields.next() {
-                    let target: u8 = value.parse()?;
-                    y_map.insert(sample_name.to_string(), target);
-                }
-            }
-        }
-
-        // Reorder `y` to match the order of `samples` from X.tsv
-        self.y = self
-            .samples
-            .iter()
-            .map(|sample_name| {
-                *y_map.get(sample_name).unwrap_or_else(|| {
-                    warn!(
-                        "No y value available for {}. Setting y to 2 for this sample.",
-                        sample_name
-                    );
-                    &2
-                })
-            })
-            .collect();
+        // Load y data
+        self.load_y_data(y_path, trim_line)?;
 
         self.feature_len = self.features.len();
         self.sample_len = self.samples.len();
 
+        // Validate that we have sufficient data (likely parsing error if < 3)
+        if self.feature_len < 3 {
+            return Err(format!("Failed to read data: only {} feature(s) found. This likely indicates a parsing error. Please check the file format and delimiter.", self.feature_len).into());
+        }
+        if self.sample_len < 3 {
+            return Err(format!("Failed to read data: only {} sample(s) found. This likely indicates a parsing error. Please check the file format and delimiter.", self.sample_len).into());
+        }
+
         Ok(())
     }
 
+    /// Sets class labels
+    ///
+    /// # Arguments
+    ///
+    /// * `classes` - A vector of class labels to set
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use gpredomics::data::Data;
+    /// let mut data = Data::new();
+    /// data.load_data("./samples/Qin2014/Xtrain.tsv", "./samples/Qin2014/Ytrain.tsv", false).unwrap();
+    /// data.set_classes(vec!["class1".to_string(), "class2".to_string()]);
+    /// ```
     pub fn set_classes(&mut self, classes: Vec<String>) {
         self.classes = classes;
     }
 
+    /// Inverts class labels 0 and 1 in the dataset
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use gpredomics::data::Data;
+    /// let mut data = Data::new();
+    /// data.load_data("./samples/Qin2014/Xtrain.tsv", "./samples/Qin2014/Ytrain.tsv", false).unwrap();
+    /// data.inverse_classes();
+    /// ```
     pub fn inverse_classes(&mut self) {
         for label in &mut self.y {
             match *label {
@@ -310,11 +491,22 @@ impl Data {
         info!("Classes inverted");
     }
 
-    /// Load TSV d'annotations de features.
-    /// - feature_name (obligatoire)
-    /// - prior_weight (optionnel, f64)
-    /// - feature_penalty (optionnel, f64 ou liste de f64 séparés par ',')
-    /// - autres colonnes stockées dans feature_tags
+    /// Loads a feature annotation file containing metadata for features.
+    ///
+    /// # File structure
+    ///
+    /// * feature_name (required)
+    /// * prior_weight (optional, f64)
+    /// * feature_penalty (optional, f64 or list of f64 separated by ',')
+    /// * other columns (optional, stored in feature_tags)
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the feature annotation file
+    ///
+    /// # Returns
+    ///
+    /// `Ok(FeatureAnnotations)` if successful, or an error if loading fails
     pub fn load_feature_annotation<P: AsRef<Path>>(
         &self,
         path: P,
@@ -348,7 +540,7 @@ impl Data {
         let mut feature_tags: HashMap<usize, Vec<String>> = HashMap::new();
         let mut prior_weight: HashMap<usize, f64> = HashMap::new();
         let mut feature_penalty: HashMap<usize, f64> = HashMap::new();
-        // Rouvre le fichier pour lire toutes les lignes après l'en-tête
+        // Reopen the file to read all lines after the header
         let file2 = File::open(&path_buf)?;
         let reader2 = BufReader::new(file2);
         let all_lines: Vec<String> = reader2.lines().skip(1).filter_map(Result::ok).collect();
@@ -360,7 +552,7 @@ impl Data {
             }
         }
 
-        // Parsing comme avant
+        // Parsing as before
         for line in &all_lines {
             let fields: Vec<&str> = line.trim_end().split('\t').collect();
             if fields.len() <= idx_feature {
@@ -382,7 +574,7 @@ impl Data {
                         "Feature '{}' from annotation not found in data.features",
                         feature_name
                     );
-                    continue; // ignore unknown features
+                    continue; // unknown features
                 }
             };
             // Prior_weight
@@ -437,6 +629,20 @@ impl Data {
         })
     }
 
+    /// Loads a sample annotation file containing metadata for samples.
+    ///
+    /// # File structure
+    ///
+    /// * sample or sample_name (required)
+    /// * other columns (optional, stored in sample_tags)
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the sample annotation file
+    ///
+    /// # Returns
+    ///
+    /// `Ok(SampleAnnotations)` if successful, or an error if loading fails
     pub fn load_sample_annotation<P: AsRef<Path>>(
         &self,
         path: P,
@@ -446,7 +652,7 @@ impl Data {
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
 
-        // En-tête
+        // Header line
         let header = match lines.next() {
             Some(Ok(line)) => line,
             _ => return Err("Empty sample annotation file".into()),
@@ -456,7 +662,7 @@ impl Data {
         let mut idx_sample = None;
         let mut extra_idxs: Vec<(usize, String)> = Vec::new();
 
-        // Détection de la colonne sample et des colonnes supplémentaires
+        // Detection of the sample column and additional columns
         for (i, col) in columns.iter().enumerate() {
             match *col {
                 "sample" | "sample_name" => idx_sample = Some(i),
@@ -468,7 +674,7 @@ impl Data {
 
         let mut sample_tags: HashMap<usize, Vec<String>> = HashMap::new();
 
-        // Parcours des lignes d'annotations
+        // Parsing annotation lines
         for line_res in lines {
             let line = match line_res {
                 Ok(l) => l,
@@ -489,7 +695,7 @@ impl Data {
 
             let sample_name = fields[idx_sample];
 
-            // Rattacher à un index de self.samples
+            // Attach to an index of self.samples
             if !self.samples.contains(&sample_name.to_string()) {
                 log::debug!(
                     "Sample '{}' from annotation not found in data.samples: {:?}",
@@ -505,12 +711,11 @@ impl Data {
                         "Sample '{}' from annotation not found in data.samples",
                         sample_name
                     );
-                    continue; // on ignore les samples inconnus
+                    continue; // ignore unknown samples
                 }
             };
 
-            // Récupération des tags (toutes les colonnes hors sample)
-
+            // Retrieval of tags (all columns except sample)
             let mut tags = Vec::with_capacity(extra_idxs.len());
             for i in &extra_idxs {
                 let val = fields.get(i.0).map(|s| s.to_string()).unwrap_or_default();
@@ -818,7 +1023,17 @@ impl Data {
         }
     }
 
-    // Dissociate this function from select_features to allow its use in beam algorithm
+    /// Evaluate all features and return two lists of significant features for each class
+    ///
+    /// # Arguments
+    ///
+    /// * `param` - Reference to the Param struct containing feature selection parameters
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing two vectors:
+    /// * First vector: significant features for class 0 as (feature_index, class, significance_value)
+    /// * Second vector: significant features for class 1 as (feature_index, class, significance_value)
     pub fn evaluate_features(
         &self,
         param: &Param,
@@ -898,7 +1113,22 @@ impl Data {
         (class_0_features, class_1_features)
     }
 
-    /// Fill feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
+    /// Fills feature_selection, e.g. a restriction of features based on param (notably pvalue as computed by either studentt or wilcoxon)
+    ///
+    /// # Arguments
+    ///
+    /// * `param` - Reference to the Param struct containing feature selection parameters
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::param::Param;
+    /// let mut data = Data::new();
+    /// data.load_data("./samples/Qin2014/Xtrain.tsv", "./samples/Qin2014/Ytrain.tsv", true).unwrap();
+    /// let mut param = Param::default();
+    /// data.select_features(&param);
+    /// ```
     pub fn select_features(&mut self, param: &Param) {
         info!("Selecting features...");
 
@@ -940,7 +1170,16 @@ impl Data {
         }
     }
 
-    /// Benjamini-Hochberg FDR correction (Implementation correcte)
+    /// Applies Benjamini-Hochberg FDR correction for multiple hypothesis testing.
+    ///
+    /// # Arguments
+    ///
+    /// * `results` - Vector of tuples containing (feature_index, class, p_value)
+    /// * `fdr_alpha` - Desired FDR alpha level
+    ///
+    /// # Returns
+    ///
+    /// Filtered vector of tuples after FDR correction
     fn apply_fdr_correction(
         &self,
         mut results: Vec<(usize, u8, f64)>,
@@ -987,7 +1226,24 @@ impl Data {
         results
     }
 
-    /// filter Data for some samples (represented by a Vector of indices)
+    /// Filters Data to keep only some samples (represented by a Vector of indices)
+    ///
+    /// # Arguments
+    ///
+    /// * `samples` - Vector of sample indices to keep
+    ///
+    /// # Returns
+    ///
+    /// A new Data instance containing only the specified samples
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::data::Data;
+    /// let mut data = Data::new();
+    /// data.load_data("./samples/Qin2014/Xtrain.tsv", "./samples/Qin2014/Ytrain.tsv", false).unwrap();
+    /// let subset_data = data.subset(vec![0, 2, 4, 6]);
+    /// ```
     pub fn subset(&self, samples: Vec<usize>) -> Data {
         let mut X: HashMap<(usize, usize), f64> = HashMap::new();
         for (new_sample, sample) in samples.iter().enumerate() {
@@ -1029,6 +1285,15 @@ impl Data {
         }
     }
 
+    /// Clones the Data object with a new feature matrix X.
+    ///
+    /// # Arguments
+    ///
+    /// * `X` - New feature matrix as a HashMap
+    ///
+    /// # Returns
+    ///
+    /// A new Data instance with the updated feature matrix.
     pub fn clone_with_new_x(&self, X: HashMap<(usize, usize), f64>) -> Data {
         Data {
             X: X,
@@ -1046,6 +1311,22 @@ impl Data {
         }
     }
 
+    /// Adds another Data object to the current one by appending samples and merging feature matrices.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Reference to the Data object to be added
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::data::Data;
+    /// let mut data1 = Data::new();
+    /// data1.load_data("./samples/Qin2014/X1.tsv", "./samples/Qin2014/y1.tsv", false).unwrap();
+    /// let mut data2 = Data::new();
+    /// data2.load_data("./samples/Qin2014/X2.tsv", "./samples/Qin2014/y2.tsv", false).unwrap();
+    /// data1.add(&data2);
+    /// ```
     pub fn add(&mut self, other: &Data) {
         self.samples.extend_from_slice(&other.samples);
         self.y.extend_from_slice(&other.y);
@@ -1059,6 +1340,25 @@ impl Data {
         self.sample_len += other.sample_len;
     }
 
+    /// Removes all samples of a specified class from the Data object.
+    ///
+    /// This method is useful to remove unknown samples (label 2) from data.
+    /// # Arguments
+    ///
+    /// * `class_to_remove` - The class label to be removed
+    ///
+    /// # Returns
+    ///
+    /// A new Data instance with the specified class samples removed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::data::Data;
+    /// let mut data = Data::new();
+    /// data.load_data("./samples/Qin2014/Xtrain.tsv", "./samples/Qin2014/Ytrain.tsv", false).unwrap();
+    /// let filtered_data = data.remove_class(2);
+    /// ```
     pub fn remove_class(&mut self, class_to_remove: u8) -> Data {
         let indices_to_keep: Vec<usize> = self
             .y
@@ -1073,6 +1373,16 @@ impl Data {
         self.subset(indices_to_keep)
     }
 
+    /// Generates a random subset of samples while maintaining class proportions.
+    ///
+    /// # Arguments
+    ///
+    /// * `n_samples` - Number of samples to include in the subset
+    /// * `rng` - Mutable reference to a random number generator for reproducibility
+    ///
+    /// # Returns
+    ///
+    /// A vector of sample indices representing the random subset.  
     pub fn random_subset(&self, n_samples: usize, rng: &mut ChaCha8Rng) -> Vec<usize> {
         // Use stratify_indices_by_class to separate positive and negative samples
         let (indices_class1, indices_class0) = utils::stratify_indices_by_class(&self.y);
@@ -1128,13 +1438,16 @@ impl Data {
 
     /// Stratified train/test split with secondary stratification by annotation.
     ///
-    /// Arguments :
-    /// * data : complete dataset
-    /// * test_ratio : fraction of data for testing in (0,1)
-    /// * rng : mutable random generator for reproducibility
-    /// * stratify_by : name of the annotation column for double stratification (optional)
+    /// # Arguments
     ///
-    /// Returns `(train_data, test_data)`.
+    /// * `data` - complete dataset
+    /// * `test_ratio` - fraction of data for testing in (0,1)
+    /// * `rng` - mutable random generator for reproducibility
+    /// * `stratify_by` - name of the annotation column for double stratification (optional)
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing the training and testing Data subsets.
     pub fn train_test_split(
         &self,
         test_ratio: f64,
@@ -1333,6 +1646,11 @@ mod tests {
     use std::path::PathBuf;
 
     impl Data {
+        /// Generates a simple test dataset for unit testing.
+        ///
+        /// # Returns
+        ///
+        /// A Data instance with predefined values for testing.
         pub fn test() -> Data {
             let mut X: HashMap<(usize, usize), f64> = HashMap::new();
             let mut feature_class: HashMap<usize, u8> = HashMap::new();
@@ -1370,6 +1688,16 @@ mod tests {
             }
         }
 
+        /// Generates a specific test dataset with random values for unit testing.
+        ///
+        /// # Arguments
+        ///
+        /// * `num_samples` - Number of samples in the dataset
+        /// * `num_features` - Number of features in the dataset
+        ///
+        /// # Returns
+        ///
+        /// A Data instance with random values for testing.
         pub fn specific_test(num_samples: usize, num_features: usize) -> Data {
             let mut X = HashMap::new();
             let mut rng = ChaCha8Rng::seed_from_u64(12345);
@@ -1403,6 +1731,64 @@ mod tests {
             }
         }
 
+        /// Generates a specific test where with significant features for unit testing.
+        ///
+        /// # Arguments
+        ///
+        /// * `num_samples` - Number of samples in the dataset
+        /// * `num_features` - Number of features in the dataset
+        ///
+        /// # Returns
+        ///
+        /// A Data instance with significant features for testing.
+        pub fn specific_significant_test(num_samples: usize, num_features: usize) -> Data {
+            let mut X = HashMap::new();
+            let mut rng = ChaCha8Rng::seed_from_u64(12345);
+
+            // Populate X with (sample, feature) -> value mapping
+            for sample in 0..num_samples {
+                for feature in 0..num_features {
+                    X.insert((sample, feature), rng.gen_range(0.0..1.0));
+                }
+            }
+
+            let y: Vec<u8> = (0..num_samples)
+                .map(|sample| {
+                    if X.get(&(sample, 0)).cloned().unwrap_or(0.0) > 0.5 {
+                        1
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+
+            Data {
+                X,
+                y,
+                sample_len: num_samples,
+                feature_class: HashMap::new(),
+                feature_significance: HashMap::new(),
+                features: (0..num_features)
+                    .map(|i| format!("feature_{}", i))
+                    .collect(),
+                samples: (0..num_samples).map(|i| format!("sample_{}", i)).collect(),
+                feature_selection: (0..num_features).collect(),
+                feature_len: num_features,
+                classes: vec!["class_0".to_string(), "class_1".to_string()],
+                feature_annotations: None,
+                sample_annotations: None,
+            }
+        }
+
+        /// Generates a test dataset with specified features for unit testing.
+        ///
+        /// # Arguments
+        ///
+        /// * `feature_indices` - Slice of feature indices to include in the dataset
+        ///
+        /// # Returns
+        ///
+        /// A Data instance with the specified features for testing.
         pub fn test_with_these_features(feature_indices: &[usize]) -> Data {
             let mut data = Data::new();
             data.feature_len = feature_indices.len();
@@ -1421,6 +1807,11 @@ mod tests {
             data
         }
 
+        /// Generates another specific test dataset for unit testing.
+        ///     
+        /// # Returns
+        ///
+        /// A Data instance with predefined values for testing.
         pub fn test2() -> Data {
             let mut X: HashMap<(usize, usize), f64> = HashMap::new();
             let mut feature_class: HashMap<usize, u8> = HashMap::new();
@@ -1476,6 +1867,11 @@ mod tests {
             }
         }
 
+        /// Generates a test dataset with discovery data for unit testing.
+        ///    
+        /// # Returns
+        ///
+        /// A Data instance with predefined discovery data for testing.
         pub fn test_disc_data() -> Data {
             let mut X: HashMap<(usize, usize), f64> = HashMap::new();
             let mut feature_class: HashMap<usize, u8> = HashMap::new();
@@ -1516,6 +1912,11 @@ mod tests {
             }
         }
 
+        /// Generates a test dataset with validation data for unit testing.
+        ///
+        /// # Returns
+        ///
+        /// A Data instance with predefined validation data for testing.
         pub fn test_valid_data() -> Data {
             let mut X: HashMap<(usize, usize), f64> = HashMap::new();
             let mut feature_class: HashMap<usize, u8> = HashMap::new();
@@ -2115,7 +2516,7 @@ mod tests {
     fn test_y_reordering_with_unordered_input() {
         let (x_path, y_path) = create_test_files("reorder_001");
 
-        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\n";
+        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\nFeature2\t0.2\t0.4\t0.6\nFeature3\t0.7\t0.8\t0.9\n";
         fs::write(&x_path, x_content).unwrap();
 
         let y_content = "SampleID\tLabel\nSample3\t1\nSample1\t0\nSample2\t1\n";
@@ -2135,7 +2536,7 @@ mod tests {
     fn test_consistency_multiple_loads() {
         let (x_path, y_path) = create_test_files("consistency_001");
 
-        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\nFeature2\t1.0\t2.0\t1.5\n";
+        let x_content = "FeatureID\tSample1\tSample2\tSample3\nFeature1\t0.5\t0.0\t0.3\nFeature2\t1.0\t2.0\t1.5\nFeature3\t0.7\t0.9\t0.8\n";
         fs::write(&x_path, x_content).unwrap();
 
         let y_content = "SampleID\tLabel\nSample1\t0\nSample2\t1\nSample3\t1\n";
@@ -3356,5 +3757,247 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let _ = data.train_test_split(0.3, &mut rng, Some("time"));
+    }
+
+    // Tests for delimiter detection
+    #[test]
+    fn test_detect_delimiter_txt_extension() {
+        use std::io::Write;
+        let temp_file = "test_temp_file.txt";
+        let mut file = File::create(temp_file).unwrap();
+        writeln!(file, "col1\tcol2\tcol3").unwrap();
+
+        let result = Data::detect_delimiter(temp_file);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), '\t', "TXT files should use tab delimiter");
+
+        std::fs::remove_file(temp_file).unwrap();
+    }
+
+    #[test]
+    fn test_detect_delimiter_tsv_extension() {
+        use std::io::Write;
+        let temp_file = "test_temp_file.tsv";
+        let mut file = File::create(temp_file).unwrap();
+        writeln!(file, "col1\tcol2\tcol3").unwrap();
+
+        let result = Data::detect_delimiter(temp_file);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), '\t', "TSV files should use tab delimiter");
+
+        std::fs::remove_file(temp_file).unwrap();
+    }
+
+    #[test]
+    fn test_detect_delimiter_tab_extension() {
+        use std::io::Write;
+        let temp_file = "test_temp_file.tab";
+        let mut file = File::create(temp_file).unwrap();
+        writeln!(file, "col1\tcol2\tcol3").unwrap();
+
+        let result = Data::detect_delimiter(temp_file);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), '\t', "TAB files should use tab delimiter");
+
+        std::fs::remove_file(temp_file).unwrap();
+    }
+
+    #[test]
+    fn test_detect_delimiter_csv_with_comma() {
+        use std::io::Write;
+        let temp_file = "test_temp_file_comma.csv";
+        {
+            let mut file = File::create(temp_file).unwrap();
+            writeln!(file, "col1,col2,col3").unwrap();
+            file.flush().unwrap();
+        } // File is closed here
+
+        let result = Data::detect_delimiter(temp_file);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            ',',
+            "CSV files with commas should detect comma delimiter"
+        );
+
+        std::fs::remove_file(temp_file).unwrap();
+    }
+
+    #[test]
+    fn test_detect_delimiter_csv_with_semicolon() {
+        use std::io::Write;
+        let temp_file = "test_temp_file_semicolon.csv";
+        {
+            let mut file = File::create(temp_file).unwrap();
+            writeln!(file, "col1;col2;col3").unwrap();
+            file.flush().unwrap();
+        } // File is closed here
+
+        let result = Data::detect_delimiter(temp_file);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            ';',
+            "CSV files with semicolons should detect semicolon delimiter"
+        );
+
+        std::fs::remove_file(temp_file).unwrap();
+    }
+
+    #[test]
+    fn test_detect_delimiter_csv_without_delimiter() {
+        use std::io::Write;
+        let temp_file = "test_temp_file.csv";
+        let mut file = File::create(temp_file).unwrap();
+        writeln!(file, "col1 col2 col3").unwrap();
+
+        let result = Data::detect_delimiter(temp_file);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no valid delimiter found"));
+
+        std::fs::remove_file(temp_file).unwrap();
+    }
+
+    #[test]
+    fn test_detect_delimiter_unknown_extension() {
+        use std::io::Write;
+        let temp_file = "test_temp_file.dat";
+        let mut file = File::create(temp_file).unwrap();
+        writeln!(file, "col1\tcol2\tcol3").unwrap();
+
+        let result = Data::detect_delimiter(temp_file);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unknown file extension"));
+
+        std::fs::remove_file(temp_file).unwrap();
+    }
+
+    // Tests for file existence check
+    #[test]
+    fn test_load_data_nonexistent_x_file() {
+        let mut data = Data::new();
+        let result = data.load_data("nonexistent_X.tsv", "samples/tests/y.tsv", true);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("File does not exist: nonexistent_X.tsv"));
+    }
+
+    #[test]
+    fn test_load_data_nonexistent_y_file() {
+        let mut data = Data::new();
+        let result = data.load_data("samples/tests/X.tsv", "nonexistent_y.tsv", true);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("File does not exist: nonexistent_y.tsv"));
+    }
+
+    // Tests for minimum data requirements
+    #[test]
+    fn test_load_data_insufficient_features() {
+        use std::io::Write;
+
+        // Create temp files with only 2 features
+        let temp_x = "test_temp_X_insufficient.tsv";
+        let temp_y = "test_temp_y_insufficient.tsv";
+
+        let mut file_x = File::create(temp_x).unwrap();
+        writeln!(file_x, "\tsample1\tsample2\tsample3\tsample4").unwrap();
+        writeln!(file_x, "feature1\t0.5\t0.6\t0.7\t0.8").unwrap();
+        writeln!(file_x, "feature2\t0.1\t0.2\t0.3\t0.4").unwrap();
+
+        let mut file_y = File::create(temp_y).unwrap();
+        writeln!(file_y, "sample\tclass").unwrap();
+        writeln!(file_y, "sample1\t0").unwrap();
+        writeln!(file_y, "sample2\t1").unwrap();
+        writeln!(file_y, "sample3\t0").unwrap();
+        writeln!(file_y, "sample4\t1").unwrap();
+
+        let mut data = Data::new();
+        let result = data.load_data(temp_x, temp_y, true);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("only 2 feature(s) found"));
+
+        std::fs::remove_file(temp_x).unwrap();
+        std::fs::remove_file(temp_y).unwrap();
+    }
+
+    #[test]
+    fn test_load_data_insufficient_samples() {
+        use std::io::Write;
+
+        // Create temp files with only 2 samples
+        let temp_x = "test_temp_X_insufficient2.tsv";
+        let temp_y = "test_temp_y_insufficient2.tsv";
+
+        let mut file_x = File::create(temp_x).unwrap();
+        writeln!(file_x, "\tsample1\tsample2").unwrap();
+        writeln!(file_x, "feature1\t0.5\t0.6").unwrap();
+        writeln!(file_x, "feature2\t0.1\t0.2").unwrap();
+        writeln!(file_x, "feature3\t0.3\t0.4").unwrap();
+        writeln!(file_x, "feature4\t0.7\t0.8").unwrap();
+
+        let mut file_y = File::create(temp_y).unwrap();
+        writeln!(file_y, "sample\tclass").unwrap();
+        writeln!(file_y, "sample1\t0").unwrap();
+        writeln!(file_y, "sample2\t1").unwrap();
+
+        let mut data = Data::new();
+        let result = data.load_data(temp_x, temp_y, true);
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("only 2 sample(s) found"));
+
+        std::fs::remove_file(temp_x).unwrap();
+        std::fs::remove_file(temp_y).unwrap();
+    }
+
+    #[test]
+    fn test_load_data_valid_minimum() {
+        use std::io::Write;
+
+        // Create temp files with exactly 3 features and 3 samples (minimum valid)
+        let temp_x = "test_temp_X_valid.tsv";
+        let temp_y = "test_temp_y_valid.tsv";
+
+        let mut file_x = File::create(temp_x).unwrap();
+        writeln!(file_x, "\tsample1\tsample2\tsample3").unwrap();
+        writeln!(file_x, "feature1\t0.5\t0.6\t0.7").unwrap();
+        writeln!(file_x, "feature2\t0.1\t0.2\t0.3").unwrap();
+        writeln!(file_x, "feature3\t0.3\t0.4\t0.5").unwrap();
+
+        let mut file_y = File::create(temp_y).unwrap();
+        writeln!(file_y, "sample\tclass").unwrap();
+        writeln!(file_y, "sample1\t0").unwrap();
+        writeln!(file_y, "sample2\t1").unwrap();
+        writeln!(file_y, "sample3\t0").unwrap();
+
+        let mut data = Data::new();
+        let result = data.load_data(temp_x, temp_y, true);
+
+        assert!(result.is_ok());
+        assert_eq!(data.feature_len, 3);
+        assert_eq!(data.sample_len, 3);
+
+        std::fs::remove_file(temp_x).unwrap();
+        std::fs::remove_file(temp_y).unwrap();
     }
 }

@@ -1,4 +1,3 @@
-use gpredomics::beam::BeamMethod;
 /// End-to-End Integration Test for Beam Algorithm with Qin2014 Dataset
 ///
 /// This test validates the complete Beam workflow:
@@ -9,6 +8,7 @@ use gpredomics::beam::BeamMethod;
 /// 5. Testing serialization/deserialization
 ///
 /// Run with: cargo test --test test_beam_e2e_qin2014 -- --nocapture
+use gpredomics::beam::BeamMethod;
 use gpredomics::experiment::Experiment;
 use gpredomics::param::Param;
 use gpredomics::run;
@@ -66,7 +66,7 @@ fn create_qin2014_beam_params() -> Param {
 
     // Importance settings
     param.importance.compute_importance = false;
-    param.importance.n_permutations_oob = 100;
+    param.importance.n_permutations_mda = 100;
     param.importance.scaled_importance = true;
     param.importance.importance_aggregation = gpredomics::experiment::ImportanceAggregation::mean;
 
@@ -82,8 +82,8 @@ fn create_qin2014_beam_params() -> Param {
 
     // Beam settings - Small range for quick test
     param.beam.method = BeamMethod::LimitedExhaustive;
-    param.beam.kmin = 2;
-    param.beam.kmax = 5; // Small for quick tests
+    param.beam.k_start = 2;
+    param.beam.k_stop = 5; // Small for quick tests
     param.beam.best_models_criterion = 0.001; // Very small (low = more models kept)
     param.beam.max_nb_of_models = 10000;
 
@@ -92,8 +92,8 @@ fn create_qin2014_beam_params() -> Param {
     param.ga.max_epochs = 10;
     param.ga.min_epochs = 1;
     param.ga.max_age_best_model = 10;
-    param.ga.kmin = 1;
-    param.ga.kmax = 50;
+    param.ga.k_min = 1;
+    param.ga.k_max = 50;
     param.ga.select_elite_pct = 5.0;
     param.ga.select_niche_pct = 0.0;
     param.ga.select_random_pct = 10.0;
@@ -253,12 +253,12 @@ fn test_beam_qin2014_basic_run() {
         "Specificity should be between 0 and 1"
     );
     assert!(
-        best_model.k >= param.beam.kmin,
-        "Best model should have at least kmin features"
+        best_model.k >= param.beam.k_start,
+        "Best model should have at least k_start features"
     );
     assert!(
-        best_model.k <= param.beam.kmax,
-        "Best model should have at most kmax features"
+        best_model.k <= param.beam.k_stop,
+        "Best model should have at most k_stop features"
     );
     assert!(
         !best_model.features.is_empty(),
@@ -283,8 +283,8 @@ fn test_beam_qin2014_basic_run() {
     println!("  - Best model features (k): {}", best_model.k);
     println!(
         "  - K range explored: [{}, {}]",
-        param.beam.kmin,
-        beam_populations.len() + param.beam.kmin - 1
+        param.beam.k_start,
+        beam_populations.len() + param.beam.k_start - 1
     );
     println!("  - Execution time: {:.2}s", experiment.execution_time);
 }
@@ -295,8 +295,8 @@ fn test_beam_qin2014_limited_exhaustive() {
 
     let mut param = create_qin2014_beam_params();
     param.beam.method = BeamMethod::LimitedExhaustive;
-    param.beam.kmin = 2;
-    param.beam.kmax = 4; // Small for combinatorial
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4; // Small for combinatorial
 
     let running = Arc::new(AtomicBool::new(true));
     let experiment = run(&param, running);
@@ -327,8 +327,8 @@ fn test_beam_qin2014_parallel_forward() {
 
     let mut param = create_qin2014_beam_params();
     param.beam.method = BeamMethod::ParallelForward;
-    param.beam.kmin = 2;
-    param.beam.kmax = 5;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 5;
 
     let running = Arc::new(AtomicBool::new(true));
     let experiment = run(&param, running);
@@ -417,8 +417,8 @@ fn test_beam_qin2014_keep_trace() {
 
     let mut param = create_qin2014_beam_params();
     param.general.keep_trace = true;
-    param.beam.kmin = 2;
-    param.beam.kmax = 5;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 5;
 
     let running = Arc::new(AtomicBool::new(true));
     let experiment = run(&param, running);
@@ -461,7 +461,7 @@ fn test_beam_qin2014_early_stopping() {
 
     let running = Arc::new(AtomicBool::new(true));
     let mut param = create_qin2014_beam_params();
-    param.beam.kmax = 10; // Larger range
+    param.beam.k_stop = 10; // Larger range
 
     // Simulate early stopping after a delay
     let running_clone = Arc::clone(&running);
@@ -498,7 +498,7 @@ fn test_beam_qin2014_best_models_ci_alpha() {
     // Test with strict alpha (fewer models selected)
     let mut param_strict = create_qin2014_beam_params();
     param_strict.beam.best_models_criterion = 0.05; // High value (high = fewer models)
-    param_strict.beam.kmax = 4;
+    param_strict.beam.k_stop = 4;
 
     let running1 = Arc::new(AtomicBool::new(true));
     let exp_strict = run(&param_strict, running1);
@@ -506,7 +506,7 @@ fn test_beam_qin2014_best_models_ci_alpha() {
     // Test with relaxed alpha (more models selected)
     let mut param_relaxed = create_qin2014_beam_params();
     param_relaxed.beam.best_models_criterion = 0.001; // Low value (low = more models)
-    param_relaxed.beam.kmax = 4;
+    param_relaxed.beam.k_stop = 4;
 
     let running2 = Arc::new(AtomicBool::new(true));
     let exp_relaxed = run(&param_relaxed, running2);
@@ -554,7 +554,7 @@ fn test_beam_qin2014_feature_selection_impact() {
     // Test with very restrictive feature selection
     let mut param_restrictive = create_qin2014_beam_params();
     param_restrictive.data.max_features_per_class = 15; // Very few features
-    param_restrictive.beam.kmax = 5;
+    param_restrictive.beam.k_stop = 5;
 
     let running1 = Arc::new(AtomicBool::new(true));
     let exp_restrictive = run(&param_restrictive, running1);
@@ -562,7 +562,7 @@ fn test_beam_qin2014_feature_selection_impact() {
     // Test with more permissive feature selection
     let mut param_permissive = create_qin2014_beam_params();
     param_permissive.data.max_features_per_class = 50; // More features
-    param_permissive.beam.kmax = 5;
+    param_permissive.beam.k_stop = 5;
 
     let running2 = Arc::new(AtomicBool::new(true));
     let exp_permissive = run(&param_permissive, running2);
@@ -594,7 +594,7 @@ fn test_beam_qin2014_multiple_languages() {
 
     let mut param = create_qin2014_beam_params();
     param.general.language = "ter,bin".to_string();
-    param.beam.kmax = 4;
+    param.beam.k_stop = 4;
 
     let running = Arc::new(AtomicBool::new(true));
     let experiment = run(&param, running);
@@ -659,7 +659,7 @@ fn test_beam_qin2014_max_nb_models() {
 
     let mut param = create_qin2014_beam_params();
     param.beam.max_nb_of_models = 1000; // Limit combinations
-    param.beam.kmax = 5;
+    param.beam.k_stop = 5;
     param.data.max_features_per_class = 25; // Enough features to test limit
 
     let running = Arc::new(AtomicBool::new(true));
@@ -701,7 +701,7 @@ fn test_beam_qin2014_different_fit_functions() {
 
         let mut param = create_qin2014_beam_params();
         param.general.fit = fit_fn.clone();
-        param.beam.kmax = 4; // Quick test
+        param.beam.k_stop = 4; // Quick test
 
         let running = Arc::new(AtomicBool::new(true));
         let experiment = run(&param, running);
@@ -753,8 +753,8 @@ fn test_beam_qin2014_cv_enabled() {
     param.cv.resampling_inner_folds_epochs = 0;
 
     // Beam small interval
-    param.beam.kmin = 2;
-    param.beam.kmax = 4;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4;
     param.beam.best_models_criterion = 0.01; // permissive to ensure some models per fold
     param.beam.max_nb_of_models = 2000;
 
@@ -792,11 +792,11 @@ fn test_beam_qin2014_cv_enabled() {
         );
         for ind in &last_pop.individuals {
             assert!(
-                ind.k >= param.beam.kmin && ind.k <= param.beam.kmax,
+                ind.k >= param.beam.k_start && ind.k <= param.beam.k_stop,
                 "Model k={} must be within [{}..{}]",
                 ind.k,
-                param.beam.kmin,
-                param.beam.kmax
+                param.beam.k_start,
+                param.beam.k_stop
             );
         }
     }
@@ -816,12 +816,12 @@ fn test_beam_qin2014_cv_enabled() {
 }
 
 #[test]
-fn test_beam_qin2014_kmin_kmax_range() {
+fn test_beam_qin2014_k_start_k_stop_range() {
     println!("\n=== Testing Beam K Range Constraints ===\n");
 
     let mut param = create_qin2014_beam_params();
-    param.beam.kmin = 3;
-    param.beam.kmax = 5;
+    param.beam.k_start = 3;
+    param.beam.k_stop = 5;
     param.data.max_features_per_class = 20; // Ensure enough features
 
     let running = Arc::new(AtomicBool::new(true));
@@ -832,21 +832,21 @@ fn test_beam_qin2014_kmin_kmax_range() {
     // Check that all models respect k constraints
     for individual in &final_pop.individuals {
         assert!(
-            individual.k >= param.beam.kmin,
-            "Model k={} should be >= kmin={}",
+            individual.k >= param.beam.k_start,
+            "Model k={} should be >= k_start={}",
             individual.k,
-            param.beam.kmin
+            param.beam.k_start
         );
         assert!(
-            individual.k <= param.beam.kmax,
-            "Model k={} should be <= kmax={}",
+            individual.k <= param.beam.k_stop,
+            "Model k={} should be <= k_stop={}",
             individual.k,
-            param.beam.kmax
+            param.beam.k_stop
         );
     }
 
-    println!("  - kmin: {}", param.beam.kmin);
-    println!("  - kmax: {}", param.beam.kmax);
+    println!("  - k_start: {}", param.beam.k_start);
+    println!("  - k_stop: {}", param.beam.k_stop);
     println!(
         "  - All {} models respect k constraints",
         final_pop.individuals.len()
@@ -864,8 +864,8 @@ fn test_beam_qin2014_gpu_vs_cpu() {
     let mut param_cpu = create_qin2014_beam_params();
     param_cpu.general.gpu = false;
     param_cpu.general.seed = 99999;
-    param_cpu.beam.kmin = 2;
-    param_cpu.beam.kmax = 4;
+    param_cpu.beam.k_start = 2;
+    param_cpu.beam.k_stop = 4;
     param_cpu.beam.best_models_criterion = 0.1;
 
     println!("Running Beam on CPU...");
@@ -876,8 +876,8 @@ fn test_beam_qin2014_gpu_vs_cpu() {
     let mut param_gpu = create_qin2014_beam_params();
     param_gpu.general.gpu = true;
     param_gpu.general.seed = 99999;
-    param_gpu.beam.kmin = 2;
-    param_gpu.beam.kmax = 4;
+    param_gpu.beam.k_start = 2;
+    param_gpu.beam.k_stop = 4;
     param_gpu.beam.best_models_criterion = 0.1;
     param_gpu.gpu.fallback_to_cpu = true;
 
@@ -926,8 +926,8 @@ fn test_beam_qin2014_all_language_datatype_combinations() {
             param.general.language = language.to_string();
             param.general.data_type = datatype.to_string();
             param.general.seed = 777;
-            param.beam.kmin = 2;
-            param.beam.kmax = 3;
+            param.beam.k_start = 2;
+            param.beam.k_stop = 3;
             param.beam.best_models_criterion = 0.001; // Very permissive to ensure models
 
             let running = Arc::new(AtomicBool::new(true));
@@ -1012,8 +1012,8 @@ fn test_beam_gpu_with_inner_cv() {
     param.general.keep_trace = false; // Disable trace for faster tests
     param.data.max_features_per_class = 3; // Very restrictive to limit model count
     param.beam.method = BeamMethod::LimitedExhaustive;
-    param.beam.kmin = 2;
-    param.beam.kmax = 2; // Keep very small for GPU fold constraints
+    param.beam.k_start = 2;
+    param.beam.k_stop = 2; // Keep very small for GPU fold constraints
     param.beam.max_nb_of_models = 15; // Small for fold processing with margin
     param.cv.inner_folds = 3;
     param.cv.overfit_penalty = 0.5; // Enable inner CV
@@ -1100,8 +1100,8 @@ fn test_beam_consistency_inner_cv_vs_no_inner_cv() {
     param.general.cv = false; // No outer CV
     param.general.gpu = false;
     param.general.keep_trace = false;
-    param.beam.kmin = 2;
-    param.beam.kmax = 4;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4;
     param.data.max_features_per_class = 15;
 
     // Run WITHOUT inner CV
@@ -1143,8 +1143,8 @@ fn test_beam_consistency_inner_cv_vs_no_inner_cv() {
     // But both should be valid
     assert!(best_no_cv.auc >= 0.0 && best_no_cv.auc <= 1.0);
     assert!(best_with_cv.auc >= 0.0 && best_with_cv.auc <= 1.0);
-    assert!(best_no_cv.k >= param.beam.kmin && best_no_cv.k <= param.beam.kmax);
-    assert!(best_with_cv.k >= param.beam.kmin && best_with_cv.k <= param.beam.kmax);
+    assert!(best_no_cv.k >= param.beam.k_start && best_no_cv.k <= param.beam.k_stop);
+    assert!(best_with_cv.k >= param.beam.k_start && best_with_cv.k <= param.beam.k_stop);
 
     println!("✓ Inner CV vs No Inner CV consistency test passed");
 }
@@ -1158,8 +1158,8 @@ fn test_beam_consistency_outer_cv_vs_no_outer_cv() {
     param.general.seed = 42;
     param.general.gpu = false;
     param.general.keep_trace = true; // Keep trace to see structure
-    param.beam.kmin = 2;
-    param.beam.kmax = 4;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4;
     param.data.max_features_per_class = 15;
 
     // Run WITHOUT outer CV
@@ -1213,8 +1213,8 @@ fn test_beam_consistency_outer_cv_vs_no_outer_cv() {
     // Both should be valid
     assert!(best_no_cv.auc >= 0.0 && best_no_cv.auc <= 1.0);
     assert!(best_with_cv.auc >= 0.0 && best_with_cv.auc <= 1.0);
-    assert!(best_no_cv.k >= param.beam.kmin && best_no_cv.k <= param.beam.kmax);
-    assert!(best_with_cv.k >= param.beam.kmin && best_with_cv.k <= param.beam.kmax);
+    assert!(best_no_cv.k >= param.beam.k_start && best_no_cv.k <= param.beam.k_stop);
+    assert!(best_with_cv.k >= param.beam.k_start && best_with_cv.k <= param.beam.k_stop);
 
     println!("✓ Outer CV vs No Outer CV consistency test passed");
 }
@@ -1229,8 +1229,8 @@ fn test_beam_consistency_gpu_vs_cpu_basic() {
     param.general.seed = 12345;
     param.general.cv = false;
     param.general.keep_trace = false;
-    param.beam.kmin = 2;
-    param.beam.kmax = 4;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4;
     param.data.max_features_per_class = 15;
     param.cv.overfit_penalty = 0.0; // No inner CV
 
@@ -1287,8 +1287,8 @@ fn test_beam_consistency_gpu_vs_cpu_inner_cv() {
     param.general.cv = false; // No outer CV
     param.general.keep_trace = false;
     param.beam.method = BeamMethod::LimitedExhaustive;
-    param.beam.kmin = 2;
-    param.beam.kmax = 2; // Keep very small to fit in GPU buffer with folds
+    param.beam.k_start = 2;
+    param.beam.k_stop = 2; // Keep very small to fit in GPU buffer with folds
     param.data.max_features_per_class = 3; // Very restrictive like in test_beam_gpu_with_inner_cv
     param.beam.max_nb_of_models = 15; // Small limit for GPU fold processing
     param.cv.inner_folds = 3;
@@ -1351,8 +1351,8 @@ fn test_beam_consistency_gpu_vs_cpu_outer_cv() {
     param.general.seed = 99999;
     param.general.cv = true; // Outer CV enabled
     param.general.keep_trace = false;
-    param.beam.kmin = 2;
-    param.beam.kmax = 3;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 3;
     param.data.max_features_per_class = 10;
     param.cv.outer_folds = 2;
     param.cv.inner_folds = 3;
@@ -1406,8 +1406,8 @@ fn test_beam_consistency_keep_trace() {
     param.general.seed = 77777;
     param.general.cv = false;
     param.general.gpu = false;
-    param.beam.kmin = 2;
-    param.beam.kmax = 5;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 5;
     param.data.max_features_per_class = 15;
 
     // Run WITHOUT keep_trace
@@ -1479,8 +1479,8 @@ fn test_beam_qin2014_with_voting() {
 
     let mut param = create_qin2014_beam_params();
     param.general.seed = 42;
-    param.beam.kmin = 2;
-    param.beam.kmax = 4;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4;
     param.data.max_features_per_class = 15;
 
     // Enable voting
@@ -1559,8 +1559,8 @@ fn test_beam_qin2014_voting_methods() {
 
         let mut param = create_qin2014_beam_params();
         param.general.seed = 42;
-        param.beam.kmin = 2;
-        param.beam.kmax = 3;
+        param.beam.k_start = 2;
+        param.beam.k_stop = 3;
         param.data.max_features_per_class = 12;
 
         param.voting.vote = true;
@@ -1609,8 +1609,8 @@ fn test_beam_qin2014_with_threshold_ci() {
 
     let mut param = create_qin2014_beam_params();
     param.general.seed = 42;
-    param.beam.kmin = 2;
-    param.beam.kmax = 4;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4;
     param.data.max_features_per_class = 15;
 
     // Enable threshold CI
@@ -1679,8 +1679,8 @@ fn test_beam_qin2014_threshold_ci_alpha_variations() {
 
         let mut param = create_qin2014_beam_params();
         param.general.seed = 42;
-        param.beam.kmin = 2;
-        param.beam.kmax = 3;
+        param.beam.k_start = 2;
+        param.beam.k_stop = 3;
         param.data.max_features_per_class = 12;
 
         param.general.threshold_ci_alpha = alpha;
@@ -1731,8 +1731,8 @@ fn test_beam_qin2014_voting_with_threshold_ci() {
 
     let mut param = create_qin2014_beam_params();
     param.general.seed = 42;
-    param.beam.kmin = 2;
-    param.beam.kmax = 4;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4;
     param.data.max_features_per_class = 15;
 
     // Enable both voting and threshold CI
@@ -1811,8 +1811,8 @@ fn test_beam_qin2014_voting_with_pruning() {
 
     let mut param = create_qin2014_beam_params();
     param.general.seed = 42;
-    param.beam.kmin = 2;
-    param.beam.kmax = 4;
+    param.beam.k_start = 2;
+    param.beam.k_stop = 4;
     param.data.max_features_per_class = 15;
 
     // Enable voting with pruning
@@ -1866,8 +1866,8 @@ fn test_beam_qin2014_internal_holdout_split() {
     param_no_holdout.data.holdout_ratio = 0.0;
     param_no_holdout.general.cv = false;
     // Make the test lighter
-    param_no_holdout.beam.kmin = 2;
-    param_no_holdout.beam.kmax = 4;
+    param_no_holdout.beam.k_start = 2;
+    param_no_holdout.beam.k_stop = 4;
     param_no_holdout.data.max_features_per_class = 15;
 
     let running1 = Arc::new(AtomicBool::new(true));
@@ -1936,8 +1936,8 @@ fn test_beam_qin2014_external_test_overrides_holdout() {
     param_external_only.data.holdout_ratio = 0.0;
     param_external_only.general.cv = false;
     // Keep Beam reasonably fast
-    param_external_only.beam.kmin = 2;
-    param_external_only.beam.kmax = 4;
+    param_external_only.beam.k_start = 2;
+    param_external_only.beam.k_stop = 4;
 
     let running1 = Arc::new(AtomicBool::new(true));
     let exp_external_only = run(&param_external_only, running1);
@@ -2043,4 +2043,156 @@ fn test_beam_qin2014_external_test_overrides_holdout() {
         test_with_holdout_and_external.sample_len
     );
     println!("✓ Beam external test overrides holdout_ratio as expected");
+}
+
+#[test]
+fn test_beam_qin2014_k_start_1_all_combinations() {
+    println!("\n=== Testing Beam with k_start=1 for All Language/DataType Combinations ===\n");
+    println!("This test verifies that beam search with k_start=1 doesn't crash and returns non-empty populations");
+    println!(
+        "for all combinations of languages (bin, ter, ratio) and datatypes (raw, prev, log).\n"
+    );
+
+    // Test all combinations except pow2 as requested
+    let languages = vec!["bin", "ter", "ratio"];
+    let datatypes = vec!["raw", "prev", "log"];
+
+    let mut results = Vec::new();
+
+    for language in &languages {
+        for datatype in &datatypes {
+            println!(
+                "\n--- Testing language={}, datatype={}, k_start=1 ---",
+                language, datatype
+            );
+
+            let mut param = create_qin2014_beam_params();
+            param.general.language = language.to_string();
+            param.general.data_type = datatype.to_string();
+            param.general.seed = 12345;
+
+            // Critical: set k_start to 1
+            param.beam.k_start = 1;
+            param.beam.k_stop = 10; // Keep small for quick test
+            param.beam.best_models_criterion = 10.0; // Permissive to ensure models are kept
+            param.beam.max_nb_of_models = 10000;
+
+            // Adjust feature selection to ensure we have enough features
+            param.data.max_features_per_class = 100;
+            param.data.feature_maximal_adj_pvalue = 1.0;
+
+            // Adjust epsilon for LOG type
+            if *datatype == "log" {
+                param.general.data_type_epsilon = 0.1;
+            }
+
+            let running = Arc::new(AtomicBool::new(true));
+            let experiment = run(&param, running);
+
+            // Critical assertions: population should exist and not be empty
+            assert!(
+                experiment.final_population.is_some(),
+                "Beam with k_start=1 should produce a final population for language={}, datatype={}",
+                language,
+                datatype
+            );
+
+            let final_pop = experiment.final_population.as_ref().unwrap();
+            assert!(
+                !final_pop.individuals.is_empty(),
+                "Beam with k_start=1 should produce non-empty population for language={}, datatype={}. Got empty population!",
+                language,
+                datatype
+            );
+
+            // Count models with k=1 (may be 0 if they were filtered out by best_models_criterion)
+            let models_with_k1 = final_pop
+                .individuals
+                .iter()
+                .filter(|ind| ind.k == 1)
+                .count();
+
+            // Note: We don't assert that models_with_k1 > 0 because beam search may legitimately
+            // filter out all k=1 models if they don't meet the quality threshold.
+            // The important thing is that k_start=1 doesn't crash and returns a non-empty population.
+
+            // Verify all individuals have correct language and data_type
+            let expected_lang = gpredomics::individual::language(language);
+            let expected_dtype = gpredomics::individual::data_type(datatype);
+
+            for (idx, individual) in final_pop.individuals.iter().enumerate() {
+                // Check k is valid (between k_start and k_stop)
+                assert!(
+                    individual.k >= param.beam.k_start && individual.k <= param.beam.k_stop,
+                    "Individual {} has k={} which is outside range [{}, {}]",
+                    idx,
+                    individual.k,
+                    param.beam.k_start,
+                    param.beam.k_stop
+                );
+
+                // Allow auto-conversion for ternary language
+                if expected_lang == gpredomics::individual::TERNARY_LANG {
+                    let has_neg = individual.features.values().any(|&c| c < 0);
+                    let has_pos = individual.features.values().any(|&c| c > 0);
+                    if !has_neg && has_pos {
+                        assert!(
+                            individual.language == gpredomics::individual::TERNARY_LANG ||
+                            individual.language == gpredomics::individual::BINARY_LANG,
+                            "Individual {} with only positive coefficients should be ter or auto-converted bin",
+                            idx
+                        );
+                    }
+                }
+
+                assert_eq!(
+                    individual.data_type, expected_dtype,
+                    "Individual {} should have data_type {} ({}), got {}",
+                    idx, datatype, expected_dtype, individual.data_type
+                );
+
+                // Verify fitness is valid
+                assert!(
+                    individual.fit >= 0.0 && individual.fit <= 1.0,
+                    "Individual {} has invalid fitness: {}",
+                    idx,
+                    individual.fit
+                );
+            }
+
+            let best = &final_pop.individuals[0];
+
+            println!("  ✓ SUCCESS: {} models found", final_pop.individuals.len());
+            println!(
+                "    - Models with k=1: {} (may be 0 if filtered by best_models_criterion)",
+                models_with_k1
+            );
+            println!("    - Best model: AUC={:.4}, k={}", best.auc, best.k);
+
+            results.push((
+                language.to_string(),
+                datatype.to_string(),
+                final_pop.individuals.len(),
+                models_with_k1,
+                best.auc,
+            ));
+        }
+    }
+
+    // Summary
+    println!("\n=== Summary of Results ===");
+    println!(
+        "{:<10} {:<10} {:<15} {:<15} {:<10}",
+        "Language", "DataType", "Total Models", "Models k=1", "Best AUC"
+    );
+    println!("{}", "-".repeat(65));
+    for (lang, dtype, total, k1_count, auc) in &results {
+        println!(
+            "{:<10} {:<10} {:<15} {:<15} {:.4}",
+            lang, dtype, total, k1_count, auc
+        );
+    }
+
+    println!("\n✓ All language/datatype combinations with k_start=1 completed successfully!");
+    println!("  No crashes, no empty populations - beam search is stable with k_start=1");
 }

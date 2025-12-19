@@ -1,28 +1,61 @@
-# gpredomics
+# Gpredomics - Rapid, Interpretable and Accurate machine learning for omics data
 
-gpredomics is a Rust rewrite of Predomics for learning interpretable BTR‑style models with discrete coefficients across binary, ternary, ratio, and pow2 languages on raw, prevalence, and log‑transformed data, with optional GPU acceleration via wgpu backends.
+[![Rust](https://img.shields.io/badge/Rust-1.89+-orange.svg)](https://www.rust-lang.org)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
+[![GPU](https://img.shields.io/badge/GPU-Metal%20%7C%20Vulkan-green.svg)]()
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Rust CI](https://github.com/predomics/gpredomics/actions/workflows/rust.yml/badge.svg)](https://github.com/predomics/gpredomics/actions/workflows/rust.yml)
+![GitHub bugs](https://img.shields.io/github/issues/predomics/gpredomics/bug)
 
-## Features
+**Gpredomics** is a high-performance Rust implementation of the Predomics framework for discovering interpretable predictive signatures in omics data (metagenomics, microbiome, metabolomics). It learns Binary/Ternary/Ratio (BTR) models with discrete coefficients {-1, 0, 1} for maximum interpretability, making it ideal for clinical diagnostics and biomarker discovery.
+
+### Features
 
 - Interpretable languages: binary (subset sum), ternary (−1/0/1 algebraic sum), ratio (sum positive over sum negative), pow2 (ternary with powers of two coefficients).
 - Data encodings: raw values, prevalence via epsilon thresholding, and log transforms with epsilon flooring for numerical stability.
 - Optimizers: Genetic Algorithm (ga2 Predomics style), Beam search (LimitedExhaustive and ParallelForward), and MCMC with Sequential Backward Selection (beta).
 - Fitness targets: AUC, specificity, sensitivity, MCC, F1-score and G means with optional penalties on model size (k_penalty) and false‑rates (fr_penalty).
 - Confidence interval for classification threshold, allowing to discover divisive models and to avoid uncertain classifications.
-- Cross‑validation: stratified folds, Family of Best Models extraction, and OOB permutation importance aggregation across folds.
+- Cross‑validation: stratified folds, Family of Best Models extraction, and MAD permutation importance aggregation across folds.
 - GPU acceleration: wgpu‑based scoring with configurable memory policy and safe CPU fallback when device limits are reached.
 
-## Installation
+## Table of Contents
+
+- [Quick start](#quick-start)
+- Configuration:
+  - [Usage](docs/use.md)
+  - [Data management](docs/data.md) 
+  - [Parameters](docs/param.md) (*coming soon*)
+  - [Cross-validation](docs/cv.md)
+- Concepts:
+  - [Individual](docs/individual.md)
+  - [Population](docs/population.md)
+  - [Rejection](docs/rejection.md)
+- Algorithms:
+  - [Genetic Algorithm](docs/ga.md) (*coming soon*)
+  - [Beam Search](docs/beam.md) (*coming soon*)
+  - [MCMC](docs/mcmc.md) (*coming soon*)
+- To go further:
+  - [Differences with legacy Predomics](docs/legacy.md) (*coming soon*)
+  - [Technical documentation](docs/dev.md)
+- You may be interested in:
+  - [GpredomicsR, an R package using Gpredomics](https://github.com/predomics/gpredomicsR)
+  - [Legacy Predomics](https://github.com/predomics/predomicspkg/tree/master)
+  - [Multiclass classification via Predomics](https://github.com/UMMISCO/predomicsmc)
+
+## Quick start
+
+### Installation
 
 Install a recent Rust toolchain and build in release mode for performance on CPU and GPU.
 
-`curl –proto '=https' –tlsv1.2 -sSf https://sh.rustup.rs | sh`
+`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
 At the root of this repository, compile gpredomics: 
 
 `cargo build --release`
 
-## Use 
+### Use 
 
 The executable loads param.yaml from the current working directory on startup.
 This configuration file contains information about the inputs and experiments to be launched. 
@@ -82,34 +115,14 @@ gpredomics --load 2025-01-01_12-00-00_run.msgpack \
 Note that `--evaluate` requires `--load` and needs `--x-test` and `--y-test`.
 Termination signals are handled for clean shutdown.
 
-### GpredomicsR
-
-Please note that there is a R package, [GpredomicsR](https://github.com/predomics/gpredomicsR), which provides an R interface around the gpredomics engine for ecosystem integration and workflows in R.
-
-## About Gpredomics
-
-## Algorithms
-
-- Genetic Algorithm: evaluates and evolves a population with selection, crossover, mutation, and GPU‑accelerated scoring when general.gpu is true.
-- Beam search (beta): supports LimitedExhaustive and ParallelForward modes.
-- MCMC (beta): explores models probabilistically, enforcing single data_type per run, and retains the best log‑likelihood SBS trajectory.
-
-## Cross‑validation and importance
-
-- CV creates stratified folds, runs the chosen algorithm per training split, and reports training/validation metrics, collecting per‑fold populations.
-- OOB permutation importance is computed on Family of Best Models and aggregated across folds by mean or median.
-
-## Reproducibility
-
-- Runs are controlled by general.seed for reproducibility and use rayon threading and optional GPU for performance with deterministic intent where applicable.
-
-## GPU support
+### GPU support
 
 The supported GPUs are:
 - Apple Silicons (Metal),
 - All GPU supported by Vulkan.
 
-### Apple Metal
+#### Apple Metal
+
 For Apple, Metal is supported out of the box, however you need a recent version of LLVM, more recent at least than the default one. Here is the procedure:
 
 You're supposed to already have the developpers tools (installed with `xcode-select --install`, which you need anyway for Rust). 
@@ -129,7 +142,7 @@ rustup update
 ```
 Then build normally with `cargo build --release`
 
-### Linux
+#### Linux
 For Linux, you *must* install Vulkan:
 ```sh
 sudo apt install vulkan-tools libvulkan1 
@@ -147,4 +160,11 @@ NB under Linux, I always do a fully optimized build, but that is not mandatory, 
 RUSTFLAGS="-C target-cpu=native -C opt-level=3" cargo build --release
 ```
 
-*Last updated: v0.7.3*
+### Contact
+
+If you have any questions, comments, or have found a bug, please contact us at the following address:
+
+- Email: contact@predomics.com
+- GitHub Issues: [Gpredomics Issues](https://github.com/predomics/gpredomics/issues)
+
+*Last updated: v0.7.6*
