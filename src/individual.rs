@@ -19,19 +19,31 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
+/// Confidence interval for the threshold
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct ThresholdCI {
+    /// upper bound of the confidence interval
     pub upper: f64,
+    /// lower bound of the confidence interval
     pub lower: f64,
+    /// rejection rate associated with this confidence interval
     pub rejection_rate: f64,
 }
 
+/// Additional metrics that can be stored in Individual
+/// These metrics are optional and may not be computed for all individuals
+/// This structure will evolve in a more general Metrics structure in the future
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct AdditionalMetrics {
+    /// Matthews correlation coefficient
     pub mcc: Option<f64>,
+    /// Harmonic mean of precision and recall
     pub f1_score: Option<f64>,
+    /// Negative predictive value
     pub npv: Option<f64>,
+    /// Positive predictive value
     pub ppv: Option<f64>,
+    /// Geometric mean of sensitivity and specificity
     #[serde(alias = "g_means")]
     pub g_mean: Option<f64>,
 }
@@ -48,42 +60,88 @@ impl Default for AdditionalMetrics {
     }
 }
 
+/// Mathematical model with a set of variables and their corresponding signs
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Individual {
+    /// Map between feature indices and their corresponding signs
     #[serde(with = "serde_json_hashmap_numeric::usize_i8")]
     pub features: HashMap<usize, i8>,
-    /// a vector of feature indices with their corresponding signs
-    pub auc: f64, // accuracy of the model
-    pub fit: f64, // fit value of the model
-    pub specificity: f64,
-    pub sensitivity: f64,
-    pub accuracy: f64,
-    pub threshold: f64,
-    pub k: usize,      // nb of variables used
-    pub epoch: usize,  // generation or other counter important in the strategy
-    pub language: u8, // binary (0,1), ternary (-1,0,1), pow2 (-4,-2,-1,0,1,2,4), ratio (-1,-1,-1,81)
-    pub data_type: u8, // abundance (raw), prevalence (0,1), log
-    pub hash: u64,
+    /// Number of variables used in the model
+    pub k: usize,
+
+    /// Language of the model, see docs for details
+    pub language: u8,
+    /// Data type of the model, see docs for details
+    pub data_type: u8,
+    /// Epsilon value used during score calculation
     pub epsilon: f64,
-    pub parents: Option<Vec<u64>>,
-    pub betas: Option<Betas>,
+
+    /// Fit value of the model
+    pub fit: f64,
+    /// Area Under the Curve obtained regarding the model prediction on the training set
+    pub auc: f64,
+    /// Decision threshold used for binary classification
+    pub threshold: f64,
+    /// Confidence interval for the threshold if applicable and associated rejection rate
     pub threshold_ci: Option<ThresholdCI>,
+    /// Sensitivity obtained regarding the model prediction on the training set
+    pub sensitivity: f64,
+    /// Specificity obtained regarding the model prediction on the training set
+    pub specificity: f64,
+    /// Accuracy obtained regarding the model prediction on the training set
+    pub accuracy: f64,
+    /// If computed, additional metrics for the individual
     #[serde(default)]
     pub metrics: AdditionalMetrics,
+
+    /// Iteration of the algorithm that led to the emergence of the model
+    pub epoch: usize, // generation or other counter important in the strategy
+    /// Parents of the individual in the generation context
+    pub parents: Option<Vec<u64>>,
+
+    /// Identfier hash of the model
+    pub hash: u64,
+
+    /// For MCMC individuals, the beta coefficients
+    pub betas: Option<Betas>,
 }
 
+/// Constants for language and data type representations
+/// MCMC_GENERIC_LANG is set to 101 to avoid conflict with other language codes
 pub const MCMC_GENERIC_LANG: u8 = 101;
+/// Binary language with coefficients in {0,1}
 pub const BINARY_LANG: u8 = 0;
+/// Ternary language with coefficients in {-1,0,1}
 pub const TERNARY_LANG: u8 = 1;
+/// Power-of-2 language with coefficients in {...-4,-2,-1,0,1,2,4,...}
 pub const POW2_LANG: u8 = 2;
+/// Ratio language with coefficients in {-1,0,1}
 pub const RATIO_LANG: u8 = 3;
+/// Raw data type
 pub const RAW_TYPE: u8 = 0;
+/// Prevalence data type
 pub const PREVALENCE_TYPE: u8 = 1;
+/// Log data type
 pub const LOG_TYPE: u8 = 2;
+
+/// Default minimum epsilon value for ratio calculations
 pub const DEFAULT_MINIMUM: f64 = f64::MIN_POSITIVE;
 
 const DEFAULT_POW2_START: u8 = 4;
 
+/// Converts a language string to its corresponding u8 representation
+///
+/// # Panics
+///
+/// Panics if the provided language string is not recognized
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::individual::language;
+/// let lang = language("binary");
+/// assert_eq!(lang, 0);
+/// ```
 pub fn language(language_string: &str) -> u8 {
     match language_string.to_lowercase().as_str() {
         "binary" | "bin" => BINARY_LANG,
@@ -95,6 +153,19 @@ pub fn language(language_string: &str) -> u8 {
     }
 }
 
+/// Converts a data type string to its corresponding u8 representation
+///
+/// # Panics
+///
+/// Panics if the provided data type string is not recognized
+///
+/// # Examples
+///
+/// ```
+/// # use gpredomics::individual::data_type;
+/// let dtype = data_type("raw");
+/// assert_eq!(dtype, 0);
+/// ```
 pub fn data_type(data_type_string: &str) -> u8 {
     match data_type_string.to_lowercase().as_str() {
         "raw" => RAW_TYPE,
@@ -105,34 +176,15 @@ pub fn data_type(data_type_string: &str) -> u8 {
 }
 
 impl Individual {
-    /// Provides a help message describing the `Individual` struct and its fields.
-    pub fn help() -> &'static str {
-        "
-        Individual Struct:
-        -----------------
-        Represents an individual entity with a set of attributes or features.
-
-        Fields:
-        - feature_indices: HashMap<u32,u8>
-            A map between feature indices (u32) and their corresponding signs (u8).
-            This represents the features present in the individual, with their signs indicating 
-            the direction of the relationship with the target variable.
-
-        - feature_names: Vec<String>
-            A vector containing the names of the features present in the individual.
-            This provides a human-readable representation of the features.
-
-        - fit_method: String
-            A string representing the method used to evaluate the fitness of the individual.
-            This could be 'AUC', 'accuracy', or any other evaluation metric.
-
-        - accuracy: f64
-            A floating-point number representing the accuracy of the model represented by the individual.
-            This value indicates how well the model performs on the given data.
-        "
-    }
-
-    /// a generic creator for Individual
+    /// Generates a new empty Individual with default values
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::individual::Individual;
+    /// let individual = Individual::new();
+    /// assert_eq!(individual.features.len(), 0);
+    /// ```
     pub fn new() -> Individual {
         Individual {
             features: HashMap::new(),
@@ -161,6 +213,31 @@ impl Individual {
         }
     }
 
+    /// Generates a string representation of the Individual to make it human-readable
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Reference to the Data object used for feature names
+    /// * `data_to_test` - Optional reference to a Data object for testing metrics
+    /// * `algo` - String representing the algorithm used (e.g., "ga", "beam", "mcmc")
+    /// * `ci_alpha` - Confidence interval alpha value for threshold CI display
+    ///
+    /// # Returns
+    ///
+    /// A formatted string representing the Individual
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// let mut individual = Individual::new();
+    /// individual.features.insert(0, 1);
+    /// individual.features.insert(1, 1);
+    /// let data = Data::new();
+    /// let display_str = individual.display(&data, None, &"ga".to_string(), 0.05);
+    /// println!("{}", display_str);
+    /// ```
     pub fn display(
         &self,
         data: &Data,
@@ -321,7 +398,7 @@ impl Individual {
             .collect();
 
         let mut negative_str_owned = negative_str.clone();
-        if self.language == RATIO_LANG {
+        if self.language == RATIO_LANG && self.data_type != LOG_TYPE {
             negative_str_owned.push(format!("{:2e}", self.epsilon));
         }
 
@@ -400,11 +477,12 @@ impl Individual {
             if self.data_type == LOG_TYPE {
                 // LOG+RATIO: Display ln() - ln() instead of /
                 format!(
-                    "{}\n{} {} - {} {}",
+                    "{}\n{} {} - {} - {} {}",
                     metrics,
                     second_line_first_part,
                     positive_joined,
                     negative_joined,
+                    self.epsilon,
                     second_line_second_part
                 )
             } else {
@@ -428,6 +506,18 @@ impl Individual {
         formatted_string
     }
 
+    /// Computes the hash of the Individual based on its features and betas
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::individual::Individual;
+    /// let mut individual = Individual::new();
+    /// individual.features.insert(0, 1);
+    /// individual.features.insert(1, -1);
+    /// individual.compute_hash();
+    /// println!("Individual hash: {}", individual.hash);
+    /// ```
     pub fn compute_hash(&mut self) {
         let mut hasher = DefaultHasher::new();
 
@@ -438,8 +528,119 @@ impl Individual {
         self.hash = hasher.finish();
     }
 
-    /// a specific creator in generation context
-    /// the "main" parent is the one that gives its language and data_type (the "other" parent contributes only in genes)
+    /// Counts the number of features in the Individual and updates k accordingly
+    ///
+    /// # Examples
+    /// ```
+    /// # use gpredomics::individual::Individual;
+    /// let mut individual = Individual::new();
+    /// individual.features.insert(0, 1);
+    /// individual.features.insert(1, -1);
+    /// individual.count_k();
+    /// assert_eq!(individual.k, 2);
+    /// ```
+    pub fn count_k(&mut self) {
+        self.k = self.features.len();
+    }
+
+    /// Checks compatibility of the Individual with the provided Data
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Reference to the Data object to check compatibility against
+    ///
+    /// # Returns
+    ///
+    /// Returns true if compatible (or only warnings), false if incompatible
+    pub fn check_compatibility(&self, data: &Data) -> bool {
+        use log::{error, warn};
+        let mut is_compatible = true;
+
+        // Check data is valid
+        if data.feature_len == 0 {
+            error!("Data has no features (feature_len = 0)");
+            return false;
+        }
+        if data.sample_len == 0 {
+            error!("Data has no samples (sample_len = 0)");
+            return false;
+        }
+
+        // Check for empty features
+        if self.features.is_empty() {
+            warn!("Individual has no features");
+        }
+
+        // Check k consistency
+        if self.k > data.feature_len {
+            error!(
+                "Individual has more feature than data! ({} > {})",
+                self.k, data.feature_len
+            );
+            return false;
+        }
+
+        // Check that all feature indices are within data's feature range
+        for &feature_idx in self.features.keys() {
+            if feature_idx >= data.feature_len {
+                error!(
+                    "Individual has feature index {} which is out of bounds (data has {} features)",
+                    feature_idx, data.feature_len
+                );
+                is_compatible = false;
+            }
+        }
+
+        // Check feature values according to language
+        for (&feature_idx, &value) in self.features.iter() {
+            let valid = match self.language {
+                BINARY_LANG => value == 1,
+                TERNARY_LANG | RATIO_LANG => value >= -1 && value <= 1,
+                POW2_LANG => {
+                    let abs_val = value.abs();
+                    abs_val > 0 && abs_val <= 64 && (abs_val & (abs_val - 1)) == 0
+                }
+                _ => true, // Unknown language, skip validation
+            };
+
+            if !valid {
+                error!(
+                    "Individual has invalid value {} for feature {} with language {} ({})",
+                    value,
+                    feature_idx,
+                    self.language,
+                    self.get_language()
+                );
+                is_compatible = false;
+            }
+        }
+
+        // Warn if features are present but not in feature_selection
+        if !data.feature_selection.is_empty() {
+            let selection_set: HashSet<usize> = data.feature_selection.iter().copied().collect();
+
+            for &feature_idx in self.features.keys() {
+                if feature_idx < data.feature_len && !selection_set.contains(&feature_idx) {
+                    warn!(
+                        "Individual has feature {} which is not in the current feature_selection (this feature will still be used but may indicate a mismatch)",
+                        feature_idx
+                    );
+                }
+            }
+        }
+
+        is_compatible
+    }
+
+    /// Generates a child Individual from a main parent Individual
+    ///
+    /// # Arguments
+    ///
+    /// * `main_parent` - Reference to the main parent Individual whose language and data_type will be inherited
+    ///
+    /// # Returns
+    ///
+    /// A new Individual having inherited language and data_type from the main parent
     pub fn child(main_parent: &Individual) -> Individual {
         let mut i = Individual::new();
         if main_parent.threshold_ci.is_some() {
@@ -455,6 +656,25 @@ impl Individual {
         i
     }
 
+    /// Evaluates the Individual on the provided Data and returns both class predictions and scores
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object on which to evaluate the Individual
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing a vector of class predictions and a vector of scores
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let individual = Individual::new();
+    /// # let data = Data::new();
+    /// let (classes, scores) = individual.evaluate_class_and_score(&data);
+    /// ```
     pub fn evaluate_class_and_score(&self, d: &Data) -> (Vec<u8>, Vec<f64>) {
         let value = self.evaluate(d);
         let class = value
@@ -481,6 +701,25 @@ impl Individual {
         (class, value)
     }
 
+    /// Evaluates the Individual on the provided Data and returns class predictions
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object on which to evaluate the Individual
+    ///
+    /// # Returns
+    ///
+    /// A vector of class predictions
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let individual = Individual::new();
+    /// # let data = Data::new();
+    /// let classes = individual.evaluate_class(&data);
+    /// ```
     pub fn evaluate_class(&self, d: &Data) -> Vec<u8> {
         let value = self.evaluate(d);
         value
@@ -505,10 +744,54 @@ impl Individual {
             .collect()
     }
 
+    /// Evaluates the Individual on the provided Data and returns scores
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object on which to evaluate the Individual
+    ///
+    /// # Returns
+    ///
+    /// A vector of scores
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let individual = Individual::new();
+    /// # let data = Data::new();
+    /// let scores = individual.evaluate(&data);
+    /// ```
     pub fn evaluate(&self, d: &Data) -> Vec<f64> {
         self.evaluate_from_features(&d.X, d.sample_len)
     }
 
+    /// Evaluates the Individual using provided feature matrix and sample length
+    ///
+    /// # Arguments
+    ///
+    /// * `X` - Reference to a HashMap representing the feature matrix
+    /// * `sample_len` - Number of samples to evaluate to make easier the HashMap usage
+    ///
+    /// # Returns
+    ///
+    /// A vector of scores
+    ///
+    /// # Panics
+    ///
+    /// Panics if the Individual's data_type is unknown
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use std::collections::HashMap;
+    /// # let individual = Individual::new();
+    /// # let X: HashMap<(usize, usize), f64> = HashMap::new();
+    /// # let sample_len = 10;
+    /// let scores = individual.evaluate_from_features(&X, sample_len);
+    /// ```
     pub fn evaluate_from_features(
         &self,
         X: &HashMap<(usize, usize), f64>,
@@ -522,6 +805,27 @@ impl Individual {
         }
     }
 
+    /// Evaluates the Individual using raw feature values
+    ///
+    /// # Arguments
+    ///
+    /// * `X` - Reference to a HashMap representing the feature matrix
+    /// * `sample_len` - Number of samples to evaluate to make easier the HashMap usage
+    ///
+    /// # Returns
+    ///
+    /// A vector of scores
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::individual::Individual;
+    /// # use std::collections::HashMap;
+    /// # let individual = Individual::new();
+    /// # let X: HashMap<(usize, usize), f64> = HashMap::new();
+    /// # let sample_len = 10;
+    /// let scores = individual.evaluate_raw(&X, sample_len);
+    /// ```
     fn evaluate_raw(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
         let mut score = vec![0.0; sample_len];
 
@@ -573,6 +877,27 @@ impl Individual {
         score
     }
 
+    /// Evaluates the Individual using prevalence modified feature values
+    ///
+    /// # Arguments
+    ///
+    /// * `X` - Reference to a HashMap representing the feature matrix
+    /// * `sample_len` - Number of samples to evaluate to make easier the HashMap usage
+    ///
+    /// # Returns
+    ///
+    /// A vector of scores
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::individual::Individual;
+    /// # use std::collections::HashMap;
+    /// # let individual = Individual::new();
+    /// # let X: HashMap<(usize, usize), f64> = HashMap::new();
+    /// # let sample_len = 10;
+    /// let scores = individual.evaluate_prevalence(&X, sample_len);
+    /// ```
     fn evaluate_prevalence(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
         let mut score = vec![0.0; sample_len];
 
@@ -639,6 +964,27 @@ impl Individual {
         score
     }
 
+    /// Evaluates the Individual using log-transformed feature values
+    ///
+    /// # Arguments
+    ///
+    /// * `X` - Reference to a HashMap representing the feature matrix
+    /// * `sample_len` - Number of samples to evaluate to make easier the HashMap usage
+    ///
+    /// # Returns
+    ///
+    /// A vector of scores
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::individual::Individual;
+    /// # use std::collections::HashMap;
+    /// # let individual = Individual::new();
+    /// # let X: HashMap<(usize, usize), f64> = HashMap::new();
+    /// # let sample_len = 10;
+    /// let scores = individual.evaluate_log(&X, sample_len);
+    /// ```
     fn evaluate_log(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
         // Shouldn't + epsilon be added?
         let mut score = vec![0.0; sample_len];
@@ -697,34 +1043,103 @@ impl Individual {
         score
     }
 
-    /// Compute AUC based on the target vector y
+    /// Computes AUC and updates self.auc
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object on which to compute AUC
+    ///
+    /// # Returns
+    ///
+    /// The computed AUC value and updates self.auc
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let mut individual = Individual::new();
+    /// # let data = Data::new();
+    /// let auc = individual.compute_auc(&data);
+    /// ```
     pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
         self.auc = compute_auc_from_value(&value, &d.y);
         self.auc
     }
 
-    // Compute AUC without changing self.auc
+    /// Computes AUC without updating self.auc
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object on which to compute AUC
+    ///
+    /// # Returns
+    ///
+    /// The computed AUC value
+    ///
     pub fn compute_new_auc(&self, d: &Data) -> f64 {
         let value = self.evaluate(d);
         compute_auc_from_value(&value, &d.y)
     }
 
     /// Compute AUC based on X and y rather than a complete Data object
+    ///
+    /// # Arguments
+    ///
+    /// * `X` - Reference to a HashMap representing the feature matrix
+    /// * `y` - Reference to a vector of true class labels
+    ///
+    /// # Returns
+    ///
+    /// The computed AUC value and updates self.auc
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use std::collections::HashMap;
+    /// # let mut individual = Individual::new();
+    /// # let X: HashMap<(usize, usize), f64> = HashMap::new();
+    /// # let y: Vec<u8> = vec![];
+    /// let auc = individual.compute_auc_from_features(&X, &y);
+    /// ```
     pub fn compute_auc_from_features(
         &mut self,
         X: &HashMap<(usize, usize), f64>,
-        sample_len: usize,
         y: &Vec<u8>,
     ) -> f64 {
-        let value = self.evaluate_from_features(X, sample_len);
+        let value = self.evaluate_from_features(X, y.len());
         self.auc = compute_auc_from_value(&value, y);
         self.auc
     }
 
-    // For GpredomicsR, compute metrics and AUC using the same data to be quicker
-    // Same results as compute_auc and compute_threshold_and_metrics (different threshold but same metrics)
-    // If the fit is not computed on AUC but on objective, metrics are calculated on this objective
+    /// Computes ROC and various metrics, updating the Individual's fields
+    /// Same results as compute_auc and compute_threshold_and_metrics (different threshold but same metrics)
+    /// If the fit is not computed on AUC but on objective, metrics are calculated on this objective
+    /// Obsolete? use compute_threshold_and_metrics after compute_auc instead
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object on which to compute ROC and metrics
+    /// * `fit_function` - Reference to the FitFunction enum specifying the fit function
+    /// * `penalties` - Optional array of two f64 values representing penalties for false positives and false negatives
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing (AUC, threshold, accuracy, sensitivity, specificity, objective)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::param::FitFunction;
+    /// # let mut individual = Individual::new();
+    /// # let data = Data::new();
+    /// # let fit_function = FitFunction::AUC;
+    /// let (auc, threshold, accuracy, sensitivity, specificity, objective) = individual.compute_roc_and_metrics(&data, &fit_function, None);
+    /// ```
     pub fn compute_roc_and_metrics(
         &mut self,
         d: &Data,
@@ -751,7 +1166,25 @@ impl Individual {
         )
     }
 
-    /// Calculate the confusion matrix at a given threshold
+    /// Calculates the confusion matrix (TP, FP, TN, FN) for the Individual on the provided Data
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Reference to the Data object on which to calculate the confusion matrix
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing (TP, FP, TN, FN)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let individual = Individual::new();
+    /// # let data = Data::new();
+    /// let (tp, fp, tn, fn_count) = individual.calculate_confusion_matrix(&data);
+    /// ```
     pub fn calculate_confusion_matrix(&self, data: &Data) -> (usize, usize, usize, usize) {
         let mut tp = 0; // True Positives
         let mut fp = 0; // False Positives
@@ -788,11 +1221,28 @@ impl Individual {
         (tp, fp, tn, fn_count)
     }
 
-    pub fn count_k(&mut self) {
-        self.k = self.features.len();
-    }
-
-    /// completely random individual, not very usefull
+    /// Generates a random Individual based on the provided Data
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object to determine feature length
+    /// * `rng` - Mutable reference to a ChaCha8Rng random number generator
+    ///
+    /// # Returns
+    ///
+    /// A randomly generated Individual
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # use rand_chacha::ChaCha8Rng;
+    /// # use rand::SeedableRng;
+    /// # let data = Data::new();
+    /// let mut rng = ChaCha8Rng::from_entropy();
+    /// let random_individual = Individual::random(&data, &mut rng);
+    /// ```
     pub fn random(d: &Data, rng: &mut ChaCha8Rng) -> Individual {
         let mut features: HashMap<usize, i8> = HashMap::new();
         for (i, coef) in generate_random_vector(d.feature_len, rng)
@@ -810,13 +1260,54 @@ impl Individual {
         i
     }
 
-    /// Randomly generated individual among the selected features
+    /// Generates a random Individual based on data with feature selection (uniform or weighted)
     ///
     /// This is the unified function that handles both uniform and weighted feature selection.
     /// Use `prior_weight` parameter to enable weighted selection, or pass `None` for uniform selection.
+    ///
+    /// # Arguments
+    ///
+    /// * `k_min` - Minimum number of features to select
+    /// * `k_max` - Maximum number of features to select
+    /// * `feature_selection` - Slice of usize representing the indices of features available for selection
+    /// * `feature_class` - Reference to a HashMap mapping feature indices to their classes
+    /// * `language` - u8 representing the language type (e.g., BINARY_LANG, POW2_LANG, etc.)
+    /// * `data_type` - u8 representing the data type (e.g., RAW_TYPE, PREVALENCE_TYPE, LOG_TYPE)
+    /// * `epsilon` - f64 value used in certain calculations (e.g., for RATIO_LANG)
+    /// * `prior_weight` - Optional reference to a HashMap mapping feature indices to their weights for weighted selection
+    /// * `threshold_ci` - Boolean indicating whether to include threshold confidence intervals
+    /// * `rng` - Mutable reference to a ChaCha8Rng random number generator
+    ///
+    /// # Returns
+    ///
+    /// A randomly generated Individual based on the specified feature selection method
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::{Individual, BINARY_LANG, RAW_TYPE};
+    /// # use rand_chacha::ChaCha8Rng;
+    /// # use rand::SeedableRng;
+    /// # use std::collections::HashMap;
+    /// # let feature_selection = vec![0, 1, 2];
+    /// # let feature_class = HashMap::new();
+    /// let mut rng = ChaCha8Rng::from_entropy();
+    /// let random_individual = Individual::random_select(
+    ///     1,
+    ///     5,
+    ///     &feature_selection,
+    ///     &feature_class,
+    ///     BINARY_LANG,
+    ///     RAW_TYPE,
+    ///     0.01,
+    ///     None,
+    ///     false,
+    ///     &mut rng,
+    /// );
+    /// ```
     pub fn random_select(
-        kmin: usize,
-        kmax: usize,
+        k_min: usize,
+        k_max: usize,
         feature_selection: &[usize],
         feature_class: &HashMap<usize, u8>,
         language: u8,
@@ -828,8 +1319,8 @@ impl Individual {
     ) -> Individual {
         if let Some(weights) = prior_weight {
             Self::random_select_weighted(
-                kmin,
-                kmax,
+                k_min,
+                k_max,
                 feature_selection,
                 feature_class,
                 language,
@@ -841,8 +1332,8 @@ impl Individual {
             )
         } else {
             Self::random_select_k(
-                kmin,
-                kmax,
+                k_min,
+                k_max,
                 feature_selection,
                 feature_class,
                 language,
@@ -854,12 +1345,49 @@ impl Individual {
         }
     }
 
-    /// randomly generated individual amoung the selected features (uniform selection)
+    /// Generates a random Individual with uniform feature selection
     ///
-    /// **Deprecated:** Use `random_select` with `prior_weight = None` instead.
+    /// # Arguments
+    ///
+    /// * `k_min` - Minimum number of features to select
+    /// * `k_max` - Maximum number of features to select
+    /// * `feature_selection` - Slice of usize representing the indices of features available for selection
+    /// * `feature_class` - Reference to a HashMap mapping feature indices to their classes
+    /// * `language` - u8 representing the language type (e.g., BINARY_LANG, POW2_LANG, etc.)
+    /// * `data_type` - u8 representing the data type (e.g., RAW_TYPE, PREVALENCE_TYPE, LOG_TYPE)
+    /// * `epsilon` - f64 value used in certain calculations (e.g., for RATIO_LANG)
+    /// * `threshold_ci` - Boolean indicating whether to include threshold confidence intervals
+    /// * `rng` - Mutable reference to a ChaCha8Rng random number generator
+    ///
+    /// # Returns
+    ///
+    /// A randomly generated Individual with uniformly selected features
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::{Individual, BINARY_LANG, RAW_TYPE};
+    /// # use rand_chacha::ChaCha8Rng;
+    /// # use rand::SeedableRng;
+    /// # use std::collections::HashMap;
+    /// # let feature_selection = vec![0, 1, 2];
+    /// # let feature_class = HashMap::new();
+    /// let mut rng = ChaCha8Rng::from_entropy();
+    /// let random_individual = Individual::random_select_k(
+    ///     1,
+    ///     5,
+    ///     &feature_selection,
+    ///     &feature_class,
+    ///    BINARY_LANG,
+    ///    RAW_TYPE,
+    ///    0.01,
+    ///    false,
+    ///    &mut rng,
+    /// );
+    /// ```
     pub fn random_select_k(
-        kmin: usize,
-        kmax: usize,
+        k_min: usize,
+        k_max: usize,
         feature_selection: &[usize],
         feature_class: &HashMap<usize, u8>,
         language: u8,
@@ -882,8 +1410,8 @@ impl Individual {
         };
 
         let k: usize = rng.gen_range(
-            (if kmin > 0 { kmin } else { 1 })..(if kmax > 0 {
-                min(kmax, chosen_feature_set.len())
+            (if k_min > 0 { k_min } else { 1 })..(if k_max > 0 {
+                min(k_max, chosen_feature_set.len())
             } else {
                 chosen_feature_set.len()
             }),
@@ -934,12 +1462,52 @@ impl Individual {
         i
     }
 
-    /// Randomly generated individual with weighted feature selection
+    /// Generates a random Individual with weighted feature selection
     ///
-    /// **Deprecated:** Use `random_select` with `prior_weight = Some(...)` instead.
+    /// # Arguments
+    ///
+    /// * `k_min` - Minimum number of features to select
+    /// * `k_max` - Maximum number of features to select
+    /// * `feature_selection` - Slice of usize representing the indices of features available for selection
+    /// * `feature_class` - Reference to a HashMap mapping feature indices to their classes
+    /// * `language` - u8 representing the language type (e.g., BINARY_LANG, POW2_LANG, etc.)
+    /// * `data_type` - u8 representing the data type (e.g., RAW_TYPE, PREVALENCE_TYPE, LOG_TYPE)
+    /// * `epsilon` - f64 value used in certain calculations (e.g., for RATIO_LANG)        
+    /// * `prior_weight` - Reference to a HashMap mapping feature indices to their weights for weighted selection
+    /// * `threshold_ci` - Boolean indicating whether to include threshold confidence intervals
+    /// * `rng` - Mutable reference to a ChaCha8Rng random number generator
+    ///
+    /// # Returns
+    ///
+    /// A randomly generated Individual with weighted selected features
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::{Individual, BINARY_LANG, RAW_TYPE};
+    /// # use rand_chacha::ChaCha8Rng;
+    /// # use rand::SeedableRng;
+    /// # use std::collections::HashMap;
+    /// # let feature_selection = vec![0, 1, 2];
+    /// # let feature_class = HashMap::new();
+    /// # let prior_weight = HashMap::new();
+    /// let mut rng = ChaCha8Rng::from_entropy();
+    /// let random_individual = Individual::random_select_weighted(
+    ///     1,
+    ///     5,
+    ///     &feature_selection,
+    ///     &feature_class,
+    ///     BINARY_LANG,
+    ///     RAW_TYPE,
+    ///     0.01,
+    ///     &prior_weight,
+    ///     false,
+    ///     &mut rng,
+    /// );
+    /// ```
     pub fn random_select_weighted(
-        kmin: usize,
-        kmax: usize,
+        k_min: usize,
+        k_max: usize,
         feature_selection: &[usize],
         feature_class: &HashMap<usize, u8>,
         language: u8,
@@ -966,7 +1534,7 @@ impl Individual {
         let (valid_features, valid_weights): (Vec<_>, Vec<_>) = valid_pairs.into_iter().unzip();
 
         // Number of features to select
-        let k = rng.gen_range(kmin..=kmax).min(valid_features.len());
+        let k = rng.gen_range(k_min..=k_max).min(valid_features.len());
 
         let selected_features: Vec<usize> = valid_features
             .choose_multiple_weighted(rng, k, |&feature_idx| {
@@ -1009,8 +1577,32 @@ impl Individual {
         i
     }
 
-    // Generate a random coefficient based on language and feature class
-    fn random_coefficient(language: u8, feature_class: Option<u8>, rng: &mut ChaCha8Rng) -> i8 {
+    /// Generate a random coefficient based on language and feature class
+    ///
+    /// # Arguments
+    ///
+    /// * `language` - u8 representing the language type (e.g., BINARY_LANG, POW2_LANG, etc.)
+    /// * `feature_class` - Optional u8 representing the class of the feature
+    /// * `rng` - Mutable reference to a ChaCha8Rng random number generator
+    ///
+    /// # Returns
+    ///
+    /// An i8 representing the randomly generated coefficient
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::{Individual, BINARY_LANG};
+    /// # use rand_chacha::ChaCha8Rng;
+    /// # use rand::SeedableRng;
+    /// # let mut rng = ChaCha8Rng::from_entropy();
+    /// let coef = Individual::random_coefficient(
+    ///     BINARY_LANG,
+    ///     Some(1),
+    ///     &mut rng,
+    /// );
+    /// ```
+    pub fn random_coefficient(language: u8, feature_class: Option<u8>, rng: &mut ChaCha8Rng) -> i8 {
         match language {
             BINARY_LANG => 1,
             TERNARY_LANG | RATIO_LANG => {
@@ -1030,15 +1622,32 @@ impl Individual {
             }
             POW2_LANG => {
                 let sign = if rng.gen_bool(0.5) { 1 } else { -1 };
-                let power = rng.gen_range(0..=6); // 2^0 à 2^6 = 1 à 64
+                let power = rng.gen_range(0..=6); // 2^0 to 2^6 = 1 to 64
                 sign * (1 << power)
             }
             _ => panic!("Unknown language: {}", language),
         }
     }
 
-    /// a function that compute accuracy,precision and sensitivity
-    /// return (accuracy, sensitivity, specificity)
+    /// Computes accuracy, sensitivity, specificity, and additional requested metrics
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object on which to compute metrics
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing (accuracy, sensitivity, specificity, additional metrics)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let individual = Individual::new();
+    /// # let data = Data::new();
+    /// let (accuracy, sensitivity, specificity, additional_metrics) = individual.compute_metrics(&data);
+    /// ```
     pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64, f64, AdditionalMetrics) {
         let value = self.evaluate(d);
         let others_to_compute: [bool; 5] = [
@@ -1061,8 +1670,27 @@ impl Individual {
         }
     }
 
-    /// a function that compute accuracy,precision and sensitivity, fixing the threshold using Youden index
-    /// return (threshold, accuracy, sensitivity, specificity)
+    /// Computes the threshold using the Youden index and returns accuracy, sensitivity, and specificity
+    ///
+    /// This method is deprecated. Prefer `compute_roc_and_metrics` instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - Reference to the Data object on which to compute metrics
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing (threshold, accuracy, sensitivity, specificity)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let individual = Individual::new();
+    /// # let data = Data::new();
+    /// let (threshold, accuracy, sensitivity, specificity) = individual.compute_threshold_and_metrics(&data);
+    /// ```
     pub fn compute_threshold_and_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
         let value = self.evaluate(d);
         let mut combined: Vec<(f64, u8)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
@@ -1129,16 +1757,56 @@ impl Individual {
         )
     }
 
-    /// return the index of features used in the individual
+    /// Returns a sorted vector of feature indices used in the Individual
+    ///
+    /// # Returns
+    ///
+    /// A vector of usize representing the sorted feature indices
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # let individual = Individual::new();
+    /// let feature_indices = individual.features_index();
+    /// ```
     pub fn features_index(&self) -> Vec<usize> {
         let mut features = self.features.keys().copied().collect::<Vec<usize>>();
         features.sort();
         features
     }
 
-    /// Compute OOB feature importance by doing N permutations on samples on a feature (for each feature)
-    /// uses mean decreased AUC
-    pub fn compute_oob_feature_importance(
+    /// Computes the mean decrease in AUC for each feature using permutations
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Reference to the [`Data`] object on which to compute feature importance
+    /// * `permutations` - Number of permutations to perform for each feature
+    /// * `features_to_process` - Slice of [`usize`] representing the feature indices to process
+    /// * `feature_seeds` - Reference to a [`HashMap`] mapping feature indices to vectors of [`u64`] seeds for permutations
+    ///
+    /// # Returns
+    ///
+    /// An [`ImportanceCollection`] containing the computed feature importances
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # use std::collections::HashMap;
+    /// # let individual = Individual::new();
+    /// # let data = Data::new();
+    /// # let features_to_process = vec![];
+    /// # let feature_seeds = HashMap::new();
+    /// let importance_collection = individual.compute_mda_feature_importance(
+    ///     &data,
+    ///     100,
+    ///     &features_to_process,
+    ///     &feature_seeds,
+    /// );
+    /// ```
+    pub fn compute_mda_feature_importance(
         &self,
         data: &Data,
         permutations: usize,
@@ -1150,20 +1818,22 @@ impl Individual {
 
         // Protection against strange behavior
         if permutations == 0 {
-            panic!("compute_oob_feature_importance: To compute OOB calculation, permutations are needed (and currently set to 0)!");
+            panic!("To compute mean decrease in AUC, permutations are needed (and currently set to 0)!");
         }
 
         for &feature_idx in features_to_process {
             if !feature_seeds.contains_key(&feature_idx) {
-                panic!(
-                    "compute_oob_feature_importance: Missing seeds for feature index {}",
-                    feature_idx
-                );
+                panic!("Missing seeds for feature index {}", feature_idx);
             }
 
             let seeds = &feature_seeds[&feature_idx];
             if seeds.len() < permutations {
-                panic!("compute_oob_feature_importance: Feature {} has {} seeds but {} permutations requested", feature_idx, seeds.len(), permutations);
+                panic!(
+                    "Feature {} has {} seeds but {} permutations requested",
+                    feature_idx,
+                    seeds.len(),
+                    permutations
+                );
             }
         }
 
@@ -1227,11 +1897,59 @@ impl Individual {
         ImportanceCollection { importances }
     }
 
+    /// Maximizes the objective function based on false positive and false negative penalties*
+    ///
+    /// This function is deprecated.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Reference to the Data object on which to maximize the objective
+    /// * `fpr_penalty` - f64 value representing the penalty for false positives
+    /// * `fnr_penalty` - f64 value representing the penalty for false negatives
+    ///
+    /// # Returns
+    ///
+    /// The maximum objective value achieved
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let mut individual = Individual::new();
+    /// # let data = Data::new();
+    /// let max_objective = individual.maximize_objective(&data, 1.0, 1.0);
+    /// ```
     pub fn maximize_objective(&mut self, data: &Data, fpr_penalty: f64, fnr_penalty: f64) -> f64 {
         let scores = self.evaluate(data);
         self.maximize_objective_with_scores(&scores, data, fpr_penalty, fnr_penalty)
     }
 
+    /// Maximizes the objective function based on false positive and false negative penalties using precomputed scores
+    ///
+    /// This function is deprecated.
+    ///
+    /// # Arguments
+    ///
+    /// * `scores` - Slice of f64 representing the precomputed scores
+    /// * `data` - Reference to the Data object on which to maximize the objective
+    /// * `fpr_penalty` - f64 value representing the penalty for false positives
+    /// * `fnr_penalty` - f64 value representing the penalty for false negatives
+    ///
+    /// # Returns
+    ///
+    /// The maximum objective value achieved
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let mut individual = Individual::new();
+    /// # let data = Data::new();
+    /// let scores = individual.evaluate(&data);
+    /// let max_objective = individual.maximize_objective_with_scores(&scores, &data, 1.0, 1.0);
+    /// ```
     pub fn maximize_objective_with_scores(
         &mut self,
         scores: &[f64],
@@ -1307,6 +2025,28 @@ impl Individual {
         best_objective
     }
 
+    /// Computes the genealogy of the Individual up to a specified maximum depth
+    ///
+    /// This function builds a genealogy tree of the individual by tracing back its ancestors. It is used in GpredomicsR.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - Reference to a vector of Population objects representing the collection of populations
+    /// * `max_depth` - usize value representing the maximum depth of genealogy to compute
+    ///
+    /// # Returns
+    ///
+    /// A HashMap where keys are tuples of (individual hash, optional parent hashes) and values are sets of usize representing the depths at which the individuals appear in the genealogy
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::population::Population;
+    /// # let individual = Individual::new();
+    /// # let collection: Vec<Population> = vec![];
+    /// let genealogy = individual.get_genealogy(&collection, 5);
+    /// ```
     pub fn get_genealogy(
         &self,
         collection: &Vec<Population>,
@@ -1387,6 +2127,19 @@ impl Individual {
         genealogy
     }
 
+    /// Returns the language of the Individual as a string
+    ///
+    /// # Returns
+    ///
+    /// A string slice representing the language of the Individual
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # let individual = Individual::new();
+    /// let language = individual.get_language();
+    /// ```
     pub fn get_language(&self) -> &str {
         match self.language {
             BINARY_LANG => "Binary",
@@ -1398,6 +2151,18 @@ impl Individual {
         }
     }
 
+    /// Returns the data type of the Individual as a string
+    ///
+    /// # Returns
+    ///
+    /// A string slice representing the data type of the Individual
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # let individual = Individual::new();
+    /// let data_type = individual.get_data_type();
+    /// ```
     pub fn get_data_type(&self) -> &str {
         match self.data_type {
             RAW_TYPE => "Raw",
@@ -1407,10 +2172,41 @@ impl Individual {
         }
     }
 
+    /// Gets the coefficient for a given feature index
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - usize representing the feature index
+    ///
+    /// # Returns
+    ///
+    /// An i8 representing the coefficient of the feature; returns 0 if the feature is not present
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # let individual = Individual::new();
+    /// let coef = individual.get_coef(5);
+    /// ```
     pub fn get_coef(&self, idx: usize) -> i8 {
         *self.features.get(&idx).unwrap_or(&0)
     }
 
+    /// Sets the coefficient for a given feature index
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - usize representing the feature index
+    /// * `coef` - i8 representing the coefficient to set; if coef is 0, the feature is removed
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # let mut individual = Individual::new();
+    /// individual.set_coef(5, 1);
+    /// ```
     pub fn set_coef(&mut self, idx: usize, coef: i8) {
         if coef == 0 {
             self.features.remove(&idx);
@@ -1420,6 +2216,27 @@ impl Individual {
         self.k = self.features.len();
     }
 
+    /// Gets the betas of the Individual
+    ///
+    /// # Returns
+    ///
+    /// An array of f64 representing the MCMC betas.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the betas are uninitialized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::individual::Individual;
+    /// let mut individual = Individual::new();
+    /// individual.set_beta(0, 0.5);
+    /// individual.set_beta(1, 1.0);
+    /// individual.set_beta(2, -0.5);
+    /// let betas = individual.get_betas();
+    /// assert_eq!(betas, [0.5, 1.0, -0.5]);
+    /// ```
     pub fn get_betas(&self) -> [f64; 3] {
         self.betas
             .as_ref()
@@ -1427,6 +2244,24 @@ impl Individual {
             .expect("β uninitialized")
     }
 
+    /// Sets the beta value for a given index
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - usize representing the index (0, 1, or 2)
+    /// * `val` - f64 representing the beta value to set
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::individual::Individual;
+    /// let mut individual = Individual::new();
+    /// individual.set_beta(0, 0.5);
+    /// individual.set_beta(1, 1.0);
+    /// individual.set_beta(2, -0.5);
+    /// let betas = individual.get_betas();
+    /// assert_eq!(betas, [0.5, 1.0, -0.5]);
+    /// ```
     pub fn set_beta(&mut self, idx: usize, val: f64) {
         if let Some(b) = self.betas.as_mut() {
             b.set(idx, val);
@@ -1439,6 +2274,24 @@ impl Individual {
         }
     }
 
+    /// Computes the signed Jaccard dissimilarity between this Individual and another
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Reference to another Individual to compare with
+    ///
+    /// # Returns
+    ///
+    /// A f64 value between 0.0 and 1.0 representing the signed Jaccard dissimilarity
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # let individual1 = Individual::new();
+    /// # let individual2 = Individual::new();
+    /// let dissimilarity = individual1.signed_jaccard_dissimilarity_with(&individual2);
+    /// ```
     pub fn signed_jaccard_dissimilarity_with(&self, other: &Individual) -> f64 {
         let signed_set1: HashSet<(usize, i8)> = self
             .features
@@ -1462,10 +2315,40 @@ impl Individual {
         1.0 - (intersection as f64) / (union as f64)
     }
 
-    /// Prune in-place using OOB permutation importance computed internally.
+    /// Prunes in-place using MDA permutation importance computed internally.
+    ///
     /// If `threshold` is Some(t), drop features with importance < t.
     /// Else if `quantile` is Some((q, eps)), drop features with importance < quantile(q) - eps.
     /// Keeps at least `min_k` features. Returns &mut Self for chaining.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Reference to the [`Data`] object used for importance computation
+    /// * `n_perm` - Number of permutations to use for importance computation
+    /// * `rng_seed` - Seed for random number generation to ensure reproducibility
+    /// * `threshold` - Optional f64 threshold for pruning based on importance
+    /// * `quantile` - Optional tuple (f64, f64) representing quantile and epsilon for pruning
+    /// * `min_k` - Minimum number of features to retain
+    ///
+    /// # Returns
+    ///
+    /// A mutable reference to the pruned Individual
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// * `n_perm` is 0
+    /// * quantile `q` is not in [0, 1].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use gpredomics::individual::Individual;
+    /// # use gpredomics::data::Data;
+    /// # let mut individual = Individual::new();
+    /// # let data = Data::new();
+    /// individual.prune_by_importance(&data, 100, 42, Some(0.01), None, 5);
+    /// ```
     pub fn prune_by_importance(
         &mut self,
         data: &Data,
@@ -1499,7 +2382,7 @@ impl Individual {
         }
 
         // Compute individual OOB permutation importances (MDA)
-        let imp_coll = self.compute_oob_feature_importance(data, n_perm, &feats, &feature_seeds);
+        let imp_coll = self.compute_mda_feature_importance(data, n_perm, &feats, &feature_seeds);
 
         // Collect importances
         use crate::experiment::{ImportanceScope, ImportanceType};
@@ -1652,6 +2535,11 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
 
     impl Individual {
+        /// Genarates a test Individual for unit tests
+        ///
+        /// # Returns
+        ///
+        /// An Individual object with predefined features and metrics
         pub fn test() -> Individual {
             Individual {
                 features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
@@ -1680,6 +2568,11 @@ mod tests {
             }
         }
 
+        /// Generates another test Individual for unit tests
+        ///
+        /// # Returns
+        ///
+        /// An Individual object with predefined features and metrics
         pub fn test2() -> Individual {
             Individual {
                 features: vec![(0, 1), (1, -1)].into_iter().collect(),
@@ -1708,6 +2601,15 @@ mod tests {
             }
         }
 
+        /// Generates a test Individual with specified features for unit tests
+        ///
+        /// # Arguments
+        ///
+        /// * `features_vec` - A vector of tuples where each tuple contains a feature index and its corresponding coefficient
+        ///
+        /// # Returns
+        ///
+        /// An Individual object with the specified features and predefined metrics
         pub fn test_with_these_given_features(features_vec: Vec<(usize, i8)>) -> Individual {
             Individual {
                 features: features_vec.into_iter().collect::<HashMap<usize, i8>>(),
@@ -1736,6 +2638,18 @@ mod tests {
             }
         }
 
+        /// Generates a test Individual with specified features, fitness, language, and data type for unit tests
+        ///
+        /// # Arguments
+        ///
+        /// * `features` - A vector of tuples where each tuple contains a feature index and its corresponding coefficient
+        /// * `fit` - A f64 value representing the fitness of the Individual
+        /// * `language` - A u8 value representing the language of the Individual
+        /// * `data_type` - A u8 value representing the data type of the Individual
+        ///
+        /// # Returns
+        ///
+        /// An Individual object with the specified features, fitness, language, and data type
         pub fn test_with_these_given_features_fit_lang_types(
             features: Vec<(usize, i8)>,
             fit: f64,
@@ -1769,6 +2683,17 @@ mod tests {
             }
         }
 
+        /// Generates a test Individual with specified sensitivity, specificity, and accuracy for unit tests
+        ///
+        /// # Arguments
+        ///
+        /// * `sensitivity` - A f64 value representing the sensitivity of the Individual
+        /// * `specificity` - A f64 value representing the specificity of the Individual
+        /// * `accuracy` - A f64 value representing the accuracy of the Individual
+        ///
+        /// # Returns
+        ///
+        /// An Individual object with the specified sensitivity, specificity, and accuracy
         pub fn test_with_metrics(sensitivity: f64, specificity: f64, accuracy: f64) -> Individual {
             Individual {
                 features: vec![(0, 1), (1, -1)].into_iter().collect(),
@@ -1797,6 +2722,15 @@ mod tests {
             }
         }
 
+        /// Generates a test Individual with specified features for unit tests
+        ///
+        /// # Arguments
+        ///
+        /// * `features` - A slice of usize representing the feature indices
+        ///
+        /// # Returns
+        ///
+        /// An Individual object with the specified features and predefined metrics
         pub fn specific_test(features: &[usize]) -> Individual {
             let mut features_map = HashMap::new();
             for &feature_idx in features {
@@ -2216,8 +3150,8 @@ mod tests {
                 .0,
             "bad calculation for AUC with compute_roc_and_metrics : this could be a ties issue"
         );
-        assert_eq!(ind.compute_auc(&data), ind.compute_auc_from_features(&data.X, data.sample_len, &data.y),
-        "Individual.compute_auc_from_features(&data.X, &data.sample_len, &data.y) should return the same result as Individual.compute_auc(&data)");
+        assert_eq!(ind.compute_auc(&data), ind.compute_auc_from_features(&data.X, &data.y),
+        "Individual.compute_auc_from_features(&data.X, &data.y) should return the same result as Individual.compute_auc(&data)");
         assert_eq!(ind.compute_auc(&data), compute_auc_from_value(&ind.evaluate(&data), &data.y),
         "Individual.compute_auc_from_value(scores, &data.y) should return the same result as Individual.compute_auc(&data)");
         assert_eq!(
@@ -2364,7 +3298,7 @@ mod tests {
         feature_class.insert(4, 1);
         expected_features.insert(2, 1);
 
-        // warning : random_select_k never select kmax features
+        // warning : random_select_k never select k_max features
         let mut rng = ChaCha8Rng::seed_from_u64(42); // Seed for reproducibility
         let ind_bin = Individual::random_select_k(
             2,
@@ -2467,7 +3401,7 @@ mod tests {
         );
         assert_eq!(ind.features, expected_features,
         "the selected features are not the same as selected in the past, indicating a reproducibility problem.");
-        // kmin=1 & kmax=1 should return 1 feature and not panic
+        // k_min=1 & k_max=1 should return 1 feature and not panic
         // ind = Individual::random_select_k(1, 1, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
     }
 
@@ -2649,14 +3583,14 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_zero_permutations_division_by_zero() {
+    fn test_compute_mda_feature_importance_zero_permutations_division_by_zero() {
         let individual = Individual::specific_test(&[0]);
         let data = Data::specific_test(10, 2);
         let features_to_process = vec![0];
         let feature_seeds = generate_feature_seeds(&features_to_process, 0, 123);
 
         let result = std::panic::catch_unwind(|| {
-            individual.compute_oob_feature_importance(
+            individual.compute_mda_feature_importance(
                 &data,
                 0,
                 &features_to_process,
@@ -2671,13 +3605,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_feature_not_in_individual_returns_zero() {
+    fn test_compute_mda_feature_importance_feature_not_in_individual_returns_zero() {
         let individual = Individual::specific_test(&[2, 4]);
         let data = Data::specific_test(30, 6);
         let features_to_process = vec![0, 1, 2, 3, 4, 5];
         let feature_seeds = generate_feature_seeds(&features_to_process, 10, 789);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             10,
             &features_to_process,
@@ -2696,7 +3630,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_missing_seeds_panics() {
+    fn test_compute_mda_feature_importance_missing_seeds_panics() {
         let individual = Individual::specific_test(&[1]);
         let data = Data::specific_test(30, 3);
         let features_to_process = vec![1, 2];
@@ -2706,7 +3640,7 @@ mod tests {
         incomplete_seeds.insert(1, vec![12345u64; 5]);
 
         let result = std::panic::catch_unwind(|| {
-            individual.compute_oob_feature_importance(
+            individual.compute_mda_feature_importance(
                 &data,
                 5,
                 &features_to_process,
@@ -2721,19 +3655,19 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_reproducibility_same_seeds() {
+    fn test_compute_mda_feature_importance_reproducibility_same_seeds() {
         let individual = Individual::specific_test(&[1, 2]);
         let data = Data::specific_test(50, 4);
         let features_to_process = vec![1, 2];
         let feature_seeds = generate_feature_seeds(&features_to_process, 50, 999);
 
-        let result1 = individual.compute_oob_feature_importance(
+        let result1 = individual.compute_mda_feature_importance(
             &data,
             2,
             &features_to_process,
             &feature_seeds,
         );
-        let result2 = individual.compute_oob_feature_importance(
+        let result2 = individual.compute_mda_feature_importance(
             &data,
             2,
             &features_to_process,
@@ -2753,13 +3687,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_output_structure_fields() {
+    fn test_compute_mda_feature_importance_output_structure_fields() {
         let individual = Individual::specific_test(&[1]);
         let data = Data::specific_test(20, 3);
         let features_to_process = vec![0, 1];
         let feature_seeds = generate_feature_seeds(&features_to_process, 5, 456);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             5,
             &features_to_process,
@@ -2788,13 +3722,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_all_requested_features_returned() {
+    fn test_compute_mda_feature_importance_all_requested_features_returned() {
         let individual = Individual::specific_test(&[2, 5, 7]);
         let data = Data::specific_test(40, 10);
         let features_to_process = vec![2, 5, 7, 9];
         let feature_seeds = generate_feature_seeds(&features_to_process, 5, 789);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             5,
             &features_to_process,
@@ -2818,13 +3752,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_single_permutation_finite_values() {
+    fn test_compute_mda_feature_importance_single_permutation_finite_values() {
         let individual = Individual::specific_test(&[0]);
         let data = Data::specific_test(30, 2);
         let features_to_process = vec![0, 1];
         let feature_seeds = generate_feature_seeds(&features_to_process, 1, 456);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             1,
             &features_to_process,
@@ -2843,13 +3777,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_bounds_realistic() {
+    fn test_compute_mda_feature_importance_bounds_realistic() {
         let individual = Individual::specific_test(&[0, 1]);
         let data = Data::specific_test(50, 3);
         let features_to_process = vec![0, 1, 2];
         let feature_seeds = generate_feature_seeds(&features_to_process, 20, 654);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             20,
             &features_to_process,
@@ -2874,13 +3808,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_empty_individual_features() {
+    fn test_compute_mda_feature_importance_empty_individual_features() {
         let individual = Individual::specific_test(&[]); // No features
         let data = Data::specific_test(20, 4);
         let features_to_process = vec![0, 1, 2, 3];
         let feature_seeds = generate_feature_seeds(&features_to_process, 5, 321);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             5,
             &features_to_process,
@@ -2897,7 +3831,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_different_seeds_may_differ() {
+    fn test_compute_mda_feature_importance_different_seeds_may_differ() {
         let individual = Individual::specific_test(&[0, 2]);
         let data = Data::specific_test(60, 3);
         let features_to_process = vec![0, 2];
@@ -2906,9 +3840,9 @@ mod tests {
         let seeds2 = generate_feature_seeds(&features_to_process, 10, 222);
 
         let result1 =
-            individual.compute_oob_feature_importance(&data, 10, &features_to_process, &seeds1);
+            individual.compute_mda_feature_importance(&data, 10, &features_to_process, &seeds1);
         let result2 =
-            individual.compute_oob_feature_importance(&data, 10, &features_to_process, &seeds2);
+            individual.compute_mda_feature_importance(&data, 10, &features_to_process, &seeds2);
 
         // Note: Results may be the same in some cases (deterministic data), so we only check structure
         assert_eq!(result1.importances.len(), result2.importances.len());
@@ -2920,14 +3854,14 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_large_permutation_count() {
+    fn test_compute_mda_feature_importance_large_permutation_count() {
         let individual = Individual::specific_test(&[0]);
         let data = Data::specific_test(50, 2);
         let features_to_process = vec![0];
         let feature_seeds1 = generate_feature_seeds(&features_to_process, 10000, 123);
         let feature_seeds2 = generate_feature_seeds(&features_to_process, 10000, 456);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             10000,
             &features_to_process,
@@ -2943,7 +3877,7 @@ mod tests {
         );
 
         // With many permutations, results should be stable
-        let result2 = individual.compute_oob_feature_importance(
+        let result2 = individual.compute_mda_feature_importance(
             &data,
             10000,
             &features_to_process,
@@ -2959,7 +3893,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_individual_with_mixed_coefficients() {
+    fn test_compute_mda_feature_importance_individual_with_mixed_coefficients() {
         // Test individual with mixed positive/negative coefficients
         let mut features_map = HashMap::new();
         features_map.insert(0, 1i8); // Positive coefficient
@@ -2996,7 +3930,7 @@ mod tests {
         let features_to_process = vec![0, 1, 2, 3, 4];
         let feature_seeds = generate_feature_seeds(&features_to_process, 10, 555);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             10,
             &features_to_process,
@@ -3021,7 +3955,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_different_datatypes() {
+    fn test_compute_mda_feature_importance_different_datatypes() {
         let mut individual = Individual::specific_test(&[0, 1]);
         let data = Data::specific_test(50, 3);
         let features_to_process = vec![0, 1, 2];
@@ -3029,7 +3963,7 @@ mod tests {
 
         // Test RAW_TYPE (default)
         individual.data_type = RAW_TYPE;
-        let result_raw = individual.compute_oob_feature_importance(
+        let result_raw = individual.compute_mda_feature_importance(
             &data,
             10,
             &features_to_process,
@@ -3039,7 +3973,7 @@ mod tests {
 
         // Test PREVALENCE_TYPE
         individual.data_type = PREVALENCE_TYPE;
-        let result_prev = individual.compute_oob_feature_importance(
+        let result_prev = individual.compute_mda_feature_importance(
             &data,
             10,
             &features_to_process,
@@ -3049,7 +3983,7 @@ mod tests {
 
         // Test LOG_TYPE
         individual.data_type = LOG_TYPE;
-        let result_log = individual.compute_oob_feature_importance(
+        let result_log = individual.compute_mda_feature_importance(
             &data,
             10,
             &features_to_process,
@@ -3070,13 +4004,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_duplicate_features_in_process() {
+    fn test_compute_mda_feature_importance_duplicate_features_in_process() {
         let individual = Individual::specific_test(&[0, 1, 2]);
         let data = Data::specific_test(30, 4);
         let features_to_process = vec![0, 1, 1, 2, 3]; // feature 1 dupliquée
         let feature_seeds = generate_feature_seeds(&features_to_process, 5, 789);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             5,
             &features_to_process,
@@ -3111,7 +4045,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_extreme_unbalanced_data() {
+    fn test_compute_mda_feature_importance_extreme_unbalanced_data() {
         let individual = Individual::specific_test(&[0, 1]);
         let mut data = Data::specific_test(50, 3);
         let features_to_process = vec![0, 1, 2];
@@ -3119,7 +4053,7 @@ mod tests {
 
         // Test: All positive labels (y = 1)
         data.y = vec![1u8; 50];
-        let result_all_pos = individual.compute_oob_feature_importance(
+        let result_all_pos = individual.compute_mda_feature_importance(
             &data,
             10,
             &features_to_process,
@@ -3137,7 +4071,7 @@ mod tests {
 
         // Test: All negative labels (y = 0)
         data.y = vec![0u8; 50];
-        let result_all_neg = individual.compute_oob_feature_importance(
+        let result_all_neg = individual.compute_mda_feature_importance(
             &data,
             10,
             &features_to_process,
@@ -3155,7 +4089,7 @@ mod tests {
         // Test: Highly unbalanced (49:1)
         data.y = vec![0u8; 49];
         data.y.push(1u8);
-        let result_unbalanced = individual.compute_oob_feature_importance(
+        let result_unbalanced = individual.compute_mda_feature_importance(
             &data,
             5,
             &features_to_process,
@@ -3172,7 +4106,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_constant_feature_values() {
+    fn test_compute_mda_feature_importance_constant_feature_values() {
         let individual = Individual::specific_test(&[0, 1]);
         let mut data = Data::specific_test(40, 3);
         let features_to_process = vec![0, 1, 2];
@@ -3183,7 +4117,7 @@ mod tests {
             data.X.insert((sample, 0), 0.5); // Constant value
         }
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             8,
             &features_to_process,
@@ -3208,13 +4142,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_very_small_dataset() {
+    fn test_compute_mda_feature_importance_very_small_dataset() {
         let individual = Individual::specific_test(&[0]);
         let data = Data::specific_test(3, 2); // Very small: 3 samples, 2 features
         let features_to_process = vec![0, 1];
         let feature_seeds = generate_feature_seeds(&features_to_process, 2, 777);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             2,
             &features_to_process,
@@ -3234,13 +4168,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_out_of_bounds_features() {
+    fn test_compute_mda_feature_importance_out_of_bounds_features() {
         let individual = Individual::specific_test(&[0, 1]);
         let data = Data::specific_test(30, 3); // Features 0, 1, 2 exist
         let features_to_process = vec![0, 1, 5, 10]; // Features 5, 10 don't exist in data
         let feature_seeds = generate_feature_seeds(&features_to_process, 5, 555);
 
-        let result = individual.compute_oob_feature_importance(
+        let result = individual.compute_mda_feature_importance(
             &data,
             5,
             &features_to_process,
@@ -3266,7 +4200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_oob_feature_importance_mixed_languages() {
+    fn test_compute_mda_feature_importance_mixed_languages() {
         // Test different Individual languages
         let languages_to_test = vec![
             (BINARY_LANG, &[0, 1][..]),
@@ -3282,7 +4216,7 @@ mod tests {
             let mut individual = Individual::specific_test(individual_features);
             individual.language = language;
 
-            let result = individual.compute_oob_feature_importance(
+            let result = individual.compute_mda_feature_importance(
                 &data,
                 8,
                 &features_to_process,
@@ -5039,7 +5973,7 @@ mod tests {
 
         assert!(
             ind.k >= 2 && ind.k <= 3,
-            "Individual should have between kmin and kmax features"
+            "Individual should have between k_min and k_max features"
         );
         assert_eq!(ind.language, TERNARY_LANG);
         assert_eq!(ind.data_type, RAW_TYPE);
@@ -5210,7 +6144,7 @@ mod tests {
 
         assert!(
             ind.k >= 2 && ind.k <= 3,
-            "Individual should have between kmin and kmax features"
+            "Individual should have between k_min and k_max features"
         );
         assert_eq!(
             ind.language, TERNARY_LANG,

@@ -7,7 +7,7 @@ use gpredomics::data::Data;
 /// 3. Any differences are documented and tracked
 /// 4. run() and run_on_data() produce consistent results under identical conditions
 ///
-/// Run with: cargo test --test test_serialization_compatibility -- --nocapture
+/// Run with: cargo test --test test_consistency -- --nocapture
 use gpredomics::experiment::Experiment;
 use gpredomics::param::Param;
 use gpredomics::{run, run_on_data};

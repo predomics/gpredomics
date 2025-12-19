@@ -33,9 +33,26 @@ const BIG_NUMBER: f64 = 100.0;
 
 //-----------------------------------------------------------------------------
 // Utilities
+//-----------------------------------------------------------------------------
 
-// Calculates the logarithm of the logistic function (log(1/(1+e^(-x)))) with protection against numerical underflow
-// for extreme negative values. Returns a stable approximation when x is very negative.
+/// Calculates the logarithm of the logistic function (log(1/(1+e^(-x)))).
+///
+/// Had a protection against overflow/underflow issues for extreme negative values.
+///
+/// # Arguments
+///
+/// * `x` - Input value
+///
+/// # Returns
+///
+/// A stable approximation when x is very negative.
+///
+/// # Examples
+///
+/// ```ignore
+/// # use gpredomics::bayesian_mcmc::log_logistic;
+/// log_logistic(1000.0);
+/// ```
 fn log_logistic(x: f64) -> f64 {
     if x >= -BIG_NUMBER {
         logistic(x).ln()
@@ -44,12 +61,29 @@ fn log_logistic(x: f64) -> f64 {
     }
 }
 
-// Generates a random number from a truncated normal distribution that must be positive.
-// Uses the inverse error function method to correctly sample from the truncated distribution.
-// Parameters:
-// - mu: Mean of the underlying normal distribution
-// - scale: Standard deviation of the underlying normal distribution
-// - rng: Random number generator
+/// Generates a random number from a truncated normal distribution that must be positive.
+///
+/// Uses the inverse error function method to correctly sample from the truncated distribution.
+///
+/// # Arguments
+///
+/// * `mu`: Mean of the underlying normal distribution
+/// * `scale`: Standard deviation of the underlying normal distribution
+/// * `rng`: Random number generator
+///
+/// # Returns
+///
+/// A random number sampled from the truncated normal distribution.
+///
+/// # Examples
+///
+/// ```ignore
+/// # use gpredomics::bayesian_mcmc::truncnorm_pos;
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// # let mut rng = ChaCha8Rng::from_entropy();
+/// truncnorm_pos(0.0, 1.0, &mut rng);
+/// ```
 fn truncnorm_pos(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 {
     // truncated normal positive random number
     let erf0 = erf(-mu / (2_f64.sqrt() * scale));
@@ -57,12 +91,28 @@ fn truncnorm_pos(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 
     mu + 2_f64.sqrt() * scale * erf_inv(u * (1.0 - erf0) + erf0)
 }
 
-// Generates a random number from a truncated normal distribution that must be negative.
-// Uses the inverse error function method to correctly sample from the truncated distribution.
-// Parameters:
-// - mu: Mean of the underlying normal distribution
-// - scale: Standard deviation of the underlying normal distribution
-// - rng: Random number generator
+/// Generates a random number from a truncated normal distribution that must be negative.
+/// Uses the inverse error function method to correctly sample from the truncated distribution.
+///
+/// # Arguments
+///
+/// * `mu`: Mean of the underlying normal distribution
+/// * `scale`: Standard deviation of the underlying normal distribution
+/// * `rng`: Random number generator
+///
+/// # Returns
+///
+/// A random number sampled from the truncated normal distribution.
+///
+/// # Examples
+///
+/// ```ignore
+/// # use gpredomics::bayesian_mcmc::truncnorm_neg;
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// # let mut rng = ChaCha8Rng::from_entropy();
+/// truncnorm_neg(0.0, 1.0, &mut rng);
+/// ```
 fn truncnorm_neg(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 {
     // truncated normal negative random number
     let erf0 = erf(-mu / (2_f64.sqrt() * scale));
@@ -70,10 +120,27 @@ fn truncnorm_neg(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 
     mu + 2_f64.sqrt() * scale * erf_inv(u * (1.0 + erf0) - 1.0)
 }
 
-// Generates a random number from a standard normal distribution using the inverse error function method.
-// Parameters:
-// - mu: Mean of the normal distribution
-// - scale: Standard deviation of the normal distribution
+/// Generates a random number from a standard normal distribution using the inverse error function method.
+///
+/// # Arguments
+///
+/// * `mu`: Mean of the normal distribution
+/// * `scale`: Standard deviation of the normal distribution
+/// * `rng`: Random number generator
+///
+/// # Returns
+///
+/// A random number sampled from the normal distribution.
+///
+/// # Examples
+///
+/// ```ignore
+/// # use gpredomics::bayesian_mcmc::random_normal;
+/// # use rand_chacha::ChaCha8Rng;
+/// # use rand::SeedableRng;
+/// # let mut rng = ChaCha8Rng::from_entropy();
+/// random_normal(0.0, 1.0, &mut rng);
+/// ```
 fn random_normal(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 {
     // normal random number
     let u: f64 = rng.gen_range(0.0..1.0);
@@ -82,26 +149,63 @@ fn random_normal(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 
 
 //-----------------------------------------------------------------------------
 // Structure for holding data for MCMC
+//-----------------------------------------------------------------------------
 
-// Structure for making predictions using an ensemble of models from MCMC sampling.
-// Contains multiple model configurations and their parameters for robust prediction.
-// <=> Density
+/// Structure for making predictions using an ensemble of models from MCMC sampling.
+/// Contains multiple model configurations and their parameters for robust prediction.
+/// <=> Density
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct Betas {
+    /// Coefficient for positive features
     pub a: f64,
+    /// Coefficient for negative features
     pub b: f64,
+    /// Intercept term
     pub c: f64,
 }
 
 impl Betas {
+    /// Creates a new Betas instance with specified coefficients.
+    ///
+    /// # Arguments
+    ///
+    /// * `a` - Coefficient for positive features
+    /// * `b` - Coefficient for negative features
+    /// * `c` - Intercept term
+    ///
+    /// # Returns
+    ///
+    /// A new Betas instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::bayesian_mcmc::Betas;
+    /// let betas = Betas::new(1.0, -1.0, 0.5);
+    /// ```
     pub fn new(a: f64, b: f64, c: f64) -> Self {
         Betas { a, b, c }
     }
 
+    /// Retrieves the coefficients as an array.
+    ///
+    /// # Returns
+    ///
+    /// An array containing the coefficients [a, b, c].
     pub fn get(&self) -> [f64; 3] {
         [self.a, self.b, self.c]
     }
 
+    /// Sets the coefficient at the specified index.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - Index of the coefficient to set (0 for a, 1 for b, 2 for c)
+    /// * `val` - New value for the coefficient
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is out of range (not 0, 1, or 2).
     pub fn set(&mut self, idx: usize, val: f64) {
         match idx {
             0 => self.a = val,
@@ -120,8 +224,8 @@ impl Hash for Betas {
     }
 }
 
-// Main structure for Bayesian prediction models that holds data and model parameters
-// for MCMC sampling and posterior probability calculations.
+/// Main structure for Bayesian prediction models that holds data and model parameters
+/// for MCMC sampling and posterior probability calculations.
 pub struct BayesPred {
     data: Data,
     lambda: f64,
@@ -130,6 +234,28 @@ pub struct BayesPred {
 }
 
 impl BayesPred {
+    /// Creates a new BayesPred instance with specified data and parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Dataset for model training and prediction
+    /// * `lambda` - Regularization parameter for the model
+    /// * `data_type` - Type of data transformation to apply (RAW_TYPE, PREVALENCE_TYPE, LOG_TYPE)
+    /// * `epsilon` - Small constant for numerical stability in transformations
+    ///
+    /// # Returns
+    ///
+    /// A new BayesPred instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use gpredomics::bayesian_mcmc::BayesPred;
+    /// # use gpredomics::data::Data;
+    /// # use gpredomics::individual::RAW_TYPE;
+    /// # let data = Data::new();
+    /// let bayes_pred = BayesPred::new(&data, 0.1, RAW_TYPE, 1e-6);
+    /// ```
     pub fn new(data: &Data, lambda: f64, data_type: u8, epsilon: f64) -> BayesPred {
         BayesPred {
             data: data.clone(),
@@ -139,6 +265,18 @@ impl BayesPred {
         }
     }
 
+    /// Transforms a raw feature value based on the specified data type.
+    ///
+    /// This function is mandatory in MCMC to align data type transformations
+    /// as Gpredomics traditionnaly compute types during evaluation.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - Raw feature value to transform
+    ///
+    /// # Returns
+    ///
+    /// Transformed feature value.
     fn transform_value(&self, value: f64) -> f64 {
         match self.data_type {
             RAW_TYPE => value,
@@ -160,12 +298,22 @@ impl BayesPred {
         }
     }
 
-    // Organizes features from an Individual into categorical groups:
-    // - Positive features (coefficient = 1)
-    // - Negative features (coefficient = -1)
-    // - Intercept (always 1.0)
-    // Returns a vector of vectors where each inner vector contains [pos_features, neg_features, intercept]
-    // for each sample in the dataset.
+    /// Organizes features from an Individual into categorical groups.
+    ///
+    /// # Categories
+    ///
+    /// * Positive features (coefficient = 1)
+    /// * Negative features (coefficient = -1)
+    /// * Intercept (always 1.0)
+    ///
+    /// # Arguments
+    ///
+    /// * `ind` - Individual containing feature coefficients
+    ///
+    /// # Returns
+    ///
+    /// A vector of vectors where each inner vector contains [pos_features, neg_features, intercept]
+    /// for each sample in the dataset.
     fn compute_feature_groups(&self, ind: &Individual) -> Vec<[f64; 3]> {
         let mut z = Vec::with_capacity(self.data.sample_len);
         for i_sample in 0..self.data.sample_len {
@@ -186,13 +334,18 @@ impl BayesPred {
         z
     }
 
-    // Efficiently updates feature groups when a feature coefficient changes without recomputing all groups.
-    // Parameters:
-    // - z: Current feature groups
-    // - feature_idx: Index of the feature being updated
-    // - old_coef: Previous coefficient value
-    // - new_coef: New coefficient value
-    // Returns a new vector of updated feature groups.
+    /// Efficiently updates feature groups when a feature coefficient changes without recomputing all groups.
+    ///
+    /// # Arguments
+    ///
+    /// * `z` - Current feature groups
+    /// * `feature_idx` - Index of the feature being updated
+    /// * `old_coef` - Previous coefficient value
+    /// * `new_coef` - New coefficient value
+    ///
+    /// # Returns
+    ///
+    /// A new vector of updated feature groups.
     pub fn update_feature_groups(
         &self,
         z: &[[f64; 3]],
@@ -239,12 +392,17 @@ impl BayesPred {
         z_new
     }
 
-    // Calculates the log posterior probability for given model parameters and feature groups.
-    // Combines the log-likelihood of the observed data with the log-prior of the parameters.
-    // Parameters:
-    // - beta: Model coefficients [beta_pos, beta_neg, beta_intercept]
-    // - z: Feature groups [pos_features, neg_features, intercept]
-    // Returns the log posterior probability.
+    /// Calculates the log posterior probability for given model parameters and feature groups.
+    /// Combines the log-likelihood of the observed data with the log-prior of the parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `ind` - Individual containing model coefficients
+    /// * `z` - Feature groups [pos_features, neg_features, intercept]
+    ///
+    /// # Returns
+    ///
+    /// The log posterior probability.
     fn log_posterior(&self, ind: &Individual, z: &Vec<[f64; 3]>) -> f64 {
         let [a, b, c] = ind.get_betas();
         let mut log_likelihood = 0.0;
@@ -268,13 +426,18 @@ impl BayesPred {
         log_likelihood + log_prior
     }
 
-    // Computes the standard deviation for a specific model parameter, used to determine
-    // appropriate proposal distribution width in MCMC sampling.
-    // Parameters:
-    // - beta: Current model coefficients
-    // - z: Feature groups
-    // - param_idx: Index of the parameter to compute sigma for (0=pos, 1=neg, 2=intercept)
-    // Returns the standard deviation.
+    /// Computes the standard deviation for a specific model parameter, used to determine
+    /// appropriate proposal distribution width in MCMC sampling.
+    ///
+    /// # Arguments
+    ///
+    /// * `ind` - Individual containing model coefficients
+    /// * `z` - Feature groups
+    /// * `i` - Index of the parameter to compute sigma for (0=pos, 1=neg, 2=intercept)
+    ///
+    /// # Returns
+    ///
+    /// The standard deviation.
     fn compute_sigma_i(&self, ind: &Individual, z: &Vec<[f64; 3]>, i: usize) -> f64 {
         let [a, b, c] = ind.get_betas();
         let mut cov_inv = 0.0;
@@ -288,9 +451,9 @@ impl BayesPred {
     }
 }
 
-// Helper structure for Brent optimization that implements the CostFunction trait.
-// Used to minimize the negative log posterior probability for parameter optimization.
-// Holds references to the Bayesian prediction model, parameter index, current beta values, and feature groups.
+/// Helper structure for Brent optimization that implements the CostFunction trait.
+/// Used to minimize the negative log posterior probability for parameter optimization.
+/// Holds references to the Bayesian prediction model, parameter index, current beta values, and feature groups.
 struct NegLogPostToMinimize<'a> {
     bp: &'a BayesPred,
     i: usize,
@@ -298,8 +461,8 @@ struct NegLogPostToMinimize<'a> {
     z: &'a Vec<[f64; 3]>,
 }
 
-// Implements the cost function for optimization.
-// Returns the negative log posterior probability for the proposed parameter value.
+/// Implements the cost function for optimization.
+/// Returns the negative log posterior probability for the proposed parameter value.
 impl CostFunction for NegLogPostToMinimize<'_> {
     type Param = f64;
     type Output = f64;
@@ -313,32 +476,62 @@ impl CostFunction for NegLogPostToMinimize<'_> {
 
 //-----------------------------------------------------------------------------
 // Structure for MCMC tracing
+//-----------------------------------------------------------------------------
 
-// Structure for storing and processing results from MCMC sampling.
-// Contains model statistics, feature probabilities, parameter estimates,
-// and optional traces of the sampling process.
+/// Structure for storing and processing results from MCMC sampling.
+/// Contains model statistics, feature probabilities, parameter estimates,
+/// and optional traces of the sampling process.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MCMCAnalysisTrace {
+    /// Population of sampled individuals from MCMC
     pub population: Population,
+
+    /// Indices of features considered in the model
     pub feature_selection: Vec<usize>,
-    pub feature_prob: HashMap<usize, (f64, f64, f64)>, // idx -> (pos, neutre, neg)
-    pub model_stats: HashMap<usize, (f64, f64)>,       // idx -> (moyenne, variance)
+
+    /// Probabilities of each feature being positive, neutral, or negative
+    pub feature_prob: HashMap<usize, (f64, f64, f64)>,
+
+    /// Statistics (mean, variance) for each feature's coefficient
+    pub model_stats: HashMap<usize, (f64, f64)>,
+
+    /// Mean of the beta coefficients [a, b, c]
     pub beta_mean: [f64; 3],
+
+    /// Variance of the beta coefficients [a, b, c]
     pub beta_var: [f64; 3],
+
+    /// Mean of the log posterior probabilities
     pub log_post_mean: f64,
+
+    /// Variance of the log posterior probabilities
     pub log_post_var: f64,
+
+    /// Trace of log posterior probabilities over MCMC iterations
     pub log_post_trace: Vec<f64>,
+
+    /// Mean of the posterior probabilities
     pub post_mean: f64,
+
+    /// Variance of the posterior probabilities
     pub post_var: f64,
+
+    /// Parameters used in the MCMC sampling
     pub param: Param,
 }
 
 impl MCMCAnalysisTrace {
-    // Creates a new MCMCAnalysisTrace instance to store MCMC sampling results.
-    // Parameters:
-    // - n_features: Total number of features in the model
-    // - keep_trace: Whether to store detailed traces of sampling history
-    // - feature_names: Optional vector of feature names for better interpretability
+    /// Creates a new MCMCAnalysisTrace instance to store MCMC sampling results.
+    ///
+    /// # Arguments
+    ///
+    /// * `n_features` - Total number of features in the model
+    /// * `keep_trace` - Whether to store detailed traces of sampling history
+    /// * `feature_names` - Optional vector of feature names for better interpretability
+    ///
+    /// # Returns
+    ///
+    /// A new empty MCMCAnalysisTrace instance.
     pub fn new(feature_selection: &Vec<usize>, param: Param) -> Self {
         let n_features = feature_selection.len();
         let mut feature_prob = HashMap::with_capacity(n_features);
@@ -365,12 +558,26 @@ impl MCMCAnalysisTrace {
         }
     }
 
-    // Updates the MCMC results with a new sample.
-    // Accumulates statistics for parameters, feature probabilities, and model performance.
-    // Parameters:
-    // - beta: Current model coefficients
-    // - individual: Current feature selection and coefficients
-    // - log_post: Log posterior probability of the current sample
+    /// Updates the MCMC results with a new sample.
+    ///
+    /// Accumulates statistics for parameters, feature probabilities, and model performance.
+    ///
+    /// # Arguments
+    ///
+    /// * `beta` - Current model coefficients
+    /// * `individual` - Current feature selection and coefficients
+    /// * `log_post` - Log posterior probability of the current sample
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use gpredomics::bayesian_mcmc::MCMCAnalysisTrace;
+    /// # use gpredomics::individual::Individual;
+    /// # let mut mcmc_trace = MCMCAnalysisTrace::new();
+    /// # let individual = Individual::new();
+    /// # let log_post = 0.0;
+    /// mcmc_trace.update(&individual, log_post);
+    /// ```
     pub fn update(&mut self, ind: &Individual, log_post: f64) {
         let [a, b, c] = ind.get_betas();
         self.beta_mean = [
@@ -416,11 +623,13 @@ impl MCMCAnalysisTrace {
     //     }
     // }
 
-    // Finalizes MCMC results by calculating means and variances from accumulated statistics.
-    // Accounts for burn-in period and normalizes probabilities as needed.
-    // Parameters:
-    // - n_iter: Total number of MCMC iterations
-    // - n_burn: Number of burn-in iterations to discard
+    /// Finalizes MCMC results by calculating means and variances from accumulated statistics.
+    /// Accounts for burn-in period and normalizes probabilities as needed.
+    ///
+    /// # Arguments
+    ///
+    /// * n_iter - Total number of MCMC iterations
+    /// * n_burn - Number of burn-in iterations to discard
     pub fn finalize(&mut self, n_iter: usize, n_burn: usize) {
         let n_mean =
             ((self.population.individuals[0].features.len() + 3) * (n_iter - n_burn)) as f64;
@@ -473,6 +682,15 @@ impl MCMCAnalysisTrace {
         self.post_var = (self.post_var - self.post_mean.powf(2.0) * n_mean) / (n_mean - 1.0);
     }
 
+    /// Computes the log evidence of the model given the number of classes.
+    ///
+    /// # Arguments
+    ///
+    /// * `n_classes` - Number of classes in the classification problem
+    ///
+    /// # Returns
+    ///
+    /// The log evidence value.
     pub fn get_log_evidence(&self, n_classes: f64) -> f64 {
         let n_features = self.population.individuals[0].features.len() as f64;
         self.post_mean.log10() - n_features * n_classes.log10()
@@ -505,7 +723,11 @@ impl MCMCAnalysisTrace {
     //     self.clone()
     // }
 
-    // Return the feature_prob in a ImportanceCollectiob
+    /// Return the feature_prob in a ImportanceCollection
+    ///
+    /// # Returns
+    ///
+    /// An ImportanceCollection containing the importance of each feature.
     pub fn get_importance(&self) -> ImportanceCollection {
         let mut importances = Vec::with_capacity(self.feature_prob.len() * 2);
 
@@ -625,14 +847,27 @@ impl MCMCAnalysisTrace {
 
 //-----------------------------------------------------------------------------
 // Algorithms
+//-----------------------------------------------------------------------------
 
-// Implements Sequential Backward Selection using MCMC to progressively eliminate
-// features while monitoring model performance.
-// Starts with all features and removes the least important ones sequentially.
-// Parameters:
-// - data: Dataset to model
-// - param: Configuration parameters for the MCMC process
-// Returns a vector of results for each model size with performance metrics.
+/// Implements Sequential Backward Selection using MCMC to progressively eliminate features.
+/// Starts with all features and removes the least important ones sequentially.
+///
+/// # Arguments
+///
+/// * `data` - Dataset to model
+/// * `param` - Configuration parameters for the MCMC process
+/// * `rng` - Random number generator
+/// * `running` - Atomic flag to control the running state
+///
+/// # Returns
+///
+/// A vector of tuples containing:
+/// * Number of features
+/// * Posterior mean
+/// * Log posterior mean
+/// * Log evidence
+/// * Index of the dropped feature
+/// * Random number generator state
 pub fn run_mcmc_sbs(
     data: &Data,
     param: &Param,
@@ -736,14 +971,19 @@ pub fn run_mcmc_sbs(
         .collect()
 }
 
-// Core MCMC implementation for Bayesian model sampling.
-// Uses Metropolis-Hastings algorithm with Brent optimization for continuous parameters
-// and discrete proposal updates for feature coefficients.
-// Parameters:
-// - bp: Bayesian prediction model
-// - param: MCMC configuration parameters
-// - rng: Random number generator with specified seed
-// Returns the MCMC sampling results after burn-in and convergence.
+/// Core MCMC implementation for Bayesian model sampling.
+/// Uses Metropolis-Hastings algorithm with Brent optimization for continuous parameters
+/// and discrete proposal updates for feature coefficients.
+///
+/// # Arguments
+///
+/// * `bp` - Bayesian prediction model
+/// * `param` - MCMC configuration parameters
+/// * `rng` - Random number generator with specified seed
+///
+/// # Returns
+///
+/// MCMC sampling results after burn-in and convergence.
 pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMCAnalysisTrace {
     if param.mcmc.n_burn >= param.mcmc.n_iter {
         error!("n_iter should be greater than n_burn!");
@@ -854,6 +1094,19 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
     res_mcmc
 }
 
+/// Main function to run MCMC analysis on the dataset.
+/// Handles feature selection, sequential backward selection (SBS),
+/// and computes the final MCMC results.
+///
+/// # Arguments
+///
+/// * `data` - Dataset to analyze
+/// * `param` - Configuration parameters for MCMC
+/// * `running` - Atomic flag to control the running state
+///
+/// # Returns
+///
+/// A tuple containing a vector of Populations resulting from MCMC and optional ExperimentMetadata with MCMC trace information
 pub fn mcmc(
     data: &mut Data,
     param: &Param,
@@ -945,14 +1198,19 @@ pub fn mcmc(
     )
 }
 
-// Identifies and returns the best model from sequential backward selection results.
-// Selects based on log evidence and filters out unnecessary features.
-// Parameters:
-// - data: Original dataset
-// - results: Results from sequential backward selection
-// - param: Configuration parameters
-// - rng: Random number generator
-// Returns the MCMC results for the best model configuration.
+/// Identifies and returns the best model from sequential backward selection results.
+/// Selects based on log evidence and filters out unnecessary features.
+///
+/// # Arguments
+///
+/// * `data` - Original dataset
+/// * `results` - Results from sequential backward selection
+/// * `param` - Configuration parameters
+/// * `rng` - Random number generator
+///
+/// # Returns
+///
+/// The MCMC results for the best model configuration.
 pub fn get_best_mcmc_sbs(
     data: &Data,
     results: &[(u32, f64, f64, f64, usize, ChaCha8Rng)],

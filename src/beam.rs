@@ -30,6 +30,26 @@ use std::time::Instant;
 // Mathematical utilities
 //-----------------------------------------------------------------------------
 
+/// Generates all unique combinations of `k` features from the given feature set.
+///
+/// # Arguments
+///
+/// * `features` - A vector of feature indices to choose from.
+/// * `k` - The number of features to include in each combination.
+///
+/// # Returns
+///
+/// A vector of vectors, where each inner vector represents a unique combination of `k` features.
+///
+/// # Example
+///
+/// ```ignore
+/// # use gpredomics::beam::generate_combinations;
+/// # use std::vec;
+/// let features = vec![0, 1, 2];
+/// let combinations = generate_combinations(&features, 2);
+/// assert_eq!(combinations, vec![vec![0, 1], vec![0, 2], vec![1, 2]]);
+/// ```
 fn generate_combinations(features: &Vec<usize>, k: usize) -> Vec<Vec<usize>> {
     let mut combinations = HashSet::new();
     let mut indices = (0..k).collect::<Vec<_>>();
@@ -60,6 +80,27 @@ fn generate_combinations(features: &Vec<usize>, k: usize) -> Vec<Vec<usize>> {
     combinations.into_iter().collect()
 }
 
+/// Combines best feature combinations with single features to generate new unique combinations.
+///
+/// # Arguments
+///
+/// * `best_combinations` - A vector of vectors, where each inner vector represents a best combination of features.
+/// * `features` - A vector of feature indices to combine with the best combinations.
+///
+/// # Returns
+///
+/// A vector of vectors, where each inner vector represents a unique combination of features formed by adding one feature from `features` to each best combination.
+///
+/// # Example
+///
+/// ```ignore
+/// # use gpredomics::beam::combine_with_best;
+/// # use std::vec;
+/// let best_combinations = vec![vec![0, 1], vec![1, 2]];
+/// let features = vec![2, 3];
+/// let new_combinations = combine_with_best(best_combinations, &features);
+/// assert_eq!(new_combinations, vec![vec![0, 1, 2], vec![0, 1, 3], vec![1, 2, 3]]);
+/// ```
 fn combine_with_best(best_combinations: Vec<Vec<usize>>, features: &Vec<usize>) -> Vec<Vec<usize>> {
     let single_feature_combinations = generate_combinations(features, 1);
 
@@ -87,6 +128,28 @@ fn combine_with_best(best_combinations: Vec<Vec<usize>>, features: &Vec<usize>) 
     unique_combinations.into_iter().collect()
 }
 
+/// Computes the binomial coefficient C(n, k) = n! / (k! * (n - k)!).
+///
+/// # Arguments
+///
+/// * `n` - The total number of items.
+/// * `k` - The number of items to choose.
+///
+/// # Panics
+///
+/// This function will panic if an arithmetic overflow occurs during the calculation.
+///
+/// # Returns
+///
+/// The binomial coefficient C(n, k).
+///
+/// # Example
+///
+/// ```ignore
+/// # use gpredomics::beam::binomial_coefficient;
+/// let coeff = binomial_coefficient(5, 2);
+/// assert_eq!(coeff, 10);
+/// ```
 fn binomial_coefficient(n: u128, k: u128) -> u128 {
     if k > n {
         return 0;
@@ -109,6 +172,16 @@ fn binomial_coefficient(n: u128, k: u128) -> u128 {
     result
 }
 
+/// Finds the maximum `n` such that C(n, k) <= target.
+///
+/// # Arguments
+///
+/// * `k` - The number of items to choose.
+/// * `target` - The target value for the binomial coefficient.
+///
+/// # Returns
+///
+/// The maximum `n` such that C(n, k) <= target.
 fn max_n_for_combinations(k: u128, target: u128) -> u128 {
     let mut n = k;
     loop {
@@ -125,6 +198,42 @@ fn max_n_for_combinations(k: u128, target: u128) -> u128 {
 // Individual & Population utilities
 //-----------------------------------------------------------------------------
 
+/// Generates a population of individuals from given feature combinations.
+///
+/// # Arguments
+///
+/// * `features_combination` - A vector of vectors, where each inner vector represents a combination of feature indices.
+/// * `pattern_ind` - An individual pattern to base the new individuals on.
+/// * `expected_k` - The expected number of features for each individual.
+/// * `param` - Parameters for individual generation.
+///
+/// # Returns
+///
+/// A population of individuals generated from the feature combinations.
+///
+/// # Notes
+///
+/// The function handles language-specific constraints for TERNARY and RATIO languages by removing or converting invalid models:
+/// * At k == 1: it converts TERNARY models to BINARY (ternary with only positive features) and keep TERNARY with only negative features to preserve diversity for k=2.
+/// * At k == 1: it converts RATIO models to BINARY (ratio with only positive features) or TERNARY (ratio with only negative features) to preserve mathematical consistency and diversity for k=2.
+/// * At k > 1: it converts TERNARY models with only positive features to BINARY if respects language constraints.
+/// * At k > 1: it rejects TERNARY models that do not have negative features to align with TERNARY definition.
+/// * This rejection is temporary and has to be refined in future versions, when AUC will be able to be computed in both directions.
+/// * At k > 1: it rejects RATIO models that do not have both positive and negative features.
+///
+/// # Example
+///
+/// ```ignore
+/// # use gpredomics::beam::pop_from_combinations;
+/// # use gpredomics::individual::Individual;
+/// # use gpredomics::param::Param;
+/// # use std::vec;
+/// let features_combination = vec![vec![0, 1], vec![1, 2]];
+/// let pattern_ind = Individual::new(); // Assume a valid Individual instance
+/// let param = Param::default(); // Assume a valid Param instance
+/// let population = pop_from_combinations(features_combination, pattern_ind, 2, &param);
+/// assert_eq!(population.individuals.len(), 2);
+/// ```
 fn pop_from_combinations(
     features_combination: Vec<Vec<usize>>,
     pattern_ind: Individual,
@@ -140,7 +249,8 @@ fn pop_from_combinations(
         .collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
 
-    let mut converted_count = 0;
+    let mut ter_converted_count = 0;
+    let mut ratio_converted_count = 0;
     let mut ind_vec: Vec<Individual> = vec![];
     for combination in &features_combination {
         for language in &languages {
@@ -155,36 +265,52 @@ fn pop_from_combinations(
                     .filter(|(_, coeff)| *coeff != 0)
                     .collect();
 
-                // Convert to Binary if all features are positives
-                let has_negative = tmp_ind.features.values().any(|&coef| coef < 0);
-                let has_positive = tmp_ind.features.values().any(|&coef| coef > 0);
+                // Check feature signs for validation (only for k > 1)
+                let mut skip_model = false;
+                if expected_k > 1 {
+                    let has_negative = tmp_ind.features.values().any(|&coef| coef < 0);
+                    let has_positive = tmp_ind.features.values().any(|&coef| coef > 0);
 
-                if !has_negative && (tmp_ind.language == TERNARY_LANG) {
-                    tmp_ind.features.retain(|_, &mut coeff| coeff > 0);
-                    if !languages.contains(&BINARY_LANG) {
-                        converted_count += 1;
-                    };
-                    tmp_ind.language = BINARY_LANG;
-                } else if !has_negative && (tmp_ind.language == RATIO_LANG) {
-                    // RATIO without negatives would be X/0 (NaN) - reject
-                    tmp_ind.features = HashMap::new();
-                }
-
-                // Ter & Ratio without any positive features are meaningless
-                // For RATIO, we also need BOTH positive AND negative features
-                if tmp_ind.language == RATIO_LANG {
-                    // RATIO requires both positive (numerator) and negative (denominator)
-                    if !has_positive || !has_negative {
-                        tmp_ind.features = HashMap::new();
+                    if tmp_ind.language == TERNARY_LANG {
+                        if !has_negative && has_positive {
+                            // TERNARY with only positive features → convert to BINARY
+                            tmp_ind.features.retain(|_, &mut coeff| coeff > 0);
+                            if !languages.contains(&BINARY_LANG) {
+                                ter_converted_count += 1;
+                            }
+                            tmp_ind.language = BINARY_LANG;
+                        } else if !has_positive {
+                            // TERNARY with only negative features → reject (not equivalent to BINARY)
+                            skip_model = true;
+                        }
+                    } else if tmp_ind.language == RATIO_LANG {
+                        // RATIO requires BOTH positive AND negative features
+                        if !has_positive || !has_negative {
+                            skip_model = true;
+                        }
                     }
-                } else if !has_positive
-                    && (tmp_ind.language == TERNARY_LANG || tmp_ind.language == RATIO_LANG)
-                {
-                    tmp_ind.features = HashMap::new();
+                } else if expected_k == 1 {
+                    // For k==1, converts ratio to ternary/binary to keep mathematical consistency
+                    if tmp_ind.language == RATIO_LANG {
+                        ratio_converted_count += 1;
+                        if tmp_ind.features.values().all(|&coef| coef > 0) {
+                            tmp_ind.language = BINARY_LANG;
+                        } else if tmp_ind.features.values().all(|&coef| coef < 0) {
+                            tmp_ind.language = TERNARY_LANG;
+                        }
+                    } else if tmp_ind.language == TERNARY_LANG {
+                        // For k==1, converts ternary to binary (only positive features)
+                        if tmp_ind.features.values().all(|&coef| coef > 0) {
+                            if !languages.contains(&BINARY_LANG) {
+                                ter_converted_count += 1;
+                            }
+                            tmp_ind.language = BINARY_LANG;
+                        }
+                    }
                 }
 
                 // Remove -1 for Binary Individual
-                if language == &BINARY_LANG {
+                if tmp_ind.language == BINARY_LANG {
                     tmp_ind.features = tmp_ind
                         .features
                         .into_iter()
@@ -194,19 +320,26 @@ fn pop_from_combinations(
 
                 tmp_ind.k = tmp_ind.features.len();
 
-                // Prevent the generation of model with less than k features
-                if tmp_ind.k == expected_k {
+                // Add individual if valid and has expected number of features
+                if !skip_model && tmp_ind.k == expected_k {
                     ind_vec.push(tmp_ind);
                 }
             }
         }
     }
 
-    if converted_count > 0 && !languages.contains(&BINARY_LANG) {
+    if ter_converted_count > 0 {
+        info!(
+            "Converted {} TERNARY models with only positive features to BINARY to respect language constraints.",
+            ter_converted_count
+        )
+    }
+
+    if ratio_converted_count > 0 {
         warn!(
-            "Converted {} TERNARY models without negatives features to BINARY. \
-            Consider adding 'bin' to param.general.language if unintended.",
-            converted_count
+            "Converted {} RATIO models at k=1 to BINARY (positive-only) or TERNARY (negative-only) to keep diversity for next iteration. \
+            Consider set k_start >=2 if you prefer to start from real RATIO models.",
+            ratio_converted_count
         )
     }
 
@@ -236,6 +369,15 @@ fn pop_from_combinations(
 //     important_features.into_iter().take(nb_features_to_keep).map(|(feature, _)| feature).collect()
 // }
 
+/// Selects features from the best population by collecting all unique features present.
+///
+/// # Arguments
+///
+/// * `best_pop` - Population of best models (sorted by fit).
+///
+/// # Returns
+///
+/// A vector of unique feature indices present in the best population.
 fn select_features_from_best(best_pop: &Population) -> Vec<usize> {
     let mut unique_features = HashSet::new();
     let mut features: Vec<usize> = vec![];
@@ -253,15 +395,24 @@ fn select_features_from_best(best_pop: &Population) -> Vec<usize> {
     features
 }
 
-/// Select features based on their frequency in the best models
+/// Selects features based on their frequency in the best models
 ///
 /// Features are selected if they appear in at least `min_freq_pct`% of the best models,
 /// OR if they appear in any of the top `top_models_pct`% of the best models.
 ///
 /// # Arguments
+///
 /// * `best_pop` - Population of best models (sorted by fit)
 /// * `min_freq_pct` - Minimum frequency percentage for a feature to be kept (e.g., 10.0 for 10%)
 /// * `top_models_pct` - Percentage of top models whose features are all kept (e.g., 10.0 for top 10%)
+///
+/// # Returns
+///
+/// A vector of selected feature indices.
+///
+/// # Notes
+///
+/// This method is the same as the one implemented in Predomics terbeam.
 fn select_features_from_best_with_frequency(
     best_pop: &Population,
     min_freq_pct: f64,
@@ -327,10 +478,15 @@ fn select_features_from_best_with_frequency(
 /// 3. Guarantees at least 50% of top features from each sign are kept
 ///
 /// # Arguments
+///
 /// * `best_pop` - Population of best models (sorted by fit)
 /// * `min_freq_pct` - Minimum frequency percentage threshold (default 1.0 in R)
 /// * `top_models_pct` - Percentage defining "veryBest" models (default 10.0)
 /// * `nb_best` - Number of best features per sign to consider (typically best_pop.len())
+///
+/// # Returns
+///
+/// A vector of selected feature indices.
 fn select_features_for_ratio(
     best_pop: &Population,
     min_freq_pct: f64,
@@ -453,6 +609,19 @@ fn select_features_for_ratio(
     all_features
 }
 
+/// Generates an individual based on selected features and their classes.
+/// This individual will be then used as a pattern for generating populations.
+///
+/// # Arguments
+///
+/// * `data` - The data containing feature selection and classes.
+/// * `language` - The language type for the individual.
+/// * `data_type` - The data type for the individual.
+/// * `param` - Parameters for individual generation.
+///
+/// # Returns
+///
+/// An individual containing all features assigned coefficients based on their classes.
 pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Param) -> Individual {
     let mut features = HashMap::new();
     for &feature_idx in &data.feature_selection {
@@ -510,17 +679,38 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
 // Beam core functions
 //-----------------------------------------------------------------------------
 
+/// Beam search methods
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum BeamMethod {
+    /// Limited exhaustive search (combinatorial), testing all combinations up to a certain size.
+    /// Suitable for smaller feature sets due to combinatorial explosion.
+    /// Predomics terbeam-like approach.
     #[serde(alias = "combinatorial")]
     LimitedExhaustive,
+    /// Incremental parallel feature addition, building models by adding one feature at a time.
+    /// More scalable for larger feature sets.
+    /// Leeds to larger model.
     #[serde(alias = "incremental")]
     ParallelForward,
 }
 
+/// Main Beam algorithm function
+///
+/// # Arguments
+///
+/// * `data` - The dataset to operate on.
+/// * `_no_overfit_data` - Optional dataset for overfitting checks (deprecated).
+/// * `initial_pop` - Optional initial population (to implement).
+/// * `param` - Parameters for the Beam algorithm.
+/// * `running` - Atomic boolean to control the running state of the algorithm.
+///
+/// # Returns
+///
+/// A vector of populations generated during the Beam search process.
 pub fn beam(
     data: &mut Data,
     _no_overfit_data: &mut Option<Data>,
+    _initial_pop: &mut Option<Population>,
     param: &Param,
     running: Arc<AtomicBool>,
 ) -> Vec<Population> {
@@ -530,10 +720,11 @@ pub fn beam(
     cinfo!(
         param.general.display_colorful,
         "\x1b[1;96mLaunching Beam algorithm for a feature interval [{}, {}]\x1b[0m",
-        param.beam.kmin,
-        param.beam.kmax
+        param.beam.k_start,
+        param.beam.k_stop
     );
 
+    // Select feature in the algorithm to avoid data leakage
     data.select_features(param);
     debug!("FEATURES {:?}", data.feature_class);
 
@@ -565,12 +756,23 @@ pub fn beam(
     populations
 }
 
+/// Generates the initial population for the Beam algorithm.
+///
+/// # Arguments
+///
+/// * `data` - The dataset to operate on.
+/// * `param` - Parameters for the Beam algorithm.
+///
+/// # Returns
+///
+/// A population of individuals generated from the initial feature combinations.
 pub fn generate_pop(data: &Data, param: &Param) -> Population {
-    let initial_combinations = generate_combinations(&data.feature_selection, param.beam.kmin);
+    let initial_combinations = generate_combinations(&data.feature_selection, param.beam.k_start);
     let combinations = initial_combinations.clone();
 
     let pattern_ind = generate_individual(&data, TERNARY_LANG, RAW_TYPE, &param);
-    let mut pop = pop_from_combinations(combinations.clone(), pattern_ind, param.beam.kmin, param);
+    let mut pop =
+        pop_from_combinations(combinations.clone(), pattern_ind, param.beam.k_start, param);
 
     debug!("{} individuals generated", pop.individuals.len());
 
@@ -579,6 +781,20 @@ pub fn generate_pop(data: &Data, param: &Param) -> Population {
     pop
 }
 
+/// Iteratively grows the population by adding features based on the best models from the previous generation.
+///
+/// # Arguments
+///
+/// * `base_pop` - The initial population to start from.
+/// * `data` - The dataset to operate on.
+/// * `gpu_assay` - Optional GPU assay for computations.
+/// * `param` - Parameters for the Beam algorithm.
+/// * `running` - Atomic boolean to control the running state of the algorithm.
+/// * `rng` - Random number generator for stochastic processes.
+///
+/// # Returns
+///
+/// A vector of populations generated during the iterative growth process.
 pub fn iterative_growth(
     base_pop: &Population,
     data: &Data,
@@ -587,7 +803,7 @@ pub fn iterative_growth(
     running: Arc<AtomicBool>,
     rng: &mut ChaCha8Rng,
 ) -> Vec<Population> {
-    let mut epoch = param.beam.kmin;
+    let mut epoch = param.beam.k_start;
     let mut cv: Option<CV> = None;
     let mut populations: Vec<Population> = vec![];
 
@@ -717,7 +933,7 @@ pub fn iterative_growth(
             need_to_break = true;
         }
 
-        if param.beam.kmax == epoch {
+        if param.beam.k_stop == epoch {
             info!("Limite reached...");
             need_to_break = true;
         }
@@ -745,6 +961,21 @@ pub fn iterative_growth(
     populations
 }
 
+/// Grows a new population from the best models of the previous generation.
+///
+/// # Arguments
+///
+/// * `best_pop` - The best population from the previous generation.
+/// * `data` - The dataset to operate on.
+/// * `cv` - Optional cross-validation structure for fitting.
+/// * `param` - Parameters for the Beam algorithm.
+/// * `gpu_assay` - Optional GPU assay for computations.
+/// * `gpu_assays_per_fold` - GPU assays for each fold in cross-validation.
+/// * `epoch` - The current epoch number.
+///
+/// # Returns
+///
+/// A new population generated from the k-1 best models.
 pub fn grow(
     best_pop: Population,
     data: &Data,
@@ -761,8 +992,9 @@ pub fn grow(
     // Otherwise, keep all unique features from best models
     let features_to_keep = if param.beam.best_models_criterion > 1.0 {
         // Check if RATIO language is used - requires special balanced selection
+        // Avoid RATIO balanced selection at k=1->2 as it produce empty individuals
         let languages: Vec<u8> = param.general.language.split(",").map(language).collect();
-        if languages.contains(&RATIO_LANG) {
+        if languages.contains(&RATIO_LANG) && epoch > 2 {
             // Use R-like approach with 1% threshold and balanced pos/neg selection
             select_features_for_ratio(&best_pop, 1.0, 10.0, best_pop.individuals.len())
         } else {
@@ -806,9 +1038,19 @@ pub fn grow(
     new_pop
 }
 
-// Generate new combinations Mk + 1 feature_to_keep for next step
-// Combinations are limited both by kept Mk maximum (param.beam.max_nb_of_models) and features_to_keep (param.beam.best_models_criterion)
-// Combinations are currently generated at each epoch in each languages and data_type
+/// Generate new combinations Mk + 1 feature_to_keep for next step.
+/// Combinations are limited both by kept Mk maximum (param.beam.max_nb_of_models) and features_to_keep (param.beam.best_models_criterion)
+/// Combinations are currently generated at each epoch in each languages and data_type
+///
+/// # Arguments
+///
+/// * `best_pop` - Population of best models (sorted by fit)
+/// * `features_to_keep` - Features to keep for generating new combinations
+/// * `param` - Parameters for the Beam algorithm
+///
+/// # Returns
+///
+/// A vector of new feature combinations for the next generation.
 pub fn increment(
     best_pop: Population,
     features_to_keep: Vec<usize>,
@@ -848,9 +1090,20 @@ pub fn increment(
     combine_with_best(best_combinations.clone(), &features_to_keep)
 }
 
-// Generate all possible combinations between the features_to_keep
-// Combinations are limited by features_to_keep (by param.beam.best_models_criterion)
-// These features can be limited with param.beam.max_nb_of_models
+/// Generate all possible combinations between the features_to_keep
+/// Combinations are limited by features_to_keep (by param.beam.best_models_criterion)
+/// These features can be limited with param.beam.max_nb_of_models
+///
+/// # Arguments
+///
+/// * `features_to_keep` - Features to keep for generating new combinations
+/// * `k` - Size of combinations to generate
+/// * `data` - The dataset to operate on.
+/// * `param` - Parameters for the Beam algorithm
+///
+/// # Returns
+///
+/// A vector of new feature combinations for the next generation.
 pub fn combine(
     features_to_keep: Vec<usize>,
     k: usize,
@@ -1005,7 +1258,16 @@ pub fn combine(
     combinations
 }
 
-// Function to extract best models among all epochs, not necessarily having k_max features
+/// Extracts and keeps the n best models across a collection of populations.
+///
+/// # Arguments
+///
+/// * `collection` - A vector of populations to extract models from.
+/// * `n` - The number of best models to keep.
+///
+/// # Returns
+///
+/// A population containing the n best models based on their fitness.
 pub fn keep_n_best_model_within_collection(collection: &Vec<Population>, n: usize) -> Population {
     let mut all_models = Population::new();
     for population in collection {
@@ -1026,6 +1288,16 @@ pub fn keep_n_best_model_within_collection(collection: &Vec<Population>, n: usiz
     best_n_pop
 }
 
+/// Build GPU assay if GPU is enabled and max_nb_of_models is compatible with GPU memory
+///
+/// # Arguments
+///
+/// * `data` - The dataset to operate on.
+/// * `param` - Parameters for the Beam algorithm.
+///
+/// # Returns
+///
+/// An optional GPU assay if conditions are met, otherwise None.
 fn get_gpu_assay(data: &Data, param: &Param) -> Option<GpuAssay> {
     let languages: Vec<u8> = param
         .general
@@ -1072,8 +1344,16 @@ fn get_gpu_assay(data: &Data, param: &Param) -> Option<GpuAssay> {
     gpu_assay
 }
 
-/// Create GPU assays for each fold when inner CV is enabled with GPU for beam algorithm
-/// Returns a vector of tuples (validation_assay, training_assay) for each fold
+/// Creates GPU assays for each fold when inner CV is enabled with GPU for beam algorithm
+///
+/// # Arguments
+///
+/// * `cv` - The cross-validation structure containing folds.
+/// * `param` - Parameters for the Beam algorithm.
+///
+/// # Returns
+///
+/// A vector of tuples containing optional GPU assays for validation and training sets for each fold.
 fn create_gpu_assays_for_folds_beam(
     cv: &CV,
     param: &Param,
@@ -1128,7 +1408,6 @@ fn create_gpu_assays_for_folds_beam(
     }).collect()
 }
 
-// still have to write unit-tests to confirm every function behavior in any situation
 #[cfg(test)]
 mod tests {
     use super::*;

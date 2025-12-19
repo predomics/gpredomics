@@ -65,7 +65,7 @@ fn create_qin2014_params() -> Param {
 
     // Importance settings
     param.importance.compute_importance = false;
-    param.importance.n_permutations_oob = 100;
+    param.importance.n_permutations_mda = 100;
     param.importance.scaled_importance = true;
     param.importance.importance_aggregation = gpredomics::experiment::ImportanceAggregation::mean;
 
@@ -84,8 +84,8 @@ fn create_qin2014_params() -> Param {
     param.ga.max_epochs = 10;
     param.ga.min_epochs = 5;
     param.ga.max_age_best_model = 10;
-    param.ga.kmin = 1;
-    param.ga.kmax = 50;
+    param.ga.k_min = 1;
+    param.ga.k_max = 50;
     param.ga.select_elite_pct = 5.0;
     param.ga.select_niche_pct = 0.0;
     param.ga.select_random_pct = 10.0;
@@ -1251,8 +1251,8 @@ fn test_ga_comprehensive_all_combinations() {
                 // GA settings
                 param.ga.population_size = 20000;
                 param.ga.max_epochs = 2; // Keep it reasonable
-                param.ga.kmin = 2;
-                param.ga.kmax = 5;
+                param.ga.k_min = 2;
+                param.ga.k_max = 5;
 
                 // Inner CV configuration
                 if use_inner_cv {
@@ -1950,4 +1950,144 @@ fn test_ga_qin2014_external_test_overrides_holdout() {
         test_with_holdout_and_external.sample_len
     );
     println!("✓ GA external test overrides holdout_ratio as expected");
+}
+
+#[test]
+fn test_ga_generate_pop_twice() {
+    use gpredomics::data::Data;
+    use gpredomics::run_pop_and_data;
+
+    println!("\n=== Testing GA generate_pop Function via run_pop_and_data ===");
+
+    // Create parameters
+    let mut param = create_qin2014_params();
+    param.ga.population_size = 100; // Smaller population for faster test
+    param.ga.k_min = 1;
+    param.ga.k_max = 10;
+    param.ga.max_epochs = 2; // Just 2 epochs for quick test
+    param.ga.min_epochs = 1;
+
+    // Load data (first run)
+    let mut data1 = Data::new();
+    let _ = data1.load_data(&param.data.X, &param.data.y, param.data.features_in_rows);
+    data1.set_classes(param.data.classes.clone());
+
+    // First run with no initial population
+    println!("\n--- First run (generate_pop will be called) ---");
+    let running1 = Arc::new(AtomicBool::new(true));
+    let mut initial_pop1 = None;
+    let exp1 = run_pop_and_data(&mut initial_pop1, data1, None, &param, running1);
+
+    let pop1_len = exp1.final_population.as_ref().unwrap().individuals.len();
+    let pop1_best_fit = exp1.final_population.as_ref().unwrap().individuals[0].fit;
+
+    println!("First run results:");
+    println!("  - Final population size: {}", pop1_len);
+    println!("  - Best fitness: {:.4}", pop1_best_fit);
+    println!("  - Training samples: {}", exp1.train_data.sample_len);
+    println!("  - Training features: {}", exp1.train_data.feature_len);
+
+    // Load data (second run)
+    let mut data2 = Data::new();
+    let _ = data2.load_data(&param.data.X, &param.data.y, param.data.features_in_rows);
+    data2.set_classes(param.data.classes.clone());
+
+    // Second run with no initial population
+    println!("\n--- Second run (generate_pop will be called again) ---");
+    let running2 = Arc::new(AtomicBool::new(true));
+    let mut initial_pop2 = None;
+    let exp2 = run_pop_and_data(&mut initial_pop2, data2, None, &param, running2);
+
+    let pop2_len = exp2.final_population.as_ref().unwrap().individuals.len();
+    let pop2_best_fit = exp2.final_population.as_ref().unwrap().individuals[0].fit;
+
+    println!("Second run results:");
+    println!("  - Final population size: {}", pop2_len);
+    println!("  - Best fitness: {:.4}", pop2_best_fit);
+    println!("  - Training samples: {}", exp2.train_data.sample_len);
+    println!("  - Training features: {}", exp2.train_data.feature_len);
+
+    // Third run: use final population from first run as initial population
+    println!("\n--- Third run (using final_pop from first run as initial population) ---");
+    let mut data3 = Data::new();
+    let _ = data3.load_data(&param.data.X, &param.data.y, param.data.features_in_rows);
+    data3.set_classes(param.data.classes.clone());
+
+    // Clone the final population from first run to use as initial population
+    let mut initial_pop3 = exp1.final_population.clone();
+    let running3 = Arc::new(AtomicBool::new(true));
+    let exp3 = run_pop_and_data(&mut initial_pop3, data3, None, &param, running3);
+
+    let pop3_len = exp3.final_population.as_ref().unwrap().individuals.len();
+    let pop3_best_fit = exp3.final_population.as_ref().unwrap().individuals[0].fit;
+
+    println!("Third run results (with initial population):");
+    println!("  - Final population size: {}", pop3_len);
+    println!("  - Best fitness: {:.4}", pop3_best_fit);
+    println!("  - Training samples: {}", exp3.train_data.sample_len);
+    println!("  - Training features: {}", exp3.train_data.feature_len);
+
+    // Assertions
+    assert_eq!(
+        pop1_len, pop2_len,
+        "Both final populations should have similar sizes"
+    );
+
+    assert!(pop1_len > 0, "Population should not be empty");
+
+    // Check that data is loaded correctly in both runs
+    assert_eq!(
+        exp1.train_data.sample_len, exp2.train_data.sample_len,
+        "Both runs should have the same number of samples"
+    );
+    assert_eq!(
+        exp1.train_data.feature_len, exp2.train_data.feature_len,
+        "Both runs should have the same number of features"
+    );
+
+    // Third run should also have same data dimensions
+    assert_eq!(
+        exp1.train_data.sample_len, exp3.train_data.sample_len,
+        "Third run should have the same number of samples"
+    );
+    assert_eq!(
+        exp1.train_data.feature_len, exp3.train_data.feature_len,
+        "Third run should have the same number of features"
+    );
+
+    // All runs should produce valid fitness values
+    assert!(
+        pop1_best_fit > 0.0 && pop1_best_fit <= 1.0,
+        "First run fitness should be in valid range"
+    );
+    assert!(
+        pop2_best_fit > 0.0 && pop2_best_fit <= 1.0,
+        "Second run fitness should be in valid range"
+    );
+    assert!(
+        pop3_best_fit > 0.0 && pop3_best_fit <= 1.0,
+        "Third run fitness should be in valid range"
+    );
+
+    // Third run starting from best population should have at least as good fitness
+    assert!(
+        pop3_best_fit >= pop1_best_fit,
+        "Third run (starting from first run's final population) should have fitness >= first run"
+    );
+
+    println!("\n--- Comparison ---");
+    println!(
+        "  - Run 1 vs Run 2 fitness difference: {:.4}",
+        (pop1_best_fit - pop2_best_fit).abs()
+    );
+    println!(
+        "  - Run 1 vs Run 3 fitness difference: {:.4}",
+        (pop1_best_fit - pop3_best_fit).abs()
+    );
+    println!(
+        "  - Run 3 improvement over Run 1: {:.4}",
+        pop3_best_fit - pop1_best_fit
+    );
+
+    println!("\n✓ run_pop_and_data works correctly with and without initial population");
 }

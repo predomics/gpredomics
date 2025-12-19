@@ -12,54 +12,97 @@ use serde::{Deserialize, Serialize};
 // Voting
 //-----------------------------------------------------------------------------
 
+/// Jury population of experts, associated voting methods and metrics
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Jury {
+    /// Population of individuals able to vote
     pub experts: Population,
+    /// Voting method
     pub voting_method: VotingMethod,
+    /// Voting threshold
     pub voting_threshold: f64,
+    /// Threshold window for majority voting
     pub threshold_window: f64,
 
-    // Weights
+    /// Weighting method used for assigning weights to experts
     pub weighting_method: WeightingMethod,
+
+    /// Weights assigned to each expert after evaluation
     pub weights: Option<Vec<f64>>,
 
-    // Binary metrics
+    /// Binary classification metrics
+    /// Area Under the Curve based on pos_vote/(pos_vote+neg_vote)
     pub auc: f64,
+    /// Accuracy
     pub accuracy: f64,
+    /// Sensitivity (True Positive Rate)
     pub sensitivity: f64,
+    /// Specificity (True Negative Rate)
     pub specificity: f64,
+    /// Rejection rate (abstentions)
     pub rejection_rate: f64,
+    /// Predicted classes after evaluation
     pub predicted_classes: Option<Vec<u8>>,
 
-    // Additional metrics (if present in experts)
+    /// Additional metrics (if present in experts)
     #[serde(default)]
     pub metrics: AdditionalMetrics,
 }
 
+/// Voting methods available
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum VotingMethod {
+    /// Majority voting: the class with the most votes wins
     Majority,
+    /// Consensus voting: a top % experts must agree for a decision to be made
     Consensus,
 }
 
+/// Weighting methods for experts in the jury
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum WeightingMethod {
+    /// Uniform weighting: all experts have equal weight
     Uniform,
+    /// Specialized weighting: experts are weighted based on their specialization (experimental)
     Specialized {
+        /// Sensitivity threshold for positive specialists
         sensitivity_threshold: f64,
+        /// Specificity threshold for negative specialists
         specificity_threshold: f64,
     },
 }
 
+/// Judge specialization categories (experimental)
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum JudgeSpecialization {
+    /// Positive specialist able to vote on positive class
     PositiveSpecialist,
+    /// Negative specialist able to vote on negative class
     NegativeSpecialist,
+    /// Balanced specialist able to vote on both classes
     Balanced,
+    /// Ineffective judge unable to vote
     Ineffective,
 }
 
 impl Jury {
+    /// Creates a new Jury with given parameters
+    ///
+    /// # Arguments
+    ///
+    /// * `pop` - Population of experts
+    /// * `min_perf` - Minimum performance (sensitivity and specificity) for experts to be included
+    /// * `min_diversity` - Minimum diversity (signed Jaccard dissimilarity) for experts to be included
+    /// * `voting_method` - Voting method to be used
+    /// * `voting_threshold` - Voting threshold for decision making
+    /// * `threshold_window` - Threshold window for majority voting
+    /// * `weighting_method` - Weighting method for experts
+    ///
+    /// # Panics
+    ///
+    /// Panics if :
+    /// * voting threshold is not in [0,1] or if threshold window is not in [0,100]
+    /// * specialized weighting method thresholds are not in [0,1]
     pub fn new(
         pop: &Population,
         min_perf: &f64,
@@ -137,6 +180,23 @@ impl Jury {
         }
     }
 
+    /// Creates a new Jury from Population and Param
+    ///
+    /// # Arguments
+    ///
+    /// * `pop` - Population of experts
+    /// * `data` - Training data used for pruning if needed
+    /// * `param` - Parameters containing voting settings
+    ///
+    /// # Panics
+    ///
+    /// Panics if :
+    /// * voting threshold is not in [0,1]
+    /// * specialized weighting method thresholds are not in [0,1]
+    ///
+    /// # Note
+    ///
+    /// If `prune_before_voting` is set in `param`, experts will be pruned based on MDA before creating the Jury
     pub fn new_from_param(pop: &Population, data: &Data, param: &Param) -> Self {
         // Make voting_pop an owned Population so we don't take references to temporaries
         let mut voting_pop: Population =
@@ -185,7 +245,15 @@ impl Jury {
         )
     }
 
-    // Evaluates learning data and adjusts internal weight and performance variables accordingly
+    /// Evaluates learning data and adjusts internal weight and performance variables accordingly
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Training data used for evaluation
+    ///
+    /// # Panics
+    ///
+    /// Panics if evaluate is called before fitting experts on training data
     pub fn evaluate(&mut self, data: &Data) {
         for expert in &mut self.experts.individuals {
             if expert.accuracy == 0.0 {
@@ -226,6 +294,20 @@ impl Jury {
         self.metrics = additional_metrics;
     }
 
+    /// Computes new metrics on given data based on internal weights and variables
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data used for metric computation
+    ///
+    /// # Panics
+    ///
+    /// Panics if compute_new_metrics is called before evaluate()
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(auc, accuracy, sensitivity, specificity, rejection_rate, additional_metrics)`
+    /// where `additional_metrics` contains optional MCC, F1-score, NPV, PPV, G-mean
     pub fn compute_new_metrics(&self, data: &Data) -> (f64, f64, f64, f64, f64, AdditionalMetrics) {
         if self.weights.is_none() {
             panic!("Jury must be evaluated on training data first. Call evaluate() before compute_new_metrics().");
@@ -309,6 +391,15 @@ impl Jury {
         }
     }
 
+    /// Optimizes majority voting threshold based on Youden's index
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Training data used for optimization
+    ///
+    /// # Returns
+    ///
+    /// The optimized threshold value
     pub fn optimize_majority_threshold_youden(&mut self, data: &Data) -> f64 {
         let mut best_threshold = 0.5;
         let mut best_youden = 0.0;
@@ -362,7 +453,20 @@ impl Jury {
         best_threshold
     }
 
-    // Evaluates new data based on internal weights and variables
+    /// Predicts classes and scores for given data using current weights and voting method
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data for which predictions are to be made
+    ///
+    /// # Panics
+    ///
+    /// Panics if weights have not been computed (i.e., evaluate() has not been called)
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(predicted_classes, scores)` where `predicted_classes` is a vector of predicted class labels
+    /// and `scores` is a vector of associated pos_vote/(pos_vote+neg_vote) ratios
     pub fn predict(&self, data: &Data) -> (Vec<u8>, Vec<f64>) {
         let weights = self
             .weights
@@ -371,7 +475,15 @@ impl Jury {
         self.apply_voting_mechanism(data, weights)
     }
 
-    // Called by evaluate()
+    /// Computes weights for experts based on the selected weighting method
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Training data used for weight computation (if needed, not used in current methods)
+    ///
+    /// # Returns
+    ///
+    /// A vector of weights corresponding to each expert
     fn compute_weights_by_method(&self, _data: &Data) -> Vec<f64> {
         match &self.weighting_method {
             WeightingMethod::Uniform => vec![1.0; self.experts.individuals.len()],
@@ -382,7 +494,17 @@ impl Jury {
         }
     }
 
-    //
+    /// Applies the selected voting mechanism to the data using the provided weights
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data for which predictions are to be made
+    /// * `weights` - Weights assigned to each expert
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(predicted_classes, scores)` where `predicted_classes` is a vector of predicted class labels
+    /// and `scores` is a vector of associated pos_vote/(pos_vote+neg_vote) ratios
     fn apply_voting_mechanism(&self, data: &Data, weights: &[f64]) -> (Vec<u8>, Vec<f64>) {
         match &self.voting_method {
             VotingMethod::Majority => self.compute_majority_threshold_vote(
@@ -397,7 +519,18 @@ impl Jury {
         }
     }
 
-    // Voting methods
+    /// Computes predictions using consensus voting mechanism
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data for which predictions are to be made
+    /// * `weights` - Weights assigned to each expert
+    /// * `threshold` - Consensus threshold for decision making
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(predicted_classes, scores)` where `predicted_classes` is a vector of predicted class labels
+    /// and `scores` is a vector of associated pos_vote/(pos_vote+neg_vote) ratios
     fn compute_consensus_threshold_vote(
         &self,
         data: &Data,
@@ -461,6 +594,28 @@ impl Jury {
         (predicted_classes, ratios)
     }
 
+    /// Computes predictions using majority voting mechanism with threshold
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data for which predictions are to be made
+    /// * `weights` - Weights assigned to each expert
+    /// * `threshold` - Majority voting threshold for decision making
+    /// * `threshold_window` - Threshold window for abstention
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of weights does not match the number of experts
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(predicted_classes, scores)` where `predicted_classes` is a vector of predicted class labels
+    /// and `scores` is a vector of associated pos_vote/(pos_vote+neg_vote) ratios
+    ///
+    /// # Note
+    ///
+    /// If the ratio of positive votes to total votes is within the threshold window of the threshold,
+    /// the prediction is set to abstain (class 2).
     fn compute_majority_threshold_vote(
         &self,
         data: &Data,
@@ -528,11 +683,25 @@ impl Jury {
         (predicted_classes, ratios)
     }
 
+    /// Computes predicted classes for given data and stores them internally
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data for which predicted classes are to be computed
     pub fn compute_classes(&mut self, data: &Data) {
         let predictions = self.predict(data);
         self.predicted_classes = Some(predictions.0);
     }
 
+    /// Computes rejection rate based on predicted classes
+    ///
+    /// # Arguments
+    ///
+    /// * `predictions` - Vector of predicted class labels
+    ///
+    /// # Returns
+    ///
+    /// The rejection rate as a floating-point value.
     fn compute_rejection_rate(&self, predictions: &[u8]) -> f64 {
         let total_samples = predictions.len();
         let rejected_samples = predictions.iter().filter(|&&pred| pred == 2).count();
@@ -544,6 +713,11 @@ impl Jury {
         }
     }
 
+    /// Counts total and effective experts based on weighting method
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(total_experts, effective_experts)` where `effective_experts` are those contributing non-zero weight
     fn count_effective_experts(&self) -> (usize, usize) {
         match &self.weighting_method {
             WeightingMethod::Uniform => (
@@ -575,7 +749,17 @@ impl Jury {
         }
     }
 
-    // Judge specialization related functions (experimental)
+    /// Determines the specialization of an expert based on sensitivity and specificity thresholds
+    ///
+    /// # Arguments
+    ///
+    /// * `expert` - The expert whose specialization is to be determined
+    /// * `sensitivity_threshold` - Sensitivity threshold for specialization classification
+    /// * `specificity_threshold` - Specificity threshold for specialization classification
+    ///
+    /// # Returns
+    ///
+    /// The `JudgeSpecialization` of the expert
     fn get_expert_specialization(
         &self,
         expert: &Individual,
@@ -595,6 +779,16 @@ impl Jury {
         }
     }
 
+    /// Computes specialized weights for experts based on their specializations
+    ///
+    /// # Arguments
+    ///
+    /// * `sensitivity_threshold` - Sensitivity threshold for specialization classification
+    /// * `specificity_threshold` - Specificity threshold for specialization classification
+    ///
+    /// # Returns
+    ///
+    /// A vector of weights corresponding to each expert
     fn compute_group_strict_weights(
         &self,
         sensitivity_threshold: f64,
@@ -646,7 +840,17 @@ impl Jury {
             .collect()
     }
 
-    // Display functions
+    /// Generates a detailed display string of the voting analysis
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Training data used for analysis
+    /// * `test_data` - Optional test data for additional analysis
+    /// * `param` - Parameters containing display settings
+    ///
+    /// # Returns
+    ///
+    /// A formatted string containing the voting analysis report.    
     pub fn display(&self, data: &Data, test_data: Option<&Data>, param: &Param) -> String {
         let mut text = format!(
             "{}\n{}{}VOTING ANALYSIS{}{}\n{}\n",
@@ -790,7 +994,16 @@ impl Jury {
         text
     }
 
-    /// Train/Test metrics
+    /// Generates a compact summary string of the voting analysis
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Training data used for analysis
+    /// * `test_data` - Optional test data for additional analysis
+    ///
+    /// # Returns
+    ///
+    /// A formatted string containing the compact summary of voting performance, including train and test metrics if available.
     fn display_compact_summary(&self, _: &Data, test_data: Option<&Data>) -> String {
         let summary: String;
         let (total_experts, _) = self.count_effective_experts();
@@ -911,6 +1124,11 @@ impl Jury {
         summary
     }
 
+    /// Generates a string displaying information about the voting method and weighting
+    ///
+    /// # Returns
+    ///
+    /// A formatted string containing details about the voting method and weighting strategy.
     fn display_voting_method_info(&self) -> String {
         let mut info: String = "".to_string();
         match &self.weighting_method {
@@ -926,6 +1144,17 @@ impl Jury {
         info
     }
 
+    /// Generates a detailed display string of predictions by sample
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data for which predictions are to be displayed
+    /// * `complete_display` - Flag indicating whether to display all samples or a subset
+    /// * `title` - Title indicating whether the data is "TRAIN" or "TEST"
+    ///
+    /// # Returns
+    ///
+    /// A formatted string containing detailed predictions by sample, categorized by correctness and sorted by inconsistency
     fn display_predictions_by_sample(
         &self,
         data: &Data,
@@ -1109,6 +1338,15 @@ impl Jury {
         text
     }
 
+    /// Computes inconsistency for each sample based on expert predictions
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data for which inconsistency is to be computed
+    ///
+    /// # Returns
+    ///
+    /// A vector of tuples `(sample_index, inconsistency_value)` for each sample
     fn compute_sample_inconsistency(&self, data: &Data) -> Vec<(usize, f64)> {
         let mut inconsistency_list = Vec::new();
 
@@ -1146,7 +1384,17 @@ impl Jury {
         inconsistency_list
     }
 
-    /// Categorise and sort samples by inconsistency
+    /// Categorizes samples into errors, abstentions, and correct predictions. Sorts each category by inconsistency.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data for which categorization is to be performed
+    /// * `predictions` - Vector of predicted class labels
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing vectors of sample indices for errors, abstentions, correct predictions,
+    /// and a vector of tuples `(sample_index, inconsistency_value)` for each sample
     fn categorize_and_sort_by_inconsistency(
         &self,
         data: &Data,
@@ -1198,6 +1446,16 @@ impl Jury {
         (errors, abstentions, correct, inconsistency_list)
     }
 
+    /// Generates a display string for expert specializations
+    ///
+    /// # Arguments
+    ///
+    /// * `sensitivity_threshold` - Sensitivity threshold for specialization classification
+    /// * `specificity_threshold` - Specificity threshold for specialization classification
+    ///
+    /// # Returns
+    ///
+    /// A formatted string listing each expert's specialization and performance metrics.
     pub fn display_expert_specializations(
         &self,
         sensitivity_threshold: f64,
@@ -1250,6 +1508,16 @@ impl Jury {
         text
     }
 
+    /// Generates a colored display for a specialized vote based on expert specialization
+    ///
+    /// # Arguments
+    ///
+    /// * `specialization` - The specialization of the expert
+    /// * `vote` - The vote cast by the expert (0 or 1)
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing the color code and formatted vote string
     fn display_specialized_vote(
         &self,
         specialization: &JudgeSpecialization,
@@ -1266,6 +1534,16 @@ impl Jury {
         }
     }
 
+    /// Generates a display string of expert votes for a specific sample
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Data containing true labels
+    /// * `sample_idx` - Index of the sample for which votes are to be displayed
+    ///
+    /// # Returns
+    ///
+    /// A formatted string containing the votes of each expert for the specified sample.
     fn display_expert_votes_for_sample(&self, data: &Data, sample_idx: usize) -> String {
         let mut output = String::new();
 

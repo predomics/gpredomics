@@ -56,7 +56,7 @@ cv:
     
 importance:
   compute_importance: false                   # Should importance be computed?
-  n_permutations_oob: 100                     # Number of permutations per feature for OOB importance.
+  n_permutations_mda: 100                     # Number of permutations per feature for MDA importance.
   scaled_importance: true                     # Scale importance by feature prevalence inside folds.
   importance_aggregation: mean                # Aggregation method for importances: "mean" or "median".
 
@@ -76,8 +76,8 @@ ga:
   max_epochs: 100                             # The maximum number of generations before stopping (you can stop manually as well).
   min_epochs: 1                               # The minimum number of generations to run.
   max_age_best_model: 100                     # Stopping before max_epochs (after min_epochs) occurs only if the best model reaches this age.
-  kmin: 1                                     # The minimal number of variables used in the initial population.
-  kmax: 200                                   # The maximum number of variables used in the initial population (0 removes any maximum).
+  k_min: 1                                    # The minimal number of variables used in the initial population.
+  k_max: 200                                  # The maximum number of variables used in the initial population (0 removes any maximum).
   select_elite_pct: 2                         # Percentage of best models from previous generation retained: lower values are more elitist.
   select_niche_pct: 20                        # (optional, default 0) Percentage of best models retained but split per language/data type (helps maintain competition between languages/data types).
   select_random_pct: 10                       # Percentage of opportunistic models retained from the previous generation; split among all languages/data_types present.
@@ -91,8 +91,8 @@ ga:
 
 beam:
   method: LimitedExhaustive                   # LimitedExhaustive: generate all combinations (k out of features_to_keep). ParallelForward: extend each extendable model by one feature chosen from features_to_keep.
-  kmin: 2                                     # Number of variables used in the initial population.
-  kmax: 100                                   # Maximum number of variables to consider in a single model (variable count limit for beam algorithm).
+  k_start: 1                                  # Number of variables used in the initial population.
+  k_stop: 100                                 # Maximum number of variables to consider in a single model (variable count limit for beam algorithm).
   best_models_criterion : 10                  # If ≤1: alpha for FBM confidence interval based on best fit (smaller = larger range). If >1: percentage of best models to keep (e.g., 5 = top 5%, R-like approach with frequency-based feature selection).
   max_nb_of_models: 20000                     # Limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to significance).
 

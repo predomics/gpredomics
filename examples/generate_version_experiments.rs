@@ -64,8 +64,8 @@ fn main() {
     base_param.ga.population_size = 500;
     base_param.ga.max_epochs = 10;
     base_param.ga.min_epochs = 5;
-    base_param.beam.kmin = 2;
-    base_param.beam.kmax = 10;
+    base_param.beam.k_start = 2;
+    base_param.beam.k_stop = 10;
     base_param.cv.outer_folds = 3;
     base_param.cv.inner_folds = 3;
     base_param.mcmc.n_iter = 5000;
@@ -256,5 +256,5 @@ fn main() {
     info!("\n=== Generation Complete ===");
     info!("Experiments saved in: {}", version_dir);
     info!("\nTo test compatibility, run:");
-    info!("  cargo test --test test_serialization_compatibility -- --no-capture --test-threads=1");
+    info!("  cargo test --test test_consistency -- --no-capture --test-threads=1");
 }

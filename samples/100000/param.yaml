@@ -18,8 +18,8 @@ ga:
   max_epochs: 100
   min_epochs: 100
   max_age_best_model: 100
-  kmin: 1
-  kmax: 200 # do we keep it? 
+  k_min: 1
+  k_max: 200 # do we keep it? 
   kpenalty: 0.001
   select_elite_pct: 25
   select_random_pct: 25
