@@ -1,0 +1,66 @@
+cff-version: 1.2.0
+message: "This tool is an adaptation of the Predomics method. If you use this software, please cite the original paper and this repository."
+
+# --- Development of Gpredomics ---
+authors:
+  - family-names: "Lesage"
+    given-names: "Louison"
+    affiliation: "GMT Science"
+    orcid: "https://orcid.org/0009-0000-0252-6311"
+  - family-names: "de Lahondès"
+    given-names: "Raynald"
+    affiliation: "GMT Science"
+    orcid: "https://orcid.org/0009-0000-2862-9589"
+  - family-names: "Puller"
+    given-names: "Vadim"
+    affiliation: "GMT Science"
+    orcid: "https://orcid.org/0000-0002-3900-8283"
+  - family-names: "Prifti"
+    given-names: "Edi"
+    affiliation: "Institut de Recherche pour le Développement"
+    orcid: "https://orcid.org/0000-0001-8861-1305"
+title: "Gpredomics"
+license: GPL-3.0
+version: "0.7.6"
+repository-code: "https://github.com/predomics/gpredomics"
+date-released: 2025-12-19 
+
+keywords:
+  - "metagenomics"
+  - "machine-learning"
+  - "prediction-models"
+  - "interpretable-ai"
+  - "bioinformatics"
+
+# --- Original publication ---
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Prifti"
+      given-names: "Edi"
+      orcid: "https://orcid.org/0000-0001-8861-1305"
+    - family-names: "Chevaleyre"
+      given-names: "Yann"
+    - family-names: "Hanczar"
+      given-names: "Blaise"
+    - family-names: "Belda"
+      given-names: "Eugeni"
+      orcid: "https://orcid.org/0000-0003-4307-5072"
+    - family-names: "Danchin"
+      given-names: "Antoine"
+      orcid: "https://orcid.org/0000-0002-6350-5001"
+    - family-names: "Clément"
+      given-names: "Karine"
+      orcid: "https://orcid.org/0000-0002-2489-3355"
+    - family-names: "Zucker"
+      given-names: "Jean-Daniel"
+      orcid: "https://orcid.org/0000-0002-5597-7922"
+  doi: "10.1093/gigascience/giaa010"
+  journal: "GigaScience"
+  title: "Interpretable and accurate prediction models for metagenomics data"
+  year: 2020
+  volume: 9
+  issue: 3
+  start: "giaa010"
+  publisher:
+    name: "Oxford University Press"

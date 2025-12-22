@@ -1,13 +1,19 @@
 # Gpredomics - Rapid, Interpretable and Accurate machine learning for omics data
 
+[![Version](https://img.shields.io/badge/version-0.7.6-orange.svg)](https://github.com/predomics/gpredomics/releases)
 [![Rust](https://img.shields.io/badge/Rust-1.89+-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 [![GPU](https://img.shields.io/badge/GPU-Metal%20%7C%20Vulkan-green.svg)]()
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Cite](https://img.shields.io/badge/Cite-CITATION.cff-blue)](https://github.com/predomics/gpredomics/blob/main/CITATION.cff)
 [![Rust CI](https://github.com/predomics/gpredomics/actions/workflows/rust.yml/badge.svg)](https://github.com/predomics/gpredomics/actions/workflows/rust.yml)
 ![GitHub bugs](https://img.shields.io/github/issues/predomics/gpredomics/bug)
 
 **Gpredomics** is a high-performance Rust implementation of the Predomics framework for discovering interpretable predictive signatures in omics data (metagenomics, microbiome, metabolomics). It learns Binary/Ternary/Ratio (BTR) models with discrete coefficients {-1, 0, 1} for maximum interpretability, making it ideal for clinical diagnostics and biomarker discovery.
+
+<div style="text-align: center;">
+  <img src="docs/logo_predomics.png" alt="Official Predomics logo" width="300" height="300">
+</div>
 
 ### Features
 
@@ -160,7 +166,19 @@ NB under Linux, I always do a fully optimized build, but that is not mandatory, 
 RUSTFLAGS="-C target-cpu=native -C opt-level=3" cargo build --release
 ```
 
-### Contact
+## Citation
+
+If you use **Gpredomics** in your research, please cite it as follows:
+
+**Original Method:**
+> Prifti, E., Chevaleyre, Y., Hanczar, B., Belda, E., Danchin, A., Clément, K., & Zucker, J. D. (2020). Interpretable and accurate prediction models for metagenomics data. *GigaScience*, 9(3), giaa010. [https://doi.org/10.1093/gigascience/giaa010](https://doi.org/10.1093/gigascience/giaa010)
+
+**Software:**
+> Lesage, L., de Lahondès, R., Puller, V., & Prifti, E. (2025). *Gpredomics* (Version 0.7.6). GMT Science / IRD. [https://github.com/predomics/gpredomics](https://github.com/predomics/gpredomics)
+
+*A `CITATION.cff` file is available in this repository. If you use GitHub, you can use the **"Cite this repository"** option in the "About" section to export this citation in BibTeX or APA formats.*
+
+## Contact
 
 If you have any questions, comments, or have found a bug, please contact us at the following address:
 
