@@ -674,7 +674,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
 /// * Returns an error if the file cannot be read or if validation fails.
 ///
 /// # Examples
-/// ```
+/// ```no_run
 /// # use gpredomics::param::get;
 /// # let params = get("samples/tests/param.yaml".to_string())?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())

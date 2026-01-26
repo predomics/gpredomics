@@ -379,13 +379,14 @@ pub fn iterative_evolution(
                 populations = vec![pop];
             }
 
-            if param.ga.random_sampling_pct > 0.0 {
-                if let Some(last_population) = populations.last_mut() {
+            // Always compute final metrics on the full dataset
+            if let Some(last_population) = populations.last_mut() {
+                if param.ga.random_sampling_pct > 0.0 {
                     warn!("Random sampling: models optimized on samples ({} samples), metrics shown on full dataset. \n\
                     NOTE: Fit values reflect sample-based optimization, not full dataset performance.", (param.ga.random_sampling_pct * 100.0) as u8);
-                    last_population.compute_all_metrics(&data, &param.general.fit);
-                    //(&mut *last_population).fit(&data, &mut None, &gpu_assay, &None, param);
                 }
+                last_population.compute_all_metrics(&data, &param.general.fit);
+                //(&mut *last_population).fit(&data, &mut None, &gpu_assay, &None, param);
             }
 
             break;

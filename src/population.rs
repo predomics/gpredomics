@@ -164,6 +164,11 @@ impl Population {
 
             let mut str = String::new();
 
+            // Compute all metrics if they weren't already computed during fit
+            if !param.general.keep_trace {
+                self.compute_all_metrics(data, &param.general.fit);
+            }
+
             let fbm = self.select_best_population(0.05);
 
             if !fbm.individuals.is_empty() {
@@ -224,11 +229,6 @@ impl Population {
                     str, limit
                 )
             };
-
-            // Compute all metrics if they weren't already computed during fit
-            if !param.general.keep_trace {
-                self.compute_all_metrics(data, &param.general.fit);
-            }
 
             for i in 0..limit as usize {
                 let model_display = self.individuals[i].display(
