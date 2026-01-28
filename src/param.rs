@@ -754,6 +754,14 @@ pub fn validate(param: &mut Param) -> Result<(), String> {
         return Err(format!("Both Xtest and ytest must be provided together.",));
     }
 
+    // Validate k_min and k_max constraints
+    if param.ga.k_min > 0 && param.ga.k_max > 0 && param.ga.k_min > param.ga.k_max {
+        return Err(format!(
+            "Invalid k_min={} and k_max={}: k_min must be less than or equal to k_max when both are > 0.",
+            param.ga.k_min, param.ga.k_max
+        ));
+    }
+
     validate_penalties(param)?;
     Ok(())
 }
@@ -1070,9 +1078,62 @@ mod tests {
                 kmax: 200
             beam:
                 kmin: 1
-                kmax: 100
+                kmax: 200
             "#;
         let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
         assert!(check_unknown_params(&value).is_ok());
+    }
+
+    #[test]
+    fn test_validate_k_min_k_max_valid() {
+        let mut param = Param::default();
+        param.ga.k_min = 1;
+        param.ga.k_max = 10;
+        assert!(validate(&mut param).is_ok());
+    }
+
+    #[test]
+    fn test_validate_k_min_k_max_equal() {
+        let mut param = Param::default();
+        param.ga.k_min = 5;
+        param.ga.k_max = 5;
+        // k_min = k_max is now allowed to force exactly k features
+        assert!(validate(&mut param).is_ok());
+    }
+
+    #[test]
+    fn test_validate_k_min_greater_than_k_max() {
+        let mut param = Param::default();
+        param.ga.k_min = 10;
+        param.ga.k_max = 5;
+        let result = validate(&mut param);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("k_min must be less than or equal to k_max"));
+    }
+
+    #[test]
+    fn test_validate_k_min_zero_allowed() {
+        let mut param = Param::default();
+        param.ga.k_min = 0;
+        param.ga.k_max = 10;
+        assert!(validate(&mut param).is_ok());
+    }
+
+    #[test]
+    fn test_validate_k_max_zero_allowed() {
+        let mut param = Param::default();
+        param.ga.k_min = 5;
+        param.ga.k_max = 0;
+        assert!(validate(&mut param).is_ok());
+    }
+
+    #[test]
+    fn test_validate_both_k_zero_allowed() {
+        let mut param = Param::default();
+        param.ga.k_min = 0;
+        param.ga.k_max = 0;
+        assert!(validate(&mut param).is_ok());
     }
 }

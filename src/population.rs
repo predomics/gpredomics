@@ -1790,17 +1790,18 @@ mod tests {
         let data = &Data::test_disc_data();
         let mut pop = Population::new();
         let mut rng = ChaCha8Rng::seed_from_u64(42);
+        // Using first feature sorted by key for deterministic comparison
         let expected_features: Vec<(usize, i8)> = vec![
-            (1, 1),
-            (1, 1),
-            (0, -1),
-            (1, 1),
             (0, -1),
             (0, -1),
             (0, -1),
-            (1, 1),
-            (1, 1),
             (0, -1),
+            (0, -1),
+            (0, -1),
+            (0, -1),
+            (0, -1),
+            (0, -1),
+            (1, 1),
         ];
 
         pop.generate(
@@ -1842,7 +1843,11 @@ mod tests {
                 pop.individuals[i].k <= 3,
                 "each Individual of the generated Population should have k_max or less k"
             );
-            assert_eq!(expected_features.get(i).copied(), pop.individuals[i].features.iter().next().map(|(&k, &v)| (k, v)),
+            // Get first feature by sorted key order (deterministic)
+            let mut sorted_features: Vec<_> = pop.individuals[i].features.iter().collect();
+            sorted_features.sort_by_key(|(k, _)| *k);
+            let first_feature = sorted_features.first().map(|(&k, &v)| (k, v));
+            assert_eq!(expected_features.get(i).copied(), first_feature,
             "the generated Individual' features part of the generated Population are not the same as generated in the past for a same seed, indicating a reproducibility problem");
         }
 
