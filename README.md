@@ -1,6 +1,6 @@
 # Gpredomics - Rapid, Interpretable and Accurate machine learning for omics data
 
-[![Version](https://img.shields.io/badge/version-0.7.6-orange.svg)](https://github.com/predomics/gpredomics/releases)
+[![Version](https://img.shields.io/badge/version-0.7.7-orange.svg)](https://github.com/predomics/gpredomics/releases)
 [![Rust](https://img.shields.io/badge/Rust-1.89+-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 [![GPU](https://img.shields.io/badge/GPU-Metal%20%7C%20Vulkan-green.svg)]()
@@ -180,7 +180,7 @@ If you use **Gpredomics** in your research, please cite it as follows:
 > Prifti, E., Chevaleyre, Y., Hanczar, B., Belda, E., Danchin, A., Clément, K., & Zucker, J. D. (2020). Interpretable and accurate prediction models for metagenomics data. *GigaScience*, 9(3), giaa010. [https://doi.org/10.1093/gigascience/giaa010](https://doi.org/10.1093/gigascience/giaa010)
 
 **Software:**
-> Lesage, L., de Lahondès, R., Puller, V., & Prifti, E. (2025). *Gpredomics* (Version 0.7.6). GMT Science / IRD. [https://github.com/predomics/gpredomics](https://github.com/predomics/gpredomics)
+> Lesage, L., de Lahondès, R., Puller, V., & Prifti, E. (2025). *Gpredomics* (Version 0.7.7). GMT Science / IRD. [https://github.com/predomics/gpredomics](https://github.com/predomics/gpredomics)
 
 *A `CITATION.cff` file is available in this repository. If you use GitHub, you can use the **"Cite this repository"** option in the "About" section to export this citation in BibTeX or APA formats.*
 
@@ -191,4 +191,4 @@ If you have any questions, comments, or have found a bug, please contact us at t
 - Email: contact@predomics.com
 - GitHub Issues: [Gpredomics Issues](https://github.com/predomics/gpredomics/issues)
 
-*Last updated: v0.7.6*
+*Last updated: v0.7.7*

@@ -21,7 +21,7 @@ authors:
     orcid: "https://orcid.org/0000-0001-8861-1305"
 title: "Gpredomics"
 license: GPL-3.0
-version: "0.7.6"
+version: "0.7.7"
 repository-code: "https://github.com/predomics/gpredomics"
 date-released: 2025-12-19 
 
