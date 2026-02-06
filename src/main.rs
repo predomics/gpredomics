@@ -5,7 +5,6 @@ use gpredomics::experiment::Experiment;
 use gpredomics::{cinfo, param};
 use log::{error, info};
 use std::env;
-use std::process::Command;
 
 use signal_hook::{consts::signal::*, iterator::Signals};
 use std::thread;
@@ -31,13 +30,7 @@ fn custom_format(
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
-    let git_hash = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.chars().take(7).collect::<String>())
-        .unwrap_or_else(|| "unknown".to_string());
+    let git_hash = option_env!("GPREDOMICS_GIT_SHA").unwrap_or("unknown");
 
     let args = Cli::parse();
 

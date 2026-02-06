@@ -61,6 +61,12 @@ At the root of this repository, compile gpredomics:
 
 `cargo build --release`
 
+If you want the binary to embed a git hash in logs and experiment metadata, set `GPREDOMICS_GIT_SHA` at build time. If it is not set, it defaults to `unknown`.
+
+Example:
+
+`GPREDOMICS_GIT_SHA=$(git rev-parse --short HEAD) cargo build --release`
+
 ### Use 
 
 The executable loads param.yaml from the current working directory on startup.

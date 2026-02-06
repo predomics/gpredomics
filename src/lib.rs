@@ -86,7 +86,6 @@ use rand_chacha::ChaCha8Rng;
 
 use log::{debug, error, warn};
 
-use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -212,15 +211,7 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     }
 
     // Build experiment
-    let output = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
-        .output()
-        .unwrap();
-    let git_hash = String::from_utf8(output.stdout)
-        .unwrap()
-        .chars()
-        .take(7)
-        .collect::<String>();
+    let git_hash = option_env!("GPREDOMICS_GIT_SHA").unwrap_or("unknown");
     let gpredomics_version = format!("{}#{}", env!("CARGO_PKG_VERSION"), git_hash);
     let exec_time = start.elapsed().as_secs_f64();
 
@@ -363,13 +354,7 @@ pub fn run_on_data(
     }
 
     // Build experiment
-    let git_hash = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.chars().take(7).collect::<String>())
-        .unwrap_or_else(|| "unknown".to_string());
+    let git_hash = option_env!("GPREDOMICS_GIT_SHA").unwrap_or("unknown");
     let gpredomics_version = format!("{}#{}", env!("CARGO_PKG_VERSION"), git_hash);
     let exec_time = start.elapsed().as_secs_f64();
 
@@ -519,13 +504,7 @@ pub fn run_pop_and_data(
     }
 
     // Build experiment
-    let git_hash = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.chars().take(7).collect::<String>())
-        .unwrap_or_else(|| "unknown".to_string());
+    let git_hash = option_env!("GPREDOMICS_GIT_SHA").unwrap_or("unknown");
     let gpredomics_version = format!("{}#{}", env!("CARGO_PKG_VERSION"), git_hash);
     let exec_time = start.elapsed().as_secs_f64();
 
