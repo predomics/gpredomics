@@ -402,15 +402,18 @@ impl Individual {
             negative_str_owned.push(format!("{:2e}", self.epsilon));
         }
 
+        let class0 = data.classes.get(0).map(|s| s.as_str()).unwrap_or("0");
+        let class1 = data.classes.get(1).map(|s| s.as_str()).unwrap_or("1");
+
         let (second_line_first_part, second_line_second_part) = if let Some(ref threshold_ci) =
             self.threshold_ci
         {
-            let threshold_text = format!("Class \x1b[95m{}\x1b[0m: score < {}\nClass \x1b[96m{}\x1b[0m: score > {}\nRejection zone \x1b[2m({:2}% CI)\x1b[0m: score ∈ [{:.3}; {:.3}]\nscore =", 
-                data.classes[0], threshold_ci.lower, data.classes[1], threshold_ci.upper, (1.0-ci_alpha)*100.0,  threshold_ci.lower, threshold_ci.upper);
+            let threshold_text = format!("Class \x1b[95m{}\x1b[0m: score < {}\nClass \x1b[96m{}\x1b[0m: score > {}\nRejection zone \x1b[2m({:2}% CI)\x1b[0m: score ∈ [{:.3}; {:.3}]\nscore =",
+                class0, threshold_ci.lower, class1, threshold_ci.upper, (1.0-ci_alpha)*100.0,  threshold_ci.lower, threshold_ci.upper);
             (threshold_text, String::new())
         } else {
             (
-                format!("Class {}:", data.classes[1]),
+                format!("Class {}:", class1),
                 format!("≥ {}", self.threshold),
             )
         };
