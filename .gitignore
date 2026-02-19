@@ -1,11 +1,25 @@
+# Rust
 target/
+
+# Test outputs
 tests/consistency/v*
+out/
+
+# Data / model artifacts
 *.log
 *.tsv
-out/
 *.json
 *.bin
 *.msgpack
 *.mp
-*.DS_Store
 *.svg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
