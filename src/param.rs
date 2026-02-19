@@ -30,6 +30,54 @@ pub enum FitFunction {
     g_mean,
 }
 
+/// Confidence interval methods for Family of Best Models (FBM) selection.
+///
+/// Different methods provide different trade-offs between coverage probability
+/// and interval width when constructing a binomial CI around the best model's
+/// accuracy score.
+///
+/// # References
+///
+/// - **Wilson (1927)**: Wilson, E.B. "Probable Inference, the Law of Succession,
+///   and Statistical Inference." *J. Amer. Statist. Assoc.* 22(158):209–212.
+///   doi:[10.1080/01621459.1927.10502953](https://doi.org/10.1080/01621459.1927.10502953)
+///
+/// - **Agresti & Coull (1998)**: Agresti, A. & Coull, B.A. "Approximate is Better
+///   than 'Exact' for Interval Estimation of Binomial Proportions." *The American
+///   Statistician* 52(2):119–126.
+///   doi:[10.1080/00031305.1998.10480550](https://doi.org/10.1080/00031305.1998.10480550)
+///
+/// - **Brown, Cai & DasGupta (2001)**: Brown, L.D., Cai, T.T. & DasGupta, A.
+///   "Interval Estimation for a Binomial Proportion." *Statistical Science*
+///   16(2):101–133. doi:[10.1214/ss/1009213286](https://doi.org/10.1214/ss/1009213286)
+///
+/// - **Clopper & Pearson (1934)**: Clopper, C.J. & Pearson, E.S. "The Use of
+///   Confidence or Fiducial Limits Illustrated in the Case of the Binomial."
+///   *Biometrika* 26(4):404–413. doi:[10.2307/2331986](https://doi.org/10.2307/2331986)
+///
+/// The default is **Wilson**, following the recommendation of Brown et al. (2001)
+/// who showed it provides the best coverage across all sample sizes and proportions.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(non_camel_case_types)]
+pub enum FbmCIMethod {
+    /// Wald (normal approximation): `p ± z * sqrt(p(1-p)/n)`.
+    /// Simplest method but has poor coverage near p=0 or p=1.
+    wald,
+    /// Wald with continuity correction: `p ± (0.5/n + z * sqrt(p(1-p)/n))`.
+    /// Slightly wider than Wald; improves discrete-to-continuous approximation.
+    #[serde(alias = "blaise")]
+    wald_continuity,
+    /// Wilson score interval (default, recommended). Always within [0,1],
+    /// near-nominal coverage for all n and p. Wilson (1927).
+    wilson,
+    /// Agresti-Coull adjusted Wald: Wald on pseudo-count p̃ = (x + z²/2)/(n + z²).
+    /// Close to Wilson, simpler derivation. Agresti & Coull (1998).
+    agresti_coull,
+    /// Clopper-Pearson exact interval via Beta distribution quantiles.
+    /// Conservative (guaranteed ≥ nominal coverage), widest intervals. Clopper & Pearson (1934).
+    clopper_pearson,
+}
+
 /// GPU memory management policies
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum GpuMemoryPolicy {
@@ -119,13 +167,13 @@ pub struct General {
     pub fr_penalty: f64,
     #[serde(default = "zero_default")]
     pub bias_penalty: f64,
-    #[serde(default = "zero_default")]
+    #[serde(default = "threshold_ci_penalty_default")]
     pub threshold_ci_penalty: f64,
-    #[serde(default = "zero_default")]
+    #[serde(default = "threshold_ci_alpha_default")]
     pub threshold_ci_alpha: f64,
     #[serde(default = "uzero_default")]
     pub threshold_ci_n_bootstrap: usize,
-    #[serde(default = "zero_default")]
+    #[serde(default = "threshold_ci_frac_default")]
     pub threshold_ci_frac_bootstrap: f64,
     #[serde(default = "zero_default")]
     pub user_penalties_weight: f64,
@@ -197,6 +245,8 @@ pub struct CV {
     pub fit_on_valid: bool,
     #[serde(default = "best_models_ci_alpha_default")]
     pub cv_best_models_ci_alpha: f64,
+    #[serde(default = "fbm_ci_method_default")]
+    pub cv_fbm_ci_method: FbmCIMethod,
     #[serde(default = "empty_string")]
     pub stratify_by: String,
 }
@@ -212,6 +262,8 @@ pub struct Voting {
     pub min_diversity: f64,
     #[serde(default = "best_models_ci_alpha_default")]
     pub fbm_ci_alpha: f64,
+    #[serde(default = "fbm_ci_method_default")]
+    pub fbm_ci_method: FbmCIMethod,
     #[serde(default = "voting_default")]
     pub method: VotingMethod,
     #[serde(default = "half_default")]
@@ -222,6 +274,10 @@ pub struct Voting {
     pub complete_display: bool,
     #[serde(default = "false_default")]
     pub prune_before_voting: bool,
+    #[serde(default = "uzero_default")]
+    pub min_experts: usize,
+    #[serde(default = "uzero_default")]
+    pub max_experts: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -259,7 +315,7 @@ pub struct GA {
     pub forced_diversity_epochs: usize,
     #[serde(default = "zero_default")]
     pub random_sampling_pct: f64,
-    #[serde(default = "uzero_default")]
+    #[serde(default = "one_default")]
     pub random_sampling_epochs: usize,
     #[serde(default = "uzero_default")]
     pub n_epochs_before_global: usize,
@@ -278,6 +334,8 @@ pub struct BEAM {
     pub k_stop: usize,
     #[serde(default = "best_models_criterion_default")]
     pub best_models_criterion: f64,
+    #[serde(default = "fbm_ci_method_default")]
+    pub fbm_ci_method: FbmCIMethod,
     #[serde(default = "max_nb_of_models_default")]
     pub max_nb_of_models: usize,
 }
@@ -690,6 +748,9 @@ fn beam_method_default() -> BeamMethod {
 fn best_models_ci_alpha_default() -> f64 {
     0.05
 }
+fn fbm_ci_method_default() -> FbmCIMethod {
+    FbmCIMethod::wilson
+}
 fn max_nb_of_models_default() -> usize {
     10000
 }
@@ -731,6 +792,15 @@ fn half_default() -> f64 {
 }
 fn one_default() -> usize {
     1
+}
+fn threshold_ci_penalty_default() -> f64 {
+    0.5
+}
+fn threshold_ci_alpha_default() -> f64 {
+    0.05
+}
+fn threshold_ci_frac_default() -> f64 {
+    1.0
 }
 fn voting_default() -> VotingMethod {
     VotingMethod::Majority

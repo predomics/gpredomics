@@ -52,6 +52,7 @@ cv:
   outer_folds: 5                              # Number of folds used for outer cross-validation (run the algorithm on each set of k-1 folds then merge Families of Best Models).
   fit_on_valid: true                          # If true, FBM is based on validation fold fit (favoring generalization); otherwise on k-1 folds. DO NOT enable without external validation data.
   cv_best_models_ci_alpha: 0.05               # Alpha for the Family of Best Models confidence interval based on the best fit on validation fold. Smaller alpha -> larger best_model range.
+  cv_fbm_ci_method: wilson                       # CI method for CV FBM selection: wald, wald_continuity (blaise), wilson, agresti_coull, clopper_pearson.
   stratify_by:                                # If sample annotations are provided, stratify folds according to classes AND to this annotation (must exist in sample_annotations file).
     
 importance:
@@ -63,6 +64,7 @@ importance:
 voting:
   vote: false                                 # Should voting be activated?
   fbm_ci_alpha: 0.05                          # Alpha for the Family of Best Models confidence interval (>0 and <1). Smaller alpha -> larger best_model range.
+  fbm_ci_method: wilson                          # CI method for FBM selection: wald, wald_continuity (blaise), wilson, agresti_coull, clopper_pearson.
   prune_before_voting: false                  # Should models be pruned before voting according to feature importances (MDA < 0)?
   min_perf: 0.50                              # Required sensitivity AND specificity to be judged; >=0.5 avoids "single-choice oriented" judges.
   min_diversity: 10                           # Required diversity between judges.
@@ -94,6 +96,7 @@ beam:
   k_start: 1                                  # Number of variables used in the initial population.
   k_stop: 100                                 # Maximum number of variables to consider in a single model (variable count limit for beam algorithm).
   best_models_criterion : 10                  # If ≤1: alpha for FBM confidence interval based on best fit (smaller = larger range). If >1: percentage of best models to keep (e.g., 5 = top 5%, R-like approach with frequency-based feature selection).
+  fbm_ci_method: wilson                          # CI method for beam FBM selection: wald, wald_continuity (blaise), wilson, agresti_coull, clopper_pearson.
   max_nb_of_models: 20000                     # Limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to significance).
 
 mcmc:

@@ -201,7 +201,10 @@ impl Jury {
         // Make voting_pop an owned Population so we don't take references to temporaries
         let mut voting_pop: Population =
             if param.voting.fbm_ci_alpha <= 1.0 && param.voting.fbm_ci_alpha >= 0.0 {
-                pop.select_best_population(param.voting.fbm_ci_alpha)
+                pop.select_best_population_with_method(
+                    param.voting.fbm_ci_alpha,
+                    &param.voting.fbm_ci_method,
+                )
             } else {
                 pop.clone()
             };
@@ -234,7 +237,7 @@ impl Jury {
         //         WeightingMethod::Uniform
         //     };
 
-        Jury::new(
+        let mut jury = Jury::new(
             &voting_pop,
             &param.voting.min_perf,
             &param.voting.min_diversity,
@@ -242,7 +245,26 @@ impl Jury {
             &param.voting.method_threshold,
             &param.voting.threshold_windows_pct,
             &WeightingMethod::Uniform,
-        )
+        );
+
+        // Apply expert count constraints
+        let n = jury.experts.individuals.len();
+        if param.voting.max_experts > 0 && n > param.voting.max_experts {
+            debug!(
+                "Jury truncated from {} to {} experts (max_experts)",
+                n, param.voting.max_experts
+            );
+            jury.experts.individuals.truncate(param.voting.max_experts);
+        }
+        if param.voting.min_experts > 0 && jury.experts.individuals.len() < param.voting.min_experts {
+            warn!(
+                "Jury has only {} experts, fewer than requested min_experts={}",
+                jury.experts.individuals.len(),
+                param.voting.min_experts
+            );
+        }
+
+        jury
     }
 
     /// Evaluates learning data and adjusts internal weight and performance variables accordingly

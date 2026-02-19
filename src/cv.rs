@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use log::info;
 use std::sync::atomic::AtomicBool;
 
 /// Cross-validation dataset implementation for machine learning workflows.
@@ -312,7 +313,13 @@ impl CV {
         let mut features_significant_observations: HashMap<usize, usize> = HashMap::new();
         let mut importances = Vec::new();
 
-        for i in 0..self.fold_collections.len() {
+        let n_folds = self.fold_collections.len();
+        for i in 0..n_folds {
+            info!(
+                "CV importance: fold {}/{} starting",
+                i + 1,
+                n_folds
+            );
             let fold_last_fbm = self.extract_fold_fbm(i, cv_param);
             if fold_last_fbm.individuals.len() == 0 {
                 panic!(
@@ -359,6 +366,8 @@ impl CV {
                 }
             }
         }
+
+        info!("CV importance: all {} folds complete, aggregating results", n_folds);
 
         for (feature_idx, values) in importance_values {
             if values.is_empty() {
@@ -458,7 +467,10 @@ impl CV {
             pop = pop.sort();
         }
 
-        pop = pop.select_best_population(param.cv.cv_best_models_ci_alpha);
+        pop = pop.select_best_population_with_method(
+            param.cv.cv_best_models_ci_alpha,
+            &param.cv.cv_fbm_ci_method,
+        );
 
         pop
     }

@@ -363,7 +363,10 @@ impl Experiment {
                 self.final_population
                     .as_ref()
                     .unwrap()
-                    .select_best_population(self.parameters.cv.cv_best_models_ci_alpha)
+                    .select_best_population_with_method(
+                        self.parameters.cv.cv_best_models_ci_alpha,
+                        &self.parameters.cv.cv_fbm_ci_method,
+                    )
                     .compute_pop_mda_feature_importance(
                         &self.train_data,
                         self.parameters.importance.n_permutations_mda,
@@ -407,6 +410,7 @@ impl Experiment {
                 error!("CV fold IDs are None but expected for CV importance calculation");
             }
         }
+        info!("Importance computation complete");
     }
 
     /// Generates a formatted string displaying the experiment results.

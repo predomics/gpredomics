@@ -10,10 +10,12 @@ use crate::param::Param;
 use crate::utils::{
     compute_auc_from_value, compute_metrics_from_classes, compute_roc_and_metrics_from_value,
     compute_threshold_and_metrics_with_precomputed_bootstrap, conf_inter_binomial,
-    precompute_bootstrap_indices, PrecomputedBootstrap,
+    conf_inter_binomial_method, precompute_bootstrap_indices, PrecomputedBootstrap,
 };
+use crate::param::FbmCIMethod;
 use crate::utils::{mad, mean_and_std, median};
-use log::{error, warn};
+use log::{error, info, warn};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use rand::prelude::SliceRandom;
 use rand::RngCore;
 use rand::SeedableRng;
@@ -752,6 +754,41 @@ impl Population {
         best_pop
     }
 
+    /// Select the Family of Best Models using a specified CI method.
+    ///
+    /// Like [`select_best_population`], but dispatches to the given [`FbmCIMethod`]
+    /// instead of always using the Wald interval.
+    pub fn select_best_population_with_method(
+        &self,
+        alpha: f64,
+        method: &FbmCIMethod,
+    ) -> Population {
+        let mut best_pop = Population::new();
+        let mut eval: Vec<f64> = self.individuals.iter().map(|i| i.fit).collect();
+
+        if eval.is_empty() {
+            return best_pop;
+        }
+
+        if eval[0] > 1.0 || eval[0] < 0.0 {
+            warn!("Evaluation metric should be in [0, 1] for FBM! Using AUC instead of fitness...");
+            eval = self.individuals.iter().map(|i| i.auc).collect();
+        }
+
+        let (lower_bound, _, _) =
+            conf_inter_binomial_method(eval[0], self.individuals.len(), alpha, method);
+
+        for ind in &self.individuals {
+            if ind.fit > lower_bound {
+                best_pop.individuals.push(ind.clone());
+            } else {
+                break;
+            }
+        }
+
+        best_pop
+    }
+
     /// Populates the population with a set of random individuals.
     ///
     /// This is the unified function that handles both uniform and weighted feature selection.
@@ -1060,16 +1097,36 @@ impl Population {
         let mut order: Vec<usize> = (0..self.individuals.len()).collect();
         order.sort_by_key(|&i| self.individuals[i].hash);
 
+        let n_individuals = order.len();
+        let n_features = all_features.len();
+        info!(
+            "MDA importance: {} individuals x {} features x {} permutations",
+            n_individuals, n_features, permutations
+        );
+
         // Use Individual::compute_mda_feature_importance for each individual
+        let completed = AtomicUsize::new(0);
         let individual_results: Vec<_> = order
             .par_iter()
             .map(|&idx| {
-                self.individuals[idx].compute_mda_feature_importance(
+                let result = self.individuals[idx].compute_mda_feature_importance(
                     data,
                     permutations,
                     &all_features,
                     &feature_seeds,
-                )
+                );
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                // Log progress every 10% or at least every 10 individuals
+                let step = std::cmp::max(1, n_individuals / 10);
+                if done % step == 0 || done == n_individuals {
+                    info!(
+                        "MDA importance progress: {}/{} individuals ({:.0}%)",
+                        done,
+                        n_individuals,
+                        done as f64 / n_individuals as f64 * 100.0
+                    );
+                }
+                result
             })
             .collect();
 

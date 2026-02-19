@@ -28,7 +28,8 @@ use rand_chacha::ChaCha8Rng;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
-use statrs::distribution::{ContinuousCDF, Normal};
+use statrs::distribution::{Beta, ContinuousCDF, Normal};
+use crate::param::FbmCIMethod;
 use std::collections::HashMap;
 
 /// Declare simple Vec<String>
@@ -286,6 +287,96 @@ pub fn conf_inter_binomial(accuracy: f64, n: usize, alpha: f64) -> (f64, f64, f6
     let upper_bound = 1.0f64.min(accuracy + ci_range);
 
     (lower_bound, accuracy, upper_bound)
+}
+
+/// Computes binomial confidence interval using the specified method.
+///
+/// All methods return a tuple `(lower_bound, accuracy, upper_bound)` clamped to [0, 1].
+///
+/// # Arguments
+///
+/// * `accuracy` - Observed proportion (p), must be in [0, 1].
+/// * `n` - Sample size, must be > 0.
+/// * `alpha` - Significance level (e.g. 0.05 for 95% CI).
+/// * `method` - The CI computation method (see [`FbmCIMethod`]).
+///
+/// # Methods
+///
+/// - **Wald**: Standard normal approximation. Simplest, but poor coverage near 0/1.
+/// - **WaldContinuity**: Adds 0.5/n continuity correction (wider interval).
+/// - **Wilson**: Best all-round coverage, never overshoots [0,1].
+/// - **AgrestiCoull**: Adjusted Wald on pseudo-count p̃. Nearly as good as Wilson.
+/// - **ClopperPearson**: Exact interval via Beta distribution quantiles (most conservative).
+pub fn conf_inter_binomial_method(
+    accuracy: f64,
+    n: usize,
+    alpha: f64,
+    method: &FbmCIMethod,
+) -> (f64, f64, f64) {
+    assert!(n > 0, "Sample size (n) must be greater than zero.");
+    assert!(
+        accuracy >= 0.0 && accuracy <= 1.0,
+        "accuracy must be in [0, 1], got {}",
+        accuracy
+    );
+    assert!(
+        alpha > 0.0 && alpha < 1.0,
+        "alpha must be in (0, 1), got {}",
+        alpha
+    );
+
+    let normal = Normal::new(0.0, 1.0).unwrap();
+    let z = -normal.inverse_cdf(alpha / 2.0);
+    let p = accuracy;
+    let nf = n as f64;
+
+    let (lower, upper) = match method {
+        FbmCIMethod::wald => {
+            let se = (p * (1.0 - p) / nf).sqrt();
+            (p - z * se, p + z * se)
+        }
+        FbmCIMethod::wald_continuity => {
+            let se = (p * (1.0 - p) / nf).sqrt();
+            let cc = 0.5 / nf;
+            (p - (cc + z * se), p + (cc + z * se))
+        }
+        FbmCIMethod::wilson => {
+            let z2 = z * z;
+            let denom = 1.0 + z2 / nf;
+            let center = p + z2 / (2.0 * nf);
+            let margin = z * (p * (1.0 - p) / nf + z2 / (4.0 * nf * nf)).sqrt();
+            ((center - margin) / denom, (center + margin) / denom)
+        }
+        FbmCIMethod::agresti_coull => {
+            let z2 = z * z;
+            let n_tilde = nf + z2;
+            let x = p * nf;
+            let p_tilde = (x + z2 / 2.0) / n_tilde;
+            let se_tilde = (p_tilde * (1.0 - p_tilde) / n_tilde).sqrt();
+            (p_tilde - z * se_tilde, p_tilde + z * se_tilde)
+        }
+        FbmCIMethod::clopper_pearson => {
+            let x = (p * nf).round() as u64;
+            let n_u64 = n as u64;
+            let lo = if x == 0 {
+                0.0
+            } else {
+                Beta::new(x as f64, (n_u64 - x + 1) as f64)
+                    .unwrap()
+                    .inverse_cdf(alpha / 2.0)
+            };
+            let hi = if x == n_u64 {
+                1.0
+            } else {
+                Beta::new((x + 1) as f64, (n_u64 - x) as f64)
+                    .unwrap()
+                    .inverse_cdf(1.0 - alpha / 2.0)
+            };
+            (lo, hi)
+        }
+    };
+
+    (0.0f64.max(lower), accuracy, 1.0f64.min(upper))
 }
 
 /// Computes Area Under the Curve (AUC) for binary classification using Mann-Whitney U algorithm O(n log n)
@@ -5777,5 +5868,113 @@ mod tests {
         assert!((acc_low - acc_verify2).abs() < 1e-10);
         assert!((sens_low - sens_verify2).abs() < 1e-10);
         assert!((spec_low - spec_verify2).abs() < 1e-10);
+    }
+
+    // ── FBM CI method tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_wald_method_matches_legacy() {
+        let (lo1, p1, hi1) = conf_inter_binomial(0.8, 100, 0.05);
+        let (lo2, p2, hi2) =
+            conf_inter_binomial_method(0.8, 100, 0.05, &FbmCIMethod::wald);
+        assert!((lo1 - lo2).abs() < 1e-12);
+        assert!((p1 - p2).abs() < 1e-12);
+        assert!((hi1 - hi2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_all_methods_produce_valid_bounds() {
+        let methods = vec![
+            FbmCIMethod::wald,
+            FbmCIMethod::wald_continuity,
+            FbmCIMethod::wilson,
+            FbmCIMethod::agresti_coull,
+            FbmCIMethod::clopper_pearson,
+        ];
+        for method in &methods {
+            let (lo, p, hi) = conf_inter_binomial_method(0.75, 50, 0.05, method);
+            assert!(
+                lo >= 0.0 && lo <= p,
+                "{:?}: lower bound {} out of range (p={})",
+                method, lo, p
+            );
+            assert!(
+                hi >= p && hi <= 1.0,
+                "{:?}: upper bound {} out of range (p={})",
+                method, hi, p
+            );
+        }
+    }
+
+    #[test]
+    fn test_continuity_correction_wider_than_wald() {
+        let (lo_w, _, hi_w) =
+            conf_inter_binomial_method(0.85, 30, 0.05, &FbmCIMethod::wald);
+        let (lo_c, _, hi_c) =
+            conf_inter_binomial_method(0.85, 30, 0.05, &FbmCIMethod::wald_continuity);
+        assert!(
+            lo_c < lo_w,
+            "Continuity lower {} should be < Wald lower {}",
+            lo_c, lo_w
+        );
+        assert!(
+            hi_c > hi_w,
+            "Continuity upper {} should be > Wald upper {}",
+            hi_c, hi_w
+        );
+    }
+
+    #[test]
+    fn test_clopper_pearson_wider_than_wald() {
+        let (lo_w, _, _) =
+            conf_inter_binomial_method(0.80, 50, 0.05, &FbmCIMethod::wald);
+        let (lo_cp, _, _) =
+            conf_inter_binomial_method(0.80, 50, 0.05, &FbmCIMethod::clopper_pearson);
+        assert!(
+            lo_cp < lo_w,
+            "Clopper-Pearson lower {} should be < Wald lower {}",
+            lo_cp, lo_w
+        );
+    }
+
+    #[test]
+    fn test_wilson_bounded_in_zero_one() {
+        // Wilson should never produce bounds outside [0, 1]
+        let (lo, _, hi) =
+            conf_inter_binomial_method(0.99, 10, 0.05, &FbmCIMethod::wilson);
+        assert!(lo >= 0.0 && hi <= 1.0, "Wilson bounds: [{}, {}]", lo, hi);
+
+        let (lo2, _, hi2) =
+            conf_inter_binomial_method(0.01, 10, 0.05, &FbmCIMethod::wilson);
+        assert!(lo2 >= 0.0 && hi2 <= 1.0, "Wilson bounds: [{}, {}]", lo2, hi2);
+    }
+
+    #[test]
+    fn test_clopper_pearson_edge_cases() {
+        // p=0: lower should be 0
+        let (lo, _, hi) =
+            conf_inter_binomial_method(0.0, 10, 0.05, &FbmCIMethod::clopper_pearson);
+        assert_eq!(lo, 0.0);
+        assert!(hi > 0.0, "upper should be > 0 when p=0, n=10");
+
+        // p=1: upper should be 1
+        let (lo2, _, hi2) =
+            conf_inter_binomial_method(1.0, 10, 0.05, &FbmCIMethod::clopper_pearson);
+        assert!(lo2 < 1.0, "lower should be < 1 when p=1, n=10");
+        assert_eq!(hi2, 1.0);
+    }
+
+    #[test]
+    fn test_agresti_coull_close_to_wilson() {
+        // Agresti-Coull and Wilson should give similar results
+        let (lo_w, _, _) =
+            conf_inter_binomial_method(0.7, 100, 0.05, &FbmCIMethod::wilson);
+        let (lo_a, _, _) =
+            conf_inter_binomial_method(0.7, 100, 0.05, &FbmCIMethod::agresti_coull);
+        assert!(
+            (lo_w - lo_a).abs() < 0.01,
+            "Wilson {} and Agresti-Coull {} should be close",
+            lo_w, lo_a
+        );
     }
 }

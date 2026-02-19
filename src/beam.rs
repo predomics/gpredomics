@@ -895,7 +895,10 @@ pub fn iterative_growth(
                 "Using FBM selection with alpha = {}",
                 param.beam.best_models_criterion
             );
-            pop.select_best_population(param.beam.best_models_criterion)
+            pop.select_best_population_with_method(
+                param.beam.best_models_criterion,
+                &param.beam.fbm_ci_method,
+            )
         };
         debug!(
             "Kept {:?} individuals from the best models",
