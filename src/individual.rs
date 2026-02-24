@@ -1413,7 +1413,7 @@ impl Individual {
         };
 
         let k: usize = rng.gen_range(
-            (if k_min > 0 { k_min } else { 1 })..(if k_max > 0 {
+            (if k_min > 0 { k_min } else { 1 })..=(if k_max > 0 {
                 min(k_max, chosen_feature_set.len())
             } else {
                 chosen_feature_set.len()
@@ -3406,6 +3406,66 @@ mod tests {
         "the selected features are not the same as selected in the past, indicating a reproducibility problem.");
         // k_min=1 & k_max=1 should return 1 feature and not panic
         // ind = Individual::random_select_k(1, 1, &features, &feature_class, BINARY_LANG, RAW_TYPE, DEFAULT_MINIMUM, &mut rng);
+    }
+
+    #[test]
+    fn test_random_select_k_equal_min_max() {
+        // Test that k_min = k_max works correctly (forces exactly k features)
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        feature_class.insert(0, 1);
+        feature_class.insert(1, 0);
+        feature_class.insert(2, 1);
+        feature_class.insert(3, 0);
+        feature_class.insert(4, 1);
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        // Test with k_min = k_max = 3
+        let ind = Individual::random_select_k(
+            3,
+            3,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            false,
+            &mut rng,
+        );
+
+        assert_eq!(
+            ind.k, 3,
+            "Individual should have exactly 3 features when k_min=k_max=3"
+        );
+        assert_eq!(
+            ind.features.len(),
+            3,
+            "Individual should have exactly 3 features"
+        );
+
+        // Test with k_min = k_max = 1
+        let ind_single = Individual::random_select_k(
+            1,
+            1,
+            &features,
+            &feature_class,
+            TERNARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            false,
+            &mut rng,
+        );
+
+        assert_eq!(
+            ind_single.k, 1,
+            "Individual should have exactly 1 feature when k_min=k_max=1"
+        );
+        assert_eq!(
+            ind_single.features.len(),
+            1,
+            "Individual should have exactly 1 feature"
+        );
     }
 
     // fn compute_metrics
@@ -6277,6 +6337,47 @@ mod tests {
             &prior_weight,
             false,
             &mut rng,
+        );
+    }
+
+    #[test]
+    fn test_random_select_weighted_equal_min_max() {
+        // Test that k_min = k_max works correctly for weighted selection
+        let features = vec![0, 1, 2, 3, 4];
+        let mut feature_class = HashMap::new();
+        for i in 0..5 {
+            feature_class.insert(i, 1);
+        }
+
+        let mut prior_weight = HashMap::new();
+        for i in 0..5 {
+            prior_weight.insert(i, 1.0);
+        }
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        // Test with k_min = k_max = 3
+        let ind = Individual::random_select_weighted(
+            3,
+            3,
+            &features,
+            &feature_class,
+            BINARY_LANG,
+            RAW_TYPE,
+            DEFAULT_MINIMUM,
+            &prior_weight,
+            false,
+            &mut rng,
+        );
+
+        assert_eq!(
+            ind.k, 3,
+            "Individual should have exactly 3 features when k_min=k_max=3"
+        );
+        assert_eq!(
+            ind.features.len(),
+            3,
+            "Individual should have exactly 3 features"
         );
     }
 

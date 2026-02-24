@@ -3,9 +3,8 @@ use crate::experiment::ImportanceAggregation;
 use crate::{beam::BeamMethod, voting::VotingMethod};
 use log::warn;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error;
-use std::fs::File;
-use std::io::BufReader;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
@@ -489,6 +488,235 @@ impl Param {
     }
 }
 
+/// Checks for unknown parameters in the YAML file.
+///
+/// # Arguments
+///
+/// * `yaml_value` - The parsed YAML as a serde_yaml::Value.
+///
+/// # Returns
+///
+/// * `Result<(), String>` - Ok if no unknown parameters are found, Err with a message otherwise.
+fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
+    // Define all valid parameter keys for each section
+    let valid_general_keys: HashSet<&str> = [
+        "seed",
+        "algo",
+        "language",
+        "data_type",
+        "epsilon",
+        "thread_number",
+        "log_base",
+        "log_suffix",
+        "log_level",
+        "fit",
+        "k_penalty",
+        "fr_penalty",
+        "bias_penalty",
+        "threshold_ci_penalty",
+        "threshold_ci_alpha",
+        "threshold_ci_n_bootstrap",
+        "threshold_ci_frac_bootstrap",
+        "user_feature_penalties_weight",
+        "user_penalties_weight",
+        "n_model_to_display",
+        "gpu",
+        "cv",
+        "display_colorful",
+        "keep_trace",
+        "save_exp",
+        "data_type_epsilon",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let valid_data_keys: HashSet<&str> = [
+        "X",
+        "y",
+        "Xtest",
+        "ytest",
+        "features_in_rows",
+        "holdout_ratio",
+        "max_features_per_class",
+        "feature_selection_method",
+        "feature_minimal_prevalence_pct",
+        "feature_maximal_adj_pvalue",
+        "feature_minimal_feature_value",
+        "feature_minimal_log_abs_bayes_factor",
+        "inverse_classes",
+        "n_validation_samples",
+        "classes",
+        "feature_annotations",
+        "sample_annotations",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let valid_cv_keys: HashSet<&str> = [
+        "inner_folds",
+        "overfit_penalty",
+        "resampling_inner_folds_epochs",
+        "outer_folds",
+        "fit_on_valid",
+        "cv_best_models_ci_alpha",
+        "stratify_by",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let valid_voting_keys: HashSet<&str> = [
+        "vote",
+        "min_perf",
+        "min_diversity",
+        "fbm_ci_alpha",
+        "method",
+        "method_threshold",
+        "threshold_windows_pct",
+        "complete_display",
+        "prune_before_voting",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let valid_ga_keys: HashSet<&str> = [
+        "population_size",
+        "max_epochs",
+        "min_epochs",
+        "max_age_best_model",
+        "k_min",
+        "kmin",
+        "k_max",
+        "kmax",
+        "select_elite_pct",
+        "select_niche_pct",
+        "select_random_pct",
+        "mutated_children_pct",
+        "mutated_features_pct",
+        "mutation_non_null_chance_pct",
+        "forced_diversity_pct",
+        "forced_diversity_epochs",
+        "random_sampling_pct",
+        "random_sampling_epochs",
+        "n_epochs_before_global",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let valid_beam_keys: HashSet<&str> = [
+        "method",
+        "k_start",
+        "kmin",
+        "k_stop",
+        "kmax",
+        "best_models_criterion",
+        "max_nb_of_models",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let valid_mcmc_keys: HashSet<&str> =
+        ["n_iter", "n_burn", "lambda", "nmin", "save_trace_outdir"]
+            .iter()
+            .cloned()
+            .collect();
+
+    let valid_gpu_keys: HashSet<&str> = [
+        "memory_policy",
+        "max_total_memory_mb",
+        "max_buffer_size_mb",
+        "fallback_to_cpu",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let valid_importance_keys: HashSet<&str> = [
+        "compute_importance",
+        "n_permutations_mda",
+        "scaled_importance",
+        "importance_aggregation",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let valid_experimental_keys: HashSet<&str> = [].iter().cloned().collect();
+
+    let valid_sections: HashSet<&str> = [
+        "general",
+        "data",
+        "cv",
+        "voting",
+        "ga",
+        "beam",
+        "mcmc",
+        "gpu",
+        "importance",
+        "experimental",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let mut unknown_params = Vec::new();
+
+    // Check top-level sections
+    if let Some(mapping) = yaml_value.as_mapping() {
+        for (key, value) in mapping {
+            if let Some(section_name) = key.as_str() {
+                if !valid_sections.contains(section_name) {
+                    unknown_params.push(format!("Unknown section: '{}'", section_name));
+                    continue;
+                }
+
+                // Check keys within each section
+                if let Some(section_mapping) = value.as_mapping() {
+                    let valid_keys = match section_name {
+                        "general" => &valid_general_keys,
+                        "data" => &valid_data_keys,
+                        "cv" => &valid_cv_keys,
+                        "voting" => &valid_voting_keys,
+                        "ga" => &valid_ga_keys,
+                        "beam" => &valid_beam_keys,
+                        "mcmc" => &valid_mcmc_keys,
+                        "gpu" => &valid_gpu_keys,
+                        "importance" => &valid_importance_keys,
+                        "experimental" => &valid_experimental_keys,
+                        _ => continue,
+                    };
+
+                    for param_key in section_mapping.keys() {
+                        if let Some(param_name) = param_key.as_str() {
+                            if !valid_keys.contains(param_name) {
+                                unknown_params.push(format!(
+                                    "'{}' in section '{}'",
+                                    param_name, section_name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !unknown_params.is_empty() {
+        let error_msg = format!(
+            "Unknown parameter: {}. These parameters will be ignored. Please check for typos or remove them.",
+            unknown_params.join("; ")
+        );
+        return Err(error_msg);
+    }
+
+    Ok(())
+}
+
 /// Loads and validates parameters from a YAML file.
 ///
 /// # Arguments
@@ -504,16 +732,25 @@ impl Param {
 /// * Returns an error if the file cannot be read or if validation fails.
 ///
 /// # Examples
-/// ```
+/// ```no_run
 /// # use gpredomics::param::get;
 /// # let params = get("samples/tests/param.yaml".to_string())?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
-    let param_file_reader = File::open(param_file)?;
-    let param_reader = BufReader::new(param_file_reader);
+    // Read the file content as a string
+    let yaml_content = std::fs::read_to_string(&param_file)?;
 
-    let mut config: Param = serde_yaml::from_reader(param_reader)?;
+    // First, parse as generic YAML to check for unknown parameters
+    let yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_content)?;
+
+    // Check for unknown parameters
+    if let Err(e) = check_unknown_params(&yaml_value) {
+        return Err(e.into());
+    }
+
+    // Now deserialize into the Param struct from the same content
+    let mut config: Param = serde_yaml::from_str(&yaml_content)?;
 
     let _ = validate(&mut config)?;
 
@@ -573,6 +810,14 @@ pub fn validate(param: &mut Param) -> Result<(), String> {
         || (!param.data.Xtest.is_empty() && param.data.ytest.is_empty())
     {
         return Err(format!("Both Xtest and ytest must be provided together.",));
+    }
+
+    // Validate k_min and k_max constraints
+    if param.ga.k_min > 0 && param.ga.k_max > 0 && param.ga.k_min > param.ga.k_max {
+        return Err(format!(
+            "Invalid k_min={} and k_max={}: k_min must be less than or equal to k_max when both are > 0.",
+            param.ga.k_min, param.ga.k_max
+        ));
     }
 
     validate_penalties(param)?;
@@ -834,4 +1079,131 @@ fn holdout_ratio_default() -> f64 {
 }
 fn best_models_criterion_default() -> f64 {
     10.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_unknown_params_valid() {
+        let yaml = r#"
+            general:
+                seed: 42
+                algo: ga
+            data:
+                X: "test.tsv"
+                y: "test.tsv"
+            "#;
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        assert!(check_unknown_params(&value).is_ok());
+    }
+
+    #[test]
+    fn test_check_unknown_params_invalid_section() {
+        let yaml = r#"
+            general:
+                seed: 42
+            unknown_section:
+                param: 123
+            "#;
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let result = check_unknown_params(&value);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown_section"));
+    }
+
+    #[test]
+    fn test_check_unknown_params_invalid_parameter() {
+        let yaml = r#"
+            general:
+                seed: 42
+                wrong_param: 999
+            data:
+                X: "test.tsv"
+            "#;
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let result = check_unknown_params(&value);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("wrong_param"));
+    }
+
+    #[test]
+    fn test_check_unknown_params_typo() {
+        let yaml = r#"
+            ga:
+                populaton_size: 5000
+            "#;
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let result = check_unknown_params(&value);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("populaton_size"));
+    }
+
+    #[test]
+    fn test_check_unknown_params_alias_accepted() {
+        let yaml = r#"
+            ga:
+                kmin: 1
+                kmax: 200
+            beam:
+                kmin: 1
+                kmax: 200
+            "#;
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        assert!(check_unknown_params(&value).is_ok());
+    }
+
+    #[test]
+    fn test_validate_k_min_k_max_valid() {
+        let mut param = Param::default();
+        param.ga.k_min = 1;
+        param.ga.k_max = 10;
+        assert!(validate(&mut param).is_ok());
+    }
+
+    #[test]
+    fn test_validate_k_min_k_max_equal() {
+        let mut param = Param::default();
+        param.ga.k_min = 5;
+        param.ga.k_max = 5;
+        // k_min = k_max is now allowed to force exactly k features
+        assert!(validate(&mut param).is_ok());
+    }
+
+    #[test]
+    fn test_validate_k_min_greater_than_k_max() {
+        let mut param = Param::default();
+        param.ga.k_min = 10;
+        param.ga.k_max = 5;
+        let result = validate(&mut param);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("k_min must be less than or equal to k_max"));
+    }
+
+    #[test]
+    fn test_validate_k_min_zero_allowed() {
+        let mut param = Param::default();
+        param.ga.k_min = 0;
+        param.ga.k_max = 10;
+        assert!(validate(&mut param).is_ok());
+    }
+
+    #[test]
+    fn test_validate_k_max_zero_allowed() {
+        let mut param = Param::default();
+        param.ga.k_min = 5;
+        param.ga.k_max = 0;
+        assert!(validate(&mut param).is_ok());
+    }
+
+    #[test]
+    fn test_validate_both_k_zero_allowed() {
+        let mut param = Param::default();
+        param.ga.k_min = 0;
+        param.ga.k_max = 0;
+        assert!(validate(&mut param).is_ok());
+    }
 }

@@ -1545,6 +1545,9 @@ impl Jury {
         specialization: &JudgeSpecialization,
         vote: u8,
     ) -> (&'static str, String) {
+        if vote == 2 {
+            return ("\x1b[90m", "•".to_string());
+        }
         match (specialization, vote) {
             (JudgeSpecialization::Ineffective, _) => ("\x1b[90m", format!("{}", vote)),
             (JudgeSpecialization::Balanced, _) => ("\x1b[92m", vote.to_string()),
@@ -1577,11 +1580,15 @@ impl Jury {
 
                 match &self.weighting_method {
                     WeightingMethod::Uniform => {
-                        let vote_display = match data.y[sample_idx] == vote {
-                            true => &format!("\x1b[92m{}\x1b[0m", vote),
-                            false => &format!("\x1b[31m{}\x1b[0m", vote),
-                        };
-                        output.push_str(vote_display);
+                        if vote == 2 {
+                            output.push_str("\x1b[90m•\x1b[0m");
+                        } else {
+                            let vote_display = match data.y[sample_idx] == vote {
+                                true => &format!("\x1b[92m{}\x1b[0m", vote),
+                                false => &format!("\x1b[31m{}\x1b[0m", vote),
+                            };
+                            output.push_str(vote_display);
+                        }
                     }
                     WeightingMethod::Specialized {
                         sensitivity_threshold,

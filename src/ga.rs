@@ -77,6 +77,7 @@ pub fn ga(
         pop.fit(data, &mut None, &None, &None, param);
         pop = pop.sort();
         let _ = remove_stillborn(&mut pop);
+        let _ = remove_out_of_bounds(&mut pop, param.ga.k_min, param.ga.k_max);
         pop.compute_hash();
         pop.remove_clone();
 
@@ -200,6 +201,7 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
                 );
 
                 target_size = remove_stillborn(&mut sub_pop);
+                target_size += remove_out_of_bounds(&mut sub_pop, param.ga.k_min, param.ga.k_max);
                 if target_size > 0 {
                     debug!(
                         "Some still born are present {} (with healthy {})",
@@ -379,13 +381,14 @@ pub fn iterative_evolution(
                 populations = vec![pop];
             }
 
-            if param.ga.random_sampling_pct > 0.0 {
-                if let Some(last_population) = populations.last_mut() {
+            // Always compute final metrics on the full dataset
+            if let Some(last_population) = populations.last_mut() {
+                if param.ga.random_sampling_pct > 0.0 {
                     warn!("Random sampling: models optimized on samples ({} samples), metrics shown on full dataset. \n\
                     NOTE: Fit values reflect sample-based optimization, not full dataset performance.", (param.ga.random_sampling_pct * 100.0) as u8);
-                    last_population.compute_all_metrics(&data, &param.general.fit);
-                    //(&mut *last_population).fit(&data, &mut None, &gpu_assay, &None, param);
                 }
+                last_population.compute_all_metrics(&data, &param.general.fit);
+                //(&mut *last_population).fit(&data, &mut None, &gpu_assay, &None, param);
             }
 
             break;
@@ -451,8 +454,13 @@ pub fn evolve(
         let mut some_children = cross_over(&new_pop, children_to_create, rng);
         mutate(&mut some_children, param, &data.feature_selection, rng);
         children_to_create = remove_stillborn(&mut some_children) as usize;
+        children_to_create +=
+            remove_out_of_bounds(&mut some_children, param.ga.k_min, param.ga.k_max) as usize;
         if children_to_create > 0 {
-            debug!("Some stillborn are presents: {}", children_to_create)
+            debug!(
+                "Some stillborn or out-of-bounds are present: {}",
+                children_to_create
+            )
         }
 
         children.add(some_children);
@@ -730,6 +738,47 @@ pub fn remove_stillborn(children: &mut Population) -> u32 {
     children.individuals = valid_individuals;
 
     stillborn_children
+}
+
+/// Remove individuals that are out of k_min/k_max bounds
+///
+/// # Arguments
+///
+/// * `children` - The population of children to filter.
+/// * `k_min` - Minimum number of features allowed (0 means no minimum).
+/// * `k_max` - Maximum number of features allowed (0 means no maximum).
+///
+/// # Returns
+///
+/// The number of individuals removed.
+pub fn remove_out_of_bounds(children: &mut Population, k_min: usize, k_max: usize) -> u32 {
+    let mut removed_count: u32 = 0;
+    let mut valid_individuals: Vec<Individual> = Vec::new();
+    let individuals = mem::take(&mut children.individuals);
+
+    for individual in individuals.into_iter() {
+        let k = individual.k;
+        let mut is_valid = true;
+
+        // Check k_min constraint (if k_min > 0)
+        if k_min > 0 && k < k_min {
+            is_valid = false;
+        }
+
+        // Check k_max constraint (if k_max > 0)
+        if k_max > 0 && k > k_max {
+            is_valid = false;
+        }
+
+        if is_valid {
+            valid_individuals.push(individual);
+        } else {
+            removed_count += 1;
+        }
+    }
+
+    children.individuals = valid_individuals;
+    removed_count
 }
 
 // pub fn remove_inefficient(parents: &mut Population) -> u32 {
@@ -1364,6 +1413,120 @@ mod tests {
             pop.individuals.len(),
             1,
             "Should have 1 valid individual remaining"
+        );
+    }
+
+    #[test]
+    fn test_remove_out_of_bounds() {
+        use crate::individual::BINARY_LANG;
+
+        let mut pop = Population::new();
+
+        // Create individual with k=1 (too small)
+        let mut too_small = Individual::new();
+        too_small.language = BINARY_LANG;
+        too_small.features.insert(0, 1);
+        too_small.k = 1;
+        pop.individuals.push(too_small);
+
+        // Create valid individual with k=5
+        let mut valid1 = Individual::new();
+        valid1.language = BINARY_LANG;
+        valid1.features.insert(0, 1);
+        valid1.features.insert(1, 1);
+        valid1.features.insert(2, 1);
+        valid1.features.insert(3, 1);
+        valid1.features.insert(4, 1);
+        valid1.k = 5;
+        pop.individuals.push(valid1);
+
+        // Create valid individual with k=10
+        let mut valid2 = Individual::new();
+        valid2.language = BINARY_LANG;
+        for i in 0..10 {
+            valid2.features.insert(i, 1);
+        }
+        valid2.k = 10;
+        pop.individuals.push(valid2);
+
+        // Create individual with k=15 (too large)
+        let mut too_large = Individual::new();
+        too_large.language = BINARY_LANG;
+        for i in 0..15 {
+            too_large.features.insert(i, 1);
+        }
+        too_large.k = 15;
+        pop.individuals.push(too_large);
+
+        // Test with k_min=2 and k_max=10
+        let removed = remove_out_of_bounds(&mut pop, 2, 10);
+
+        assert_eq!(removed, 2, "Should remove 2 individuals (k=1 and k=15)");
+        assert_eq!(
+            pop.individuals.len(),
+            2,
+            "Should have 2 valid individuals remaining"
+        );
+        assert_eq!(
+            pop.individuals[0].k, 5,
+            "First valid individual should have k=5"
+        );
+        assert_eq!(
+            pop.individuals[1].k, 10,
+            "Second valid individual should have k=10"
+        );
+
+        // Test with k_min=0 (no minimum)
+        let mut pop2 = Population::new();
+        let mut ind1 = Individual::new();
+        ind1.k = 1;
+        pop2.individuals.push(ind1);
+
+        let removed2 = remove_out_of_bounds(&mut pop2, 0, 10);
+        assert_eq!(removed2, 0, "Should not remove anything when k_min=0");
+        assert_eq!(pop2.individuals.len(), 1, "Should keep the individual");
+
+        // Test with k_max=0 (no maximum)
+        let mut pop3 = Population::new();
+        let mut ind2 = Individual::new();
+        ind2.k = 100;
+        pop3.individuals.push(ind2);
+
+        let removed3 = remove_out_of_bounds(&mut pop3, 1, 0);
+        assert_eq!(removed3, 0, "Should not remove anything when k_max=0");
+        assert_eq!(pop3.individuals.len(), 1, "Should keep the individual");
+
+        // Test with k_min=k_max (force exactly k features)
+        let mut pop4 = Population::new();
+
+        // Individual with k=9 (should be removed)
+        let mut ind_too_small = Individual::new();
+        ind_too_small.k = 9;
+        pop4.individuals.push(ind_too_small);
+
+        // Individual with k=10 (should be kept)
+        let mut ind_exact = Individual::new();
+        ind_exact.k = 10;
+        pop4.individuals.push(ind_exact);
+
+        // Individual with k=11 (should be removed)
+        let mut ind_too_large = Individual::new();
+        ind_too_large.k = 11;
+        pop4.individuals.push(ind_too_large);
+
+        let removed4 = remove_out_of_bounds(&mut pop4, 10, 10);
+        assert_eq!(
+            removed4, 2,
+            "Should remove 2 individuals when k_min=k_max=10"
+        );
+        assert_eq!(
+            pop4.individuals.len(),
+            1,
+            "Should keep only the individual with k=10"
+        );
+        assert_eq!(
+            pop4.individuals[0].k, 10,
+            "Remaining individual should have exactly k=10"
         );
     }
 

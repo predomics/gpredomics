@@ -78,8 +78,8 @@ ga:
   max_epochs: 100                             # The maximum number of generations before stopping (you can stop manually as well).
   min_epochs: 1                               # The minimum number of generations to run.
   max_age_best_model: 100                     # Stopping before max_epochs (after min_epochs) occurs only if the best model reaches this age.
-  k_min: 1                                    # The minimal number of variables used in the initial population.
-  k_max: 200                                  # The maximum number of variables used in the initial population (0 removes any maximum).
+  k_min: 1                                    # The minimal number of variables used in a model.
+  k_max: 200                                  # The maximum number of variables used in a model (0 removes any maximum).
   select_elite_pct: 2                         # Percentage of best models from previous generation retained: lower values are more elitist.
   select_niche_pct: 20                        # (optional, default 0) Percentage of best models retained but split per language/data type (helps maintain competition between languages/data types).
   select_random_pct: 10                       # Percentage of opportunistic models retained from the previous generation; split among all languages/data_types present.

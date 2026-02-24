@@ -1,6 +1,7 @@
 # Gpredomics - Rapid, Interpretable and Accurate machine learning for omics data
 
-[![Version](https://img.shields.io/badge/version-0.7.7-orange.svg)](https://github.com/predomics/gpredomics/releases)
+
+[![Version](https://img.shields.io/badge/version-0.7.6-blue.svg)](https://github.com/predomics/gpredomics/releases)
 [![Rust](https://img.shields.io/badge/Rust-1.89+-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 [![GPU](https://img.shields.io/badge/GPU-Metal%20%7C%20Vulkan-green.svg)]()
