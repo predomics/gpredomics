@@ -561,6 +561,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "outer_folds",
         "fit_on_valid",
         "cv_best_models_ci_alpha",
+        "cv_fbm_ci_method",
         "stratify_by",
     ]
     .iter()
@@ -577,6 +578,9 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "threshold_windows_pct",
         "complete_display",
         "prune_before_voting",
+        "fbm_ci_method",
+        "min_experts",
+        "max_experts",
     ]
     .iter()
     .cloned()
@@ -614,6 +618,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "k_stop",
         "kmax",
         "best_models_criterion",
+        "fbm_ci_method",
         "max_nb_of_models",
     ]
     .iter()
