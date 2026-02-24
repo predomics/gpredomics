@@ -256,7 +256,8 @@ impl Jury {
             );
             jury.experts.individuals.truncate(param.voting.max_experts);
         }
-        if param.voting.min_experts > 0 && jury.experts.individuals.len() < param.voting.min_experts {
+        if param.voting.min_experts > 0 && jury.experts.individuals.len() < param.voting.min_experts
+        {
             warn!(
                 "Jury has only {} experts, fewer than requested min_experts={}",
                 jury.experts.individuals.len(),

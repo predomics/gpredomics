@@ -315,11 +315,7 @@ impl CV {
 
         let n_folds = self.fold_collections.len();
         for i in 0..n_folds {
-            info!(
-                "CV importance: fold {}/{} starting",
-                i + 1,
-                n_folds
-            );
+            info!("CV importance: fold {}/{} starting", i + 1, n_folds);
             let fold_last_fbm = self.extract_fold_fbm(i, cv_param);
             if fold_last_fbm.individuals.len() == 0 {
                 panic!(
@@ -367,7 +363,10 @@ impl CV {
             }
         }
 
-        info!("CV importance: all {} folds complete, aggregating results", n_folds);
+        info!(
+            "CV importance: all {} folds complete, aggregating results",
+            n_folds
+        );
 
         for (feature_idx, values) in importance_values {
             if values.is_empty() {

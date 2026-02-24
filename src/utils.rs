@@ -16,6 +16,7 @@
 use crate::data::Data;
 use crate::experiment::ImportanceAggregation;
 use crate::individual::AdditionalMetrics;
+use crate::param::FbmCIMethod;
 use crate::param::FitFunction;
 use crate::Param;
 use crate::Population;
@@ -29,7 +30,6 @@ use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use statrs::distribution::{Beta, ContinuousCDF, Normal};
-use crate::param::FbmCIMethod;
 use std::collections::HashMap;
 
 /// Declare simple Vec<String>
@@ -5875,8 +5875,7 @@ mod tests {
     #[test]
     fn test_wald_method_matches_legacy() {
         let (lo1, p1, hi1) = conf_inter_binomial(0.8, 100, 0.05);
-        let (lo2, p2, hi2) =
-            conf_inter_binomial_method(0.8, 100, 0.05, &FbmCIMethod::wald);
+        let (lo2, p2, hi2) = conf_inter_binomial_method(0.8, 100, 0.05, &FbmCIMethod::wald);
         assert!((lo1 - lo2).abs() < 1e-12);
         assert!((p1 - p2).abs() < 1e-12);
         assert!((hi1 - hi2).abs() < 1e-12);
@@ -5896,64 +5895,71 @@ mod tests {
             assert!(
                 lo >= 0.0 && lo <= p,
                 "{:?}: lower bound {} out of range (p={})",
-                method, lo, p
+                method,
+                lo,
+                p
             );
             assert!(
                 hi >= p && hi <= 1.0,
                 "{:?}: upper bound {} out of range (p={})",
-                method, hi, p
+                method,
+                hi,
+                p
             );
         }
     }
 
     #[test]
     fn test_continuity_correction_wider_than_wald() {
-        let (lo_w, _, hi_w) =
-            conf_inter_binomial_method(0.85, 30, 0.05, &FbmCIMethod::wald);
+        let (lo_w, _, hi_w) = conf_inter_binomial_method(0.85, 30, 0.05, &FbmCIMethod::wald);
         let (lo_c, _, hi_c) =
             conf_inter_binomial_method(0.85, 30, 0.05, &FbmCIMethod::wald_continuity);
         assert!(
             lo_c < lo_w,
             "Continuity lower {} should be < Wald lower {}",
-            lo_c, lo_w
+            lo_c,
+            lo_w
         );
         assert!(
             hi_c > hi_w,
             "Continuity upper {} should be > Wald upper {}",
-            hi_c, hi_w
+            hi_c,
+            hi_w
         );
     }
 
     #[test]
     fn test_clopper_pearson_wider_than_wald() {
-        let (lo_w, _, _) =
-            conf_inter_binomial_method(0.80, 50, 0.05, &FbmCIMethod::wald);
+        let (lo_w, _, _) = conf_inter_binomial_method(0.80, 50, 0.05, &FbmCIMethod::wald);
         let (lo_cp, _, _) =
             conf_inter_binomial_method(0.80, 50, 0.05, &FbmCIMethod::clopper_pearson);
         assert!(
             lo_cp < lo_w,
             "Clopper-Pearson lower {} should be < Wald lower {}",
-            lo_cp, lo_w
+            lo_cp,
+            lo_w
         );
     }
 
     #[test]
     fn test_wilson_bounded_in_zero_one() {
         // Wilson should never produce bounds outside [0, 1]
-        let (lo, _, hi) =
-            conf_inter_binomial_method(0.99, 10, 0.05, &FbmCIMethod::wilson);
+        let (lo, _, hi) = conf_inter_binomial_method(0.99, 10, 0.05, &FbmCIMethod::wilson);
         assert!(lo >= 0.0 && hi <= 1.0, "Wilson bounds: [{}, {}]", lo, hi);
 
-        let (lo2, _, hi2) =
-            conf_inter_binomial_method(0.01, 10, 0.05, &FbmCIMethod::wilson);
-        assert!(lo2 >= 0.0 && hi2 <= 1.0, "Wilson bounds: [{}, {}]", lo2, hi2);
+        let (lo2, _, hi2) = conf_inter_binomial_method(0.01, 10, 0.05, &FbmCIMethod::wilson);
+        assert!(
+            lo2 >= 0.0 && hi2 <= 1.0,
+            "Wilson bounds: [{}, {}]",
+            lo2,
+            hi2
+        );
     }
 
     #[test]
     fn test_clopper_pearson_edge_cases() {
         // p=0: lower should be 0
-        let (lo, _, hi) =
-            conf_inter_binomial_method(0.0, 10, 0.05, &FbmCIMethod::clopper_pearson);
+        let (lo, _, hi) = conf_inter_binomial_method(0.0, 10, 0.05, &FbmCIMethod::clopper_pearson);
         assert_eq!(lo, 0.0);
         assert!(hi > 0.0, "upper should be > 0 when p=0, n=10");
 
@@ -5967,14 +5973,13 @@ mod tests {
     #[test]
     fn test_agresti_coull_close_to_wilson() {
         // Agresti-Coull and Wilson should give similar results
-        let (lo_w, _, _) =
-            conf_inter_binomial_method(0.7, 100, 0.05, &FbmCIMethod::wilson);
-        let (lo_a, _, _) =
-            conf_inter_binomial_method(0.7, 100, 0.05, &FbmCIMethod::agresti_coull);
+        let (lo_w, _, _) = conf_inter_binomial_method(0.7, 100, 0.05, &FbmCIMethod::wilson);
+        let (lo_a, _, _) = conf_inter_binomial_method(0.7, 100, 0.05, &FbmCIMethod::agresti_coull);
         assert!(
             (lo_w - lo_a).abs() < 0.01,
             "Wilson {} and Agresti-Coull {} should be close",
-            lo_w, lo_a
+            lo_w,
+            lo_a
         );
     }
 }

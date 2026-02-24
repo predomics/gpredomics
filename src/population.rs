@@ -5,6 +5,7 @@ use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, Impor
 use crate::gpu::GpuAssay;
 use crate::individual::Individual;
 use crate::individual::{BINARY_LANG, POW2_LANG, RATIO_LANG, TERNARY_LANG};
+use crate::param::FbmCIMethod;
 use crate::param::FitFunction;
 use crate::param::Param;
 use crate::utils::{
@@ -12,10 +13,8 @@ use crate::utils::{
     compute_threshold_and_metrics_with_precomputed_bootstrap, conf_inter_binomial,
     conf_inter_binomial_method, precompute_bootstrap_indices, PrecomputedBootstrap,
 };
-use crate::param::FbmCIMethod;
 use crate::utils::{mad, mean_and_std, median};
 use log::{error, info, warn};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use rand::prelude::SliceRandom;
 use rand::RngCore;
 use rand::SeedableRng;
@@ -24,6 +23,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::mem;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Group of [`Individual`]s
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
