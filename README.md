@@ -62,6 +62,12 @@ At the root of this repository, compile gpredomics:
 
 `cargo build --release`
 
+If you want the binary to embed a git hash in logs and experiment metadata, set `GPREDOMICS_GIT_SHA` at build time. If it is not set, it defaults to `unknown`.
+
+Example:
+
+`GPREDOMICS_GIT_SHA=$(git rev-parse --short HEAD) cargo build --release`
+
 ### Use 
 
 The executable loads param.yaml from the current working directory on startup.
@@ -175,7 +181,7 @@ If you use **Gpredomics** in your research, please cite it as follows:
 > Prifti, E., Chevaleyre, Y., Hanczar, B., Belda, E., Danchin, A., Clément, K., & Zucker, J. D. (2020). Interpretable and accurate prediction models for metagenomics data. *GigaScience*, 9(3), giaa010. [https://doi.org/10.1093/gigascience/giaa010](https://doi.org/10.1093/gigascience/giaa010)
 
 **Software:**
-> Lesage, L., de Lahondès, R., Puller, V., & Prifti, E. (2025). *Gpredomics* (Version 0.7.6). GMT Science / IRD. [https://github.com/predomics/gpredomics](https://github.com/predomics/gpredomics)
+> Lesage, L., de Lahondès, R., Puller, V., & Prifti, E. (2025). *Gpredomics* (Version 0.7.7). GMT Science / IRD. [https://github.com/predomics/gpredomics](https://github.com/predomics/gpredomics)
 
 *A `CITATION.cff` file is available in this repository. If you use GitHub, you can use the **"Cite this repository"** option in the "About" section to export this citation in BibTeX or APA formats.*
 
@@ -186,4 +192,4 @@ If you have any questions, comments, or have found a bug, please contact us at t
 - Email: contact@predomics.com
 - GitHub Issues: [Gpredomics Issues](https://github.com/predomics/gpredomics/issues)
 
-*Last updated: v0.7.6*
+*Last updated: v0.7.7*

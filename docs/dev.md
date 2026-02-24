@@ -8,4 +8,11 @@ cargo doc --open
 
 Some additional technical documentation will be available in the next version. 
 
-*Last updated: v0.7.6*
+## Release checklist
+
+- Update `Cargo.toml` version.
+- Update `README.md` version badge, citation block, and `Last updated`.
+- Update `Last updated` in all changed md fifiles in docs.
+- Update `CITATION.cff` version.
+
+*Last updated: v0.7.7*
