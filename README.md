@@ -125,6 +125,15 @@ gpredomics --load 2025-01-01_12-00-00_run.msgpack \
   --evaluate --x-test /path/X_test.tsv --y-test /path/y_test.tsv
 ```
 
+**CSV performance report**:
+```bash
+# via CLI flag
+gpredomics --config param.yaml --csv-report
+
+# or set csv_report: true in param.yaml under general:
+```
+Generates a `<timestamp>_csvr.csv` file with three sections: best model, FBM (Family of Best Models averaged), and jury (if voting is enabled). All classification metrics (AUC, accuracy, sensitivity, specificity, F1, MCC, PPV, NPV, G-mean) are computed for both train and test sets, along with all experiment parameters as individual columns.
+
 Note that `--evaluate` requires `--load` and needs `--x-test` and `--y-test`.
 Termination signals are handled for clean shutdown.
 

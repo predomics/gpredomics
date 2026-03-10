@@ -39,7 +39,11 @@ fn main() {
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
     println!("Loading configuration from: {}", args.config);
-    let param = param::get(args.config).unwrap();
+    let mut param = param::get(args.config).unwrap();
+
+    if args.csv_report {
+        param.general.csv_report = true;
+    }
 
     // Initialize the logger
     let logger = if param.general.log_base.len() > 0 {
@@ -158,6 +162,15 @@ fn main() {
 
     cinfo!(param.general.display_colorful, "{}", exp.display_results());
 
+    if param.general.csv_report {
+        let csv_path = format!("{}_csvr.csv", timestamp);
+        if let Err(e) = exp.export_csv_report(&csv_path) {
+            error!("Failed to export CSV report: {}", e);
+        } else {
+            info!("CSV report exported to {}", csv_path);
+        }
+    }
+
     if param.general.save_exp != "".to_string() {
         info!("Saving experiment...");
         exp.save_auto(format!("{}_{}", timestamp, &param.general.save_exp))
@@ -194,4 +207,8 @@ pub struct Cli {
     /// export loaded params to file (requires --load)
     #[arg(long, requires = "load")]
     export_params: Option<String>,
+
+    /// Export performance results to CSV file (overrides param.yaml csv_report)
+    #[arg(long)]
+    csv_report: bool,
 }

@@ -64,6 +64,9 @@ pub mod population;
 /// Implements voting mechanisms for ensemble predictions.
 pub mod voting;
 
+/// CSV performance report export.
+pub mod csv_report;
+
 /// Implements Bayesian MCMC algorithms for model training.
 pub mod bayesian_mcmc;
 /// Contains functions for beam search algorithms.

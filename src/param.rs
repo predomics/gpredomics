@@ -188,6 +188,8 @@ pub struct General {
     pub keep_trace: bool,
     #[serde(default = "save_experiment_default")]
     pub save_exp: String,
+    #[serde(default = "false_default")]
+    pub csv_report: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -525,6 +527,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "display_colorful",
         "keep_trace",
         "save_exp",
+        "csv_report",
         "data_type_epsilon",
     ]
     .iter()

@@ -46,6 +46,19 @@ gpredomics --load <EXPERIMENT_FILE> --export-params <OUTPUT_YAML>
 ```
 Extracts the parameter configuration from a saved experiment.
 
+**CSV performance report**:
+```bash
+gpredomics --config param.yaml --csv-report
+```
+Exports a `<timestamp>_csvr.csv` file containing performance metrics for the best model, the Family of Best Models (FBM, averaged), and the voting jury (if enabled). Can also be activated in `param.yaml`:
+
+```yaml
+general:
+  csv_report: true
+```
+
+The CSV includes all classification metrics (AUC, fit, accuracy, sensitivity, specificity, F1, MCC, PPV, NPV, G-mean, rejection rate) for both train and test, plus all experiment parameters as individual named columns. If the file already exists with a matching header, new rows are appended.
+
 ### Signal handling
 
 Press `Ctrl+C` once for a graceful stop—the current epoch completes and results are saved. Press again to force exit.
