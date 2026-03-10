@@ -16,7 +16,9 @@ use crate::data::Data;
 use crate::experiment::{Experiment, ExperimentMetadata};
 use crate::individual::Individual;
 use crate::param::Param;
-use crate::utils::{compute_auc_from_value, compute_metrics_from_classes, compute_metrics_from_value, mean_and_std};
+use crate::utils::{
+    compute_auc_from_value, compute_metrics_from_classes, compute_metrics_from_value, mean_and_std,
+};
 use log::info;
 use std::error::Error;
 use std::io::Write;
@@ -114,7 +116,10 @@ fn fmt_opt(v: Option<f64>) -> String {
 
 /// Force-compute all additional metrics for an individual on given data (train or test).
 /// Always computes mcc, f1, npv, ppv, g_mean regardless of the fit function used during training.
-fn compute_full_metrics(ind: &Individual, d: &Data) -> (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) {
+fn compute_full_metrics(
+    ind: &Individual,
+    d: &Data,
+) -> (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) {
     let value = ind.evaluate(d);
     let auc = ind.compute_new_auc(d);
     let (acc, sens, spec, rejection, add) = compute_metrics_from_value(
@@ -168,11 +173,7 @@ fn common_prefix(exp: &Experiment) -> Vec<String> {
     } else {
         0
     };
-    let n_test = exp
-        .test_data
-        .as_ref()
-        .map(|d| d.sample_len)
-        .unwrap_or(0);
+    let n_test = exp.test_data.as_ref().map(|d| d.sample_len).unwrap_or(0);
 
     vec![
         exp.id.clone(),
@@ -263,7 +264,11 @@ fn build_row(
 
 /// Builds metrics columns for a single individual (22 columns: model_k through test_rejection_rate)
 /// Forces computation of all additional metrics (f1, mcc, ppv, npv, g_mean).
-fn individual_metrics_cols(ind: &Individual, train_data: &Data, test_data: Option<&Data>) -> Vec<String> {
+fn individual_metrics_cols(
+    ind: &Individual,
+    train_data: &Data,
+    test_data: Option<&Data>,
+) -> Vec<String> {
     let train_rejection = ind
         .threshold_ci
         .as_ref()
@@ -275,13 +280,34 @@ fn individual_metrics_cols(ind: &Individual, train_data: &Data, test_data: Optio
         compute_train_additional(ind, train_data);
 
     // Force-compute test metrics with all additional metrics
-    let (test_auc, test_acc, test_sens, test_spec, test_f1, test_mcc, test_ppv, test_npv, test_gmean, test_rej) =
-        if let Some(td) = test_data {
-            let r = compute_full_metrics(ind, td);
-            (Some(r.0), Some(r.1), Some(r.2), Some(r.3), Some(r.4), Some(r.5), Some(r.6), Some(r.7), Some(r.8), Some(r.9))
-        } else {
-            (None, None, None, None, None, None, None, None, None, None)
-        };
+    let (
+        test_auc,
+        test_acc,
+        test_sens,
+        test_spec,
+        test_f1,
+        test_mcc,
+        test_ppv,
+        test_npv,
+        test_gmean,
+        test_rej,
+    ) = if let Some(td) = test_data {
+        let r = compute_full_metrics(ind, td);
+        (
+            Some(r.0),
+            Some(r.1),
+            Some(r.2),
+            Some(r.3),
+            Some(r.4),
+            Some(r.5),
+            Some(r.6),
+            Some(r.7),
+            Some(r.8),
+            Some(r.9),
+        )
+    } else {
+        (None, None, None, None, None, None, None, None, None, None)
+    };
 
     vec![
         ind.k.to_string(),
@@ -328,15 +354,23 @@ pub fn export_best_model_csv(
     let metrics = individual_metrics_cols(best, &exp.train_data, exp.test_data.as_ref());
     let params = param_columns(&exp.parameters);
 
-    writeln!(writer, "{}", build_row("best_model", &prefix, &metrics, 1, exp.execution_time, &params))?;
+    writeln!(
+        writer,
+        "{}",
+        build_row(
+            "best_model",
+            &prefix,
+            &metrics,
+            1,
+            exp.execution_time,
+            &params
+        )
+    )?;
     Ok(())
 }
 
 /// Exports the FBM (Family of Best Models) averaged performance as a CSV row
-pub fn export_fbm_csv(
-    exp: &Experiment,
-    writer: &mut impl Write,
-) -> Result<(), Box<dyn Error>> {
+pub fn export_fbm_csv(exp: &Experiment, writer: &mut impl Write) -> Result<(), Box<dyn Error>> {
     let final_pop = exp
         .final_population
         .as_ref()
@@ -360,7 +394,12 @@ pub fn export_fbm_csv(
     let train_rejs: Vec<f64> = fbm
         .individuals
         .iter()
-        .map(|i| i.threshold_ci.as_ref().map(|ci| ci.rejection_rate).unwrap_or(0.0))
+        .map(|i| {
+            i.threshold_ci
+                .as_ref()
+                .map(|ci| ci.rejection_rate)
+                .unwrap_or(0.0)
+        })
         .collect();
 
     // Force-compute additional train metrics for each individual
@@ -393,48 +432,59 @@ pub fn export_fbm_csv(
     let (gmean_m, _) = mean_and_std(&train_gmeans);
 
     // Test metrics - force-compute all additional metrics
-    let (test_auc_m, test_acc_m, test_sens_m, test_spec_m, test_f1_m, test_mcc_m, test_ppv_m, test_npv_m, test_gmean_m, test_rej_m) =
-        if let Some(ref td) = exp.test_data {
-            let mut t_aucs = Vec::with_capacity(n);
-            let mut t_accs = Vec::with_capacity(n);
-            let mut t_senss = Vec::with_capacity(n);
-            let mut t_specss = Vec::with_capacity(n);
-            let mut t_f1s = Vec::with_capacity(n);
-            let mut t_mccs = Vec::with_capacity(n);
-            let mut t_ppvs = Vec::with_capacity(n);
-            let mut t_npvs = Vec::with_capacity(n);
-            let mut t_gmeans = Vec::with_capacity(n);
-            let mut t_rejs = Vec::with_capacity(n);
+    let (
+        test_auc_m,
+        test_acc_m,
+        test_sens_m,
+        test_spec_m,
+        test_f1_m,
+        test_mcc_m,
+        test_ppv_m,
+        test_npv_m,
+        test_gmean_m,
+        test_rej_m,
+    ) = if let Some(ref td) = exp.test_data {
+        let mut t_aucs = Vec::with_capacity(n);
+        let mut t_accs = Vec::with_capacity(n);
+        let mut t_senss = Vec::with_capacity(n);
+        let mut t_specss = Vec::with_capacity(n);
+        let mut t_f1s = Vec::with_capacity(n);
+        let mut t_mccs = Vec::with_capacity(n);
+        let mut t_ppvs = Vec::with_capacity(n);
+        let mut t_npvs = Vec::with_capacity(n);
+        let mut t_gmeans = Vec::with_capacity(n);
+        let mut t_rejs = Vec::with_capacity(n);
 
-            for ind in &fbm.individuals {
-                let (auc, acc, sens, spec, f1, mcc, ppv, npv, gmean, rej) = compute_full_metrics(ind, td);
-                t_aucs.push(auc);
-                t_accs.push(acc);
-                t_senss.push(sens);
-                t_specss.push(spec);
-                t_f1s.push(f1);
-                t_mccs.push(mcc);
-                t_ppvs.push(ppv);
-                t_npvs.push(npv);
-                t_gmeans.push(gmean);
-                t_rejs.push(rej);
-            }
+        for ind in &fbm.individuals {
+            let (auc, acc, sens, spec, f1, mcc, ppv, npv, gmean, rej) =
+                compute_full_metrics(ind, td);
+            t_aucs.push(auc);
+            t_accs.push(acc);
+            t_senss.push(sens);
+            t_specss.push(spec);
+            t_f1s.push(f1);
+            t_mccs.push(mcc);
+            t_ppvs.push(ppv);
+            t_npvs.push(npv);
+            t_gmeans.push(gmean);
+            t_rejs.push(rej);
+        }
 
-            (
-                Some(mean_and_std(&t_aucs).0),
-                Some(mean_and_std(&t_accs).0),
-                Some(mean_and_std(&t_senss).0),
-                Some(mean_and_std(&t_specss).0),
-                Some(mean_and_std(&t_f1s).0),
-                Some(mean_and_std(&t_mccs).0),
-                Some(mean_and_std(&t_ppvs).0),
-                Some(mean_and_std(&t_npvs).0),
-                Some(mean_and_std(&t_gmeans).0),
-                Some(mean_and_std(&t_rejs).0),
-            )
-        } else {
-            (None, None, None, None, None, None, None, None, None, None)
-        };
+        (
+            Some(mean_and_std(&t_aucs).0),
+            Some(mean_and_std(&t_accs).0),
+            Some(mean_and_std(&t_senss).0),
+            Some(mean_and_std(&t_specss).0),
+            Some(mean_and_std(&t_f1s).0),
+            Some(mean_and_std(&t_mccs).0),
+            Some(mean_and_std(&t_ppvs).0),
+            Some(mean_and_std(&t_npvs).0),
+            Some(mean_and_std(&t_gmeans).0),
+            Some(mean_and_std(&t_rejs).0),
+        )
+    } else {
+        (None, None, None, None, None, None, None, None, None, None)
+    };
 
     let prefix = common_prefix(exp);
     let params = param_columns(&exp.parameters);
@@ -464,15 +514,16 @@ pub fn export_fbm_csv(
         fmt_opt(test_rej_m),
     ];
 
-    writeln!(writer, "{}", build_row("fbm", &prefix, &metrics, n, exp.execution_time, &params))?;
+    writeln!(
+        writer,
+        "{}",
+        build_row("fbm", &prefix, &metrics, n, exp.execution_time, &params)
+    )?;
     Ok(())
 }
 
 /// Exports the Jury (voting ensemble) performance as a CSV row
-pub fn export_jury_csv(
-    exp: &Experiment,
-    writer: &mut impl Write,
-) -> Result<(), Box<dyn Error>> {
+pub fn export_jury_csv(exp: &Experiment, writer: &mut impl Write) -> Result<(), Box<dyn Error>> {
     let jury = match &exp.others {
         Some(ExperimentMetadata::Jury { jury }) => jury,
         _ => return Ok(()),
@@ -480,7 +531,12 @@ pub fn export_jury_csv(
 
     let n_experts = jury.experts.individuals.len();
     let avg_k = if n_experts > 0 {
-        let ks: Vec<f64> = jury.experts.individuals.iter().map(|i| i.k as f64).collect();
+        let ks: Vec<f64> = jury
+            .experts
+            .individuals
+            .iter()
+            .map(|i| i.k as f64)
+            .collect();
         mean_and_std(&ks).0
     } else {
         0.0
@@ -513,56 +569,78 @@ pub fn export_jury_csv(
     };
 
     // Force-compute test metrics with all additional metrics
-    let (test_auc, test_acc, test_sens, test_spec, test_f1, test_mcc, test_ppv, test_npv, test_gmean, test_rej) =
-        if let Some(ref td) = exp.test_data {
-            let (pred_classes, scores) = jury.predict(td);
-            let filtered: Vec<(f64, u8, u8)> = scores
-                .iter()
-                .zip(pred_classes.iter())
-                .zip(td.y.iter())
-                .filter_map(|((&score, &pred_class), &true_class)| {
-                    if score >= 0.0 && score <= 1.0 && pred_class != 2 {
-                        Some((score, pred_class, true_class))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+    let (
+        test_auc,
+        test_acc,
+        test_sens,
+        test_spec,
+        test_f1,
+        test_mcc,
+        test_ppv,
+        test_npv,
+        test_gmean,
+        test_rej,
+    ) = if let Some(ref td) = exp.test_data {
+        let (pred_classes, scores) = jury.predict(td);
+        let filtered: Vec<(f64, u8, u8)> = scores
+            .iter()
+            .zip(pred_classes.iter())
+            .zip(td.y.iter())
+            .filter_map(|((&score, &pred_class), &true_class)| {
+                if score >= 0.0 && score <= 1.0 && pred_class != 2 {
+                    Some((score, pred_class, true_class))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-            let rejection_rate = pred_classes.iter().filter(|&&c| c == 2).count() as f64
-                / pred_classes.len() as f64;
+        let rejection_rate =
+            pred_classes.iter().filter(|&&c| c == 2).count() as f64 / pred_classes.len() as f64;
 
-            if !filtered.is_empty() {
-                let (scores_f, preds_f, trues_f): (Vec<f64>, Vec<u8>, Vec<u8>) =
-                    filtered.into_iter().fold(
-                        (Vec::new(), Vec::new(), Vec::new()),
-                        |(mut s, mut p, mut t), (sc, pr, tr)| {
-                            s.push(sc);
-                            p.push(pr);
-                            t.push(tr);
-                            (s, p, t)
-                        },
-                    );
-                let auc = compute_auc_from_value(&scores_f, &trues_f);
-                let (acc, sens, spec, add) =
-                    compute_metrics_from_classes(&preds_f, &trues_f, [true; 5]);
-                (
-                    Some(auc), Some(acc), Some(sens), Some(spec),
-                    Some(add.f1_score.unwrap_or(f64::NAN)),
-                    Some(add.mcc.unwrap_or(f64::NAN)),
-                    Some(add.ppv.unwrap_or(f64::NAN)),
-                    Some(add.npv.unwrap_or(f64::NAN)),
-                    Some(add.g_mean.unwrap_or(f64::NAN)),
-                    Some(rejection_rate),
-                )
-            } else {
-                (Some(0.5), Some(0.0), Some(0.0), Some(0.0),
-                 Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(f64::NAN),
-                 Some(rejection_rate))
-            }
+        if !filtered.is_empty() {
+            let (scores_f, preds_f, trues_f): (Vec<f64>, Vec<u8>, Vec<u8>) =
+                filtered.into_iter().fold(
+                    (Vec::new(), Vec::new(), Vec::new()),
+                    |(mut s, mut p, mut t), (sc, pr, tr)| {
+                        s.push(sc);
+                        p.push(pr);
+                        t.push(tr);
+                        (s, p, t)
+                    },
+                );
+            let auc = compute_auc_from_value(&scores_f, &trues_f);
+            let (acc, sens, spec, add) =
+                compute_metrics_from_classes(&preds_f, &trues_f, [true; 5]);
+            (
+                Some(auc),
+                Some(acc),
+                Some(sens),
+                Some(spec),
+                Some(add.f1_score.unwrap_or(f64::NAN)),
+                Some(add.mcc.unwrap_or(f64::NAN)),
+                Some(add.ppv.unwrap_or(f64::NAN)),
+                Some(add.npv.unwrap_or(f64::NAN)),
+                Some(add.g_mean.unwrap_or(f64::NAN)),
+                Some(rejection_rate),
+            )
         } else {
-            (None, None, None, None, None, None, None, None, None, None)
-        };
+            (
+                Some(0.5),
+                Some(0.0),
+                Some(0.0),
+                Some(0.0),
+                Some(f64::NAN),
+                Some(f64::NAN),
+                Some(f64::NAN),
+                Some(f64::NAN),
+                Some(f64::NAN),
+                Some(rejection_rate),
+            )
+        }
+    } else {
+        (None, None, None, None, None, None, None, None, None, None)
+    };
 
     let prefix = common_prefix(exp);
     let params = param_columns(&exp.parameters);
@@ -592,7 +670,18 @@ pub fn export_jury_csv(
         fmt_opt(test_rej),
     ];
 
-    writeln!(writer, "{}", build_row("jury", &prefix, &metrics, n_experts, exp.execution_time, &params))?;
+    writeln!(
+        writer,
+        "{}",
+        build_row(
+            "jury",
+            &prefix,
+            &metrics,
+            n_experts,
+            exp.execution_time,
+            &params
+        )
+    )?;
     Ok(())
 }
 
