@@ -6,7 +6,7 @@ use crate::utils::serde_json_hashmap_numeric;
 use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value};
 use crate::utils::{compute_metrics_from_value, generate_random_vector, shuffle_row};
 use crate::Population;
-use log::debug;
+use log::{debug, error};
 use rand::seq::SliceRandom; // Provides the `choose_multiple` method
 use rand::Rng;
 use rand::SeedableRng;
@@ -150,6 +150,18 @@ pub fn language(language_string: &str) -> u8 {
         "ratio" => RATIO_LANG,
         "generic" | "mcmc_generic" => MCMC_GENERIC_LANG,
         other => panic!("Unrecognized language {}", other),
+    }
+}
+
+/// Converts a language u8 constant back to its string name
+pub fn language_name(lang: u8) -> &'static str {
+    match lang {
+        BINARY_LANG => "binary",
+        TERNARY_LANG => "ternary",
+        POW2_LANG => "pow2",
+        RATIO_LANG => "ratio",
+        MCMC_GENERIC_LANG => "mcmc_generic",
+        _ => "unknown",
     }
 }
 
@@ -1412,13 +1424,44 @@ impl Individual {
             feature_selection.to_vec()
         };
 
-        let k: usize = rng.gen_range(
-            (if k_min > 0 { k_min } else { 1 })..=(if k_max > 0 {
-                min(k_max, chosen_feature_set.len())
-            } else {
-                chosen_feature_set.len()
-            }),
-        );
+        if chosen_feature_set.is_empty() {
+            error!(
+                "No features available for individual generation! \
+                 Language '{}' requires features with class > 0, but none were found among {} selected features. \
+                 Try using a different language or adjusting feature selection criteria.",
+                language_name(language),
+                feature_selection.len()
+            );
+            panic!(
+                "No features available for individual generation with language '{}'!",
+                language_name(language)
+            );
+        }
+
+        let effective_k_min = if k_min > 0 { k_min } else { 1 };
+        let effective_k_max = if k_max > 0 {
+            min(k_max, chosen_feature_set.len())
+        } else {
+            chosen_feature_set.len()
+        };
+
+        if effective_k_min > effective_k_max {
+            error!(
+                "Cannot generate individuals: k_min ({}) exceeds the number of available features ({}) for language '{}'. \
+                 Try lowering k_min or adjusting feature selection criteria.",
+                effective_k_min,
+                chosen_feature_set.len(),
+                language_name(language)
+            );
+            panic!(
+                "Cannot generate individuals: k_min ({}) > available features ({}) for language '{}'",
+                effective_k_min,
+                chosen_feature_set.len(),
+                language_name(language)
+            );
+        }
+
+        let k: usize = rng.gen_range(effective_k_min..=effective_k_max);
 
         // Randomly pick k values
         let random_values = chosen_feature_set.choose_multiple(rng, k as usize);
@@ -1532,12 +1575,21 @@ impl Individual {
             })
             .collect();
 
-        assert!(!valid_pairs.is_empty(), "No features with positive weight!");
+        if valid_pairs.is_empty() {
+            error!(
+                "No features with positive weight among {} selected features! \
+                 Check your feature annotations and prior weights.",
+                feature_selection.len()
+            );
+            panic!("No features with positive weight!");
+        }
 
         let (valid_features, valid_weights): (Vec<_>, Vec<_>) = valid_pairs.into_iter().unzip();
 
         // Number of features to select
-        let k = rng.gen_range(k_min..=k_max).min(valid_features.len());
+        let effective_k_max = k_max.min(valid_features.len());
+        let effective_k_min = k_min.min(effective_k_max);
+        let k = rng.gen_range(effective_k_min..=effective_k_max);
 
         let selected_features: Vec<usize> = valid_features
             .choose_multiple_weighted(rng, k, |&feature_idx| {

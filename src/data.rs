@@ -3,7 +3,7 @@ use crate::utils::{self, serde_json_hashmap_numeric};
 use crate::ChaCha8Rng;
 use fast_float::parse;
 use fishers_exact::fishers_exact;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -1146,7 +1146,24 @@ impl Data {
             self.feature_selection.push(j);
         }
 
-        assert!( self.feature_selection.len()>0, "No feature has been selected, please lower your selection criteria or improve the quality of your data!");
+        if self.feature_selection.is_empty() {
+            error!(
+                "No feature has been selected! Criteria used: method={:?}, min_prevalence={}%, max_adj_pvalue={}, min_feature_value={}. \
+                 Please lower your selection criteria or improve the quality of your data.",
+                param.data.feature_selection_method,
+                param.data.feature_minimal_prevalence_pct,
+                param.data.feature_maximal_adj_pvalue,
+                param.data.feature_minimal_feature_value
+            );
+            panic!(
+                "No feature has been selected! Criteria used: method={:?}, min_prevalence={}%, max_adj_pvalue={}, min_feature_value={}. \
+                 Please lower your selection criteria or improve the quality of your data.",
+                param.data.feature_selection_method,
+                param.data.feature_minimal_prevalence_pct,
+                param.data.feature_maximal_adj_pvalue,
+                param.data.feature_minimal_feature_value
+            );
+        }
 
         info!("{} features selected", self.feature_selection.len());
 

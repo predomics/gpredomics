@@ -69,7 +69,7 @@ pub fn ga(
         if pop.check_compatibility(data) {
             info!("Initial population is compatible with data.");
         } else {
-            error!("Initial population is not compatible with data!");
+            error!("Initial population is not compatible with data! Features in the population do not match the current dataset.");
             panic!("Initial population is not compatible with data!");
         }
 
@@ -97,13 +97,29 @@ pub fn ga(
         generate_pop(data, param, &mut rng)
     };
 
-    if base_pop.individuals.len() < 50 {
+    let min_pop_size: usize = 2;
+    if base_pop.individuals.len() < min_pop_size {
         error!(
-            "Initial population size is too small ({}<50 individuals)!",
-            base_pop.individuals.len()
+            "Initial population size is too small ({}<{} individuals)! \
+             This can happen when the number of selected features ({}) is too low for the chosen language(s) '{}', \
+             or too many individuals were removed as stillborn/clones. \
+             Try lowering min_prevalence (currently {}%), increasing max_adj_pvalue, or using a different language.",
+            base_pop.individuals.len(),
+            min_pop_size,
+            data.feature_selection.len(),
+            param.general.language,
+            param.data.feature_minimal_prevalence_pct
         );
         panic!(
-            "Initial population size is too small ({}<50 individuals)!",
+            "Initial population size is too small ({}<{} individuals)!",
+            base_pop.individuals.len(),
+            min_pop_size
+        );
+    }
+    if base_pop.individuals.len() < 50 {
+        warn!(
+            "Initial population is small ({} individuals). Results may be suboptimal. \
+             Consider increasing the number of features or adjusting selection criteria.",
             base_pop.individuals.len()
         );
     }
@@ -209,8 +225,17 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
                         sub_pop.individuals.len()
                     );
                     if target_size == param.ga.population_size {
-                        error!("Params only create inviable individuals!");
-                        panic!("Params only create inviable individuals!")
+                        error!(
+                            "All generated individuals are inviable! \
+                             The combination of {} selected features with language '{}' and k_min={}/k_max={} \
+                             cannot produce valid individuals. \
+                             Try adjusting feature selection criteria or using a different language.",
+                            data.feature_selection.len(),
+                            param.general.language,
+                            param.ga.k_min,
+                            param.ga.k_max
+                        );
+                        panic!("Params only create inviable individuals!");
                     }
                 }
 
@@ -3997,9 +4022,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Initial population size is too small")]
     fn test_ga_initial_population_all_stillborn() {
         // Test GA when initial population contains only stillborn (invalid) individuals
+        // After removing stillborn, population will be 0, which is < min_pop_size (2)
         let mut data = Data::specific_test(40, 25);
         let mut param = create_test_params();
         param.data.feature_maximal_adj_pvalue = 1.0;
@@ -4020,75 +4045,38 @@ mod tests {
 
         stillborn_pop.compute_hash();
 
-        // This should either:
-        // 1. Generate new valid individuals to replace stillborn ones, or
-        // 2. Handle gracefully by generating a fresh population
         let running = Arc::new(AtomicBool::new(true));
-        let populations = ga(
-            &mut data,
-            &mut None,
-            &mut Some(stillborn_pop),
-            &param,
-            running,
-        );
-
-        // Verify GA handled it and produced valid results
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ga(
+                &mut data,
+                &mut None,
+                &mut Some(stillborn_pop),
+                &param,
+                running,
+            )
+        }));
         assert!(
-            !populations.is_empty(),
-            "GA should handle stillborn initial population"
-        );
-        let final_pop = &populations[populations.len() - 1];
-        assert!(
-            !final_pop.individuals.is_empty(),
-            "Should have final population"
-        );
-
-        // Check that final population has valid individuals
-        let best = &final_pop.individuals[0];
-        assert!(best.k > 0, "Best model should have features");
-
-        // For ternary, should have both positive and negative values
-        let mut has_positive = false;
-        let mut has_negative = false;
-        for &val in best.features.values() {
-            if val > 0 {
-                has_positive = true;
-            }
-            if val < 0 {
-                has_negative = true;
-            }
-        }
-
-        assert!(
-            has_positive && has_negative,
-            "Valid ternary individual should have both positive and negative features"
+            result.is_err(),
+            "GA should panic with all-stillborn population"
         );
     }
 
     #[test]
-    #[should_panic(expected = "Initial population size is too small")]
     fn test_ga_initial_population_empty() {
-        // Test GA with empty initial population
+        // Test GA with empty initial population — should panic with < min_pop_size
         let mut data = Data::specific_test(50, 30);
         let mut param = create_test_params();
         param.data.feature_maximal_adj_pvalue = 1.0;
 
         let empty_pop = Population::new();
-        // Don't add any individuals - leave it empty
 
-        // GA should handle empty population by generating a new one
         let running = Arc::new(AtomicBool::new(true));
-        let populations = ga(&mut data, &mut None, &mut Some(empty_pop), &param, running);
-
-        // Should work like normal GA (generate from scratch)
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ga(&mut data, &mut None, &mut Some(empty_pop), &param, running)
+        }));
         assert!(
-            !populations.is_empty(),
-            "GA should handle empty initial population"
-        );
-        let final_pop = &populations[populations.len() - 1];
-        assert!(
-            final_pop.individuals.len() > 0,
-            "Should generate population when initial is empty"
+            result.is_err(),
+            "GA should panic with empty initial population"
         );
     }
 

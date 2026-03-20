@@ -155,10 +155,28 @@ fn main() {
         running.load(Ordering::Relaxed)
     );
 
+    // Suppress default panic backtrace — errors are already logged via error!() macro
+    std::panic::set_hook(Box::new(|_| {}));
+
     let thread_param = param.clone();
     let handle = thread::spawn(move || gpredomics::run(&thread_param, running_clone));
 
-    let exp = handle.join().expect("Thread panicked!");
+    let exp = match handle.join() {
+        Ok(exp) => exp,
+        Err(panic_info) => {
+            // Extract panic message for clean display
+            let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else {
+                "Unknown error".to_string()
+            };
+            error!("Execution failed: {}", msg);
+            logger.flush();
+            std::process::exit(1);
+        }
+    };
 
     cinfo!(param.general.display_colorful, "{}", exp.display_results());
 
