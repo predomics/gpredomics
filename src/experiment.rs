@@ -754,11 +754,30 @@ impl Experiment {
 
         jury = Jury::new_from_param(&voting_pop, &self.train_data, &self.parameters);
 
-        if jury.experts.individuals.len() > 1 {
+        let n_experts = jury.experts.individuals.len();
+        if n_experts >= 1 {
+            if n_experts == 1 {
+                warn!(
+                    "Jury has only 1 expert. Voting will return this expert's predictions. \
+                     Consider relaxing min_perf (currently {:.2}), min_diversity (currently {:.1}%), \
+                     or fbm_ci_alpha (currently {:.2}) to include more experts.",
+                    self.parameters.voting.min_perf,
+                    self.parameters.voting.min_diversity,
+                    self.parameters.voting.fbm_ci_alpha
+                );
+            }
             jury.evaluate(&self.train_data);
-            self.others = Some(ExperimentMetadata::Jury { jury: jury })
+            self.others = Some(ExperimentMetadata::Jury { jury })
         } else {
-            warn!("An informative vote is requiring more than one expert!")
+            warn!(
+                "No expert could be selected for the jury! FBM had {} models but all were filtered out. \
+                 Try lowering min_perf (currently {:.2}), min_diversity (currently {:.1}%), \
+                 or fbm_ci_alpha (currently {:.2}).",
+                voting_pop.individuals.len(),
+                self.parameters.voting.min_perf,
+                self.parameters.voting.min_diversity,
+                self.parameters.voting.fbm_ci_alpha
+            );
         }
     }
 }

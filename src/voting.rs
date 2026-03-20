@@ -5,7 +5,7 @@ use crate::param::Param;
 use crate::population::Population;
 use crate::utils::{compute_auc_from_value, compute_metrics_from_classes};
 use crate::Individual;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 
 //-----------------------------------------------------------------------------
@@ -119,17 +119,31 @@ impl Jury {
             experts.individuals.retain(|expert| {
                 expert.sensitivity >= *min_perf && expert.specificity >= *min_perf
             });
-            debug!("Judges filtered for minimum sensitivity and specificity: {}/{} individuals retained", experts.individuals.len(), n);
+            let removed = n - experts.individuals.len();
+            if removed > 0 {
+                info!(
+                    "Jury min_perf filter (>={:.2}): {}/{} experts removed ({} retained)",
+                    min_perf,
+                    removed,
+                    n,
+                    experts.individuals.len()
+                );
+            }
         }
 
         if *min_diversity > 0.0 {
             let n = experts.individuals.len();
             experts = experts.filter_by_signed_jaccard_dissimilarity(*min_diversity, true);
-            debug!(
-                "Judges filtered for diversity: {}/{} individuals retained",
-                experts.individuals.len(),
-                n
-            );
+            let removed = n - experts.individuals.len();
+            if removed > 0 {
+                info!(
+                    "Jury min_diversity filter (>={:.1}%): {}/{} experts removed ({} retained)",
+                    min_diversity,
+                    removed,
+                    n,
+                    experts.individuals.len()
+                );
+            }
         }
 
         if voting_threshold < &0.0 || voting_threshold > &1.0 {
@@ -201,10 +215,18 @@ impl Jury {
         // Make voting_pop an owned Population so we don't take references to temporaries
         let mut voting_pop: Population =
             if param.voting.fbm_ci_alpha <= 1.0 && param.voting.fbm_ci_alpha >= 0.0 {
-                pop.select_best_population_with_method(
+                let selected = pop.select_best_population_with_method(
                     param.voting.fbm_ci_alpha,
                     &param.voting.fbm_ci_method,
-                )
+                );
+                info!(
+                    "Jury FBM CI selection (alpha={:.2}, method={:?}): {}/{} models retained",
+                    param.voting.fbm_ci_alpha,
+                    param.voting.fbm_ci_method,
+                    selected.individuals.len(),
+                    pop.individuals.len()
+                );
+                selected
             } else {
                 pop.clone()
             };

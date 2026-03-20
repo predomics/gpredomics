@@ -33,6 +33,7 @@ algorithm,\
 language,\
 data_type,\
 fit_function,\
+n_features_total,\
 n_features_selected,\
 n_train_samples,\
 n_test_samples,\
@@ -183,6 +184,7 @@ fn common_prefix(exp: &Experiment) -> Vec<String> {
         p.general.language.clone(),
         p.general.data_type.clone(),
         format!("{:?}", p.general.fit),
+        exp.train_data.feature_len.to_string(),
         exp.train_data.feature_selection.len().to_string(),
         exp.train_data.sample_len.to_string(),
         n_test.to_string(),
