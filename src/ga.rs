@@ -4145,4 +4145,47 @@ mod tests {
             "Best model should be valid"
         );
     }
+
+    #[test]
+    fn test_ga_reproducibility_same_seed() {
+        // Run GA twice with the same seed and verify identical results
+        let run_ga_once = || {
+            let mut data = Data::specific_significant_test(50, 50);
+            let mut param = create_test_params();
+            param.data.feature_maximal_adj_pvalue = 1.0;
+            param.ga.population_size = 100;
+            param.ga.max_epochs = 20;
+            param.ga.min_epochs = 20;
+            param.general.seed = 42;
+            param.general.language = "ternary".to_string();
+
+            let running = Arc::new(AtomicBool::new(true));
+            let populations = ga(&mut data, &mut None, &mut None, &param, running);
+
+            let final_pop = &populations[populations.len() - 1];
+            let best = &final_pop.individuals[0];
+            (best.fit, best.auc, best.k, best.hash, best.features.clone())
+        };
+
+        let (fit1, auc1, k1, hash1, features1) = run_ga_once();
+        let (fit2, auc2, k2, hash2, features2) = run_ga_once();
+
+        assert_eq!(
+            fit1, fit2,
+            "Fitness should be identical across runs with same seed"
+        );
+        assert_eq!(
+            auc1, auc2,
+            "AUC should be identical across runs with same seed"
+        );
+        assert_eq!(k1, k2, "k should be identical across runs with same seed");
+        assert_eq!(
+            hash1, hash2,
+            "Hash should be identical across runs with same seed"
+        );
+        assert_eq!(
+            features1, features2,
+            "Features should be identical across runs with same seed"
+        );
+    }
 }

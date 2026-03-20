@@ -1014,7 +1014,9 @@ impl Population {
             self.individuals[0].hash != 0,
             "Hash should be computed to allow Individual selection"
         );
-        self.individuals.par_iter().find_any(|ind| ind.hash == hash)
+        self.individuals
+            .par_iter()
+            .find_first(|ind| ind.hash == hash)
     }
 
     /// Computes Mean Decreased Accuracy (MDA) feature importance for the population.
@@ -1374,11 +1376,13 @@ impl Population {
             .filter(|group| !group.is_empty())
             .map(|group| {
                 let mut sorted_indices = group.clone();
-                sorted_indices.par_sort_unstable_by(|&a, &b| {
-                    self.individuals[b]
+                sorted_indices.sort_by(|&a, &b| {
+                    let fit_cmp = self.individuals[b]
                         .fit
                         .partial_cmp(&self.individuals[a].fit)
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .unwrap_or(std::cmp::Ordering::Equal);
+                    // Deterministic tie-breaking by hash (descending) when fitness is equal
+                    fit_cmp.then(self.individuals[b].hash.cmp(&self.individuals[a].hash))
                 });
 
                 let mut filtered_indices = Vec::with_capacity(sorted_indices.len());
