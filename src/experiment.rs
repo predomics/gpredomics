@@ -260,6 +260,10 @@ impl ImportanceCollection {
         let mut individual_importances = Vec::new();
 
         for imp in &self.importances {
+            // Only display MDA importances in terminal (other types are in serialized output)
+            if imp.importance_type != ImportanceType::MDA {
+                continue;
+            }
             match imp.scope {
                 ImportanceScope::Collection => collection_importances.push(imp),
                 ImportanceScope::Population { .. } => population_importances.push(imp),
@@ -410,6 +414,24 @@ impl Experiment {
                 error!("CV fold IDs are None but expected for CV importance calculation");
             }
         }
+        // Always add feature statistics (prevalence + coefficient) from the final population
+        // These are cheap to compute and provide structural information about feature usage
+        if let Some(ref final_pop) = self.final_population {
+            let fbm = final_pop.select_best_population_with_method(
+                self.parameters.cv.cv_best_models_ci_alpha,
+                &self.parameters.cv.cv_fbm_ci_method,
+            );
+            let stats = fbm.compute_pop_feature_statistics(None);
+            let n_features = stats.importances.len() / 2;
+            if let Some(ref mut ic) = self.importance_collection {
+                ic.importances.extend(stats.importances);
+            }
+            info!(
+                "Feature statistics computed: prevalence + coefficient for {} features",
+                n_features
+            );
+        }
+
         info!("Importance computation complete");
     }
 

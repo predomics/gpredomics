@@ -1220,6 +1220,121 @@ impl Population {
         }
     }
 
+    /// Computes population-level feature statistics: prevalence, coefficient sign distribution,
+    /// and coefficient absolute values. These complement MDA importance with structural information
+    /// about how features are used across the population.
+    ///
+    /// Returns an ImportanceCollection containing:
+    /// - PrevalencePop: feature prevalence (fraction of models using each feature)
+    /// - Coefficient: mean absolute coefficient (useful for pow2 language)
+    ///
+    /// The `direction` field encodes the dominant sign:
+    /// - 0 = predominantly negative (>66% negative)
+    /// - 1 = predominantly positive (>66% positive)
+    /// - 2 = mixed
+    ///
+    /// The `scope_pct` field stores the prevalence (same as PrevalencePop).
+    /// The `dispersion` field stores the coefficient sign entropy (0 = pure, 1 = mixed).
+    pub fn compute_pop_feature_statistics(
+        &self,
+        population_id: Option<usize>,
+    ) -> ImportanceCollection {
+        let n = self.individuals.len() as f64;
+        if n == 0.0 {
+            return ImportanceCollection {
+                importances: Vec::new(),
+            };
+        }
+
+        // Collect feature statistics across all individuals
+        let mut feature_count: HashMap<usize, usize> = HashMap::new();
+        let mut feature_pos_count: HashMap<usize, usize> = HashMap::new();
+        let mut feature_neg_count: HashMap<usize, usize> = HashMap::new();
+        let mut feature_abs_values: HashMap<usize, Vec<f64>> = HashMap::new();
+
+        for ind in &self.individuals {
+            for (&feat_idx, &coef) in &ind.features {
+                *feature_count.entry(feat_idx).or_insert(0) += 1;
+                if coef > 0 {
+                    *feature_pos_count.entry(feat_idx).or_insert(0) += 1;
+                } else if coef < 0 {
+                    *feature_neg_count.entry(feat_idx).or_insert(0) += 1;
+                }
+                feature_abs_values
+                    .entry(feat_idx)
+                    .or_insert_with(Vec::new)
+                    .push(coef.unsigned_abs() as f64);
+            }
+        }
+
+        let mut importances = Vec::new();
+        let scope_id = population_id.unwrap_or(0);
+
+        for (&feat_idx, &count) in &feature_count {
+            let prevalence = count as f64 / n;
+            let pos = *feature_pos_count.get(&feat_idx).unwrap_or(&0) as f64;
+            let neg = *feature_neg_count.get(&feat_idx).unwrap_or(&0) as f64;
+            let total = pos + neg;
+
+            // Dominant sign direction: 0=neg, 1=pos, 2=mixed
+            let direction = if total == 0.0 {
+                2
+            } else if pos / total > 0.66 {
+                1
+            } else if neg / total > 0.66 {
+                0
+            } else {
+                2
+            };
+
+            // Sign purity: 0 = perfectly pure, 1 = perfectly mixed
+            let purity = if total == 0.0 {
+                0.0
+            } else {
+                let p = pos / total;
+                // Binary entropy: -p*log2(p) - (1-p)*log2(1-p), normalized to [0,1]
+                if p == 0.0 || p == 1.0 {
+                    0.0
+                } else {
+                    -(p * p.log2() + (1.0 - p) * (1.0 - p).log2())
+                }
+            };
+
+            // Prevalence importance
+            importances.push(Importance {
+                importance_type: ImportanceType::PrevalencePop,
+                feature_idx: feat_idx,
+                scope: ImportanceScope::Population { id: scope_id },
+                aggreg_method: None,
+                importance: prevalence,
+                is_scaled: false,
+                dispersion: 0.0,
+                scope_pct: prevalence,
+                direction: Some(direction),
+            });
+
+            // Coefficient absolute value importance (mean abs coef across models that use the feature)
+            if let Some(abs_vals) = feature_abs_values.get(&feat_idx) {
+                let (mean_abs, std_abs) = mean_and_std(abs_vals);
+                importances.push(Importance {
+                    importance_type: ImportanceType::Coefficient,
+                    feature_idx: feat_idx,
+                    scope: ImportanceScope::Population { id: scope_id },
+                    aggreg_method: Some(ImportanceAggregation::mean),
+                    importance: mean_abs,
+                    is_scaled: false,
+                    dispersion: std_abs,
+                    scope_pct: prevalence,
+                    direction: Some(direction),
+                });
+            }
+        }
+
+        importances.sort_by_key(|imp| imp.feature_idx);
+
+        ImportanceCollection { importances }
+    }
+
     /// Performs Bayesian prediction by averaging the predictions of all individuals in the population.
     ///
     /// # Arguments
