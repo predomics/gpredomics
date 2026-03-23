@@ -213,23 +213,31 @@ impl Jury {
     /// If `prune_before_voting` is set in `param`, experts will be pruned based on MDA before creating the Jury
     pub fn new_from_param(pop: &Population, data: &Data, param: &Param) -> Self {
         // Make voting_pop an owned Population so we don't take references to temporaries
-        let mut voting_pop: Population =
-            if param.voting.fbm_ci_alpha <= 1.0 && param.voting.fbm_ci_alpha >= 0.0 {
-                let selected = pop.select_best_population_with_method(
-                    param.voting.fbm_ci_alpha,
-                    &param.voting.fbm_ci_method,
-                );
+        let mut voting_pop: Population = if param.voting.use_fbm
+            && param.voting.fbm_ci_alpha >= 0.0
+            && param.voting.fbm_ci_alpha <= 1.0
+        {
+            let selected = pop.select_best_population_with_method(
+                param.voting.fbm_ci_alpha,
+                &param.voting.fbm_ci_method,
+            );
+            info!(
+                "Jury FBM CI selection (alpha={:.2}, method={:?}): {}/{} models retained",
+                param.voting.fbm_ci_alpha,
+                param.voting.fbm_ci_method,
+                selected.individuals.len(),
+                pop.individuals.len()
+            );
+            selected
+        } else {
+            if !param.voting.use_fbm {
                 info!(
-                    "Jury FBM CI selection (alpha={:.2}, method={:?}): {}/{} models retained",
-                    param.voting.fbm_ci_alpha,
-                    param.voting.fbm_ci_method,
-                    selected.individuals.len(),
+                    "FBM selection disabled (use_fbm=false). Using full population ({} models).",
                     pop.individuals.len()
                 );
-                selected
-            } else {
-                pop.clone()
-            };
+            }
+            pop.clone()
+        };
 
         if param.voting.prune_before_voting {
             debug!("Pruning experts using MDA resulting from 1000 permutations...");

@@ -257,6 +257,8 @@ pub struct CV {
 pub struct Voting {
     #[serde(default = "false_default")]
     pub vote: bool,
+    #[serde(default = "true_default")]
+    pub use_fbm: bool,
     #[serde(default = "half_default")]
     pub min_perf: f64,
     #[serde(default = "diversity_voting_default")]
@@ -573,6 +575,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
 
     let valid_voting_keys: HashSet<&str> = [
         "vote",
+        "use_fbm",
         "min_perf",
         "min_diversity",
         "fbm_ci_alpha",
