@@ -1255,14 +1255,18 @@ impl Population {
         for ind in &self.individuals {
             for (&feat_idx, &coef) in &ind.features {
                 *feature_count.entry(feat_idx).or_insert(0) += 1;
-                if coef > 0 {
-                    *feature_pos_count.entry(feat_idx).or_insert(0) += 1;
-                } else if coef < 0 {
-                    *feature_neg_count.entry(feat_idx).or_insert(0) += 1;
+                match coef.cmp(&0) {
+                    std::cmp::Ordering::Greater => {
+                        *feature_pos_count.entry(feat_idx).or_insert(0) += 1;
+                    }
+                    std::cmp::Ordering::Less => {
+                        *feature_neg_count.entry(feat_idx).or_insert(0) += 1;
+                    }
+                    std::cmp::Ordering::Equal => {}
                 }
                 feature_abs_values
                     .entry(feat_idx)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(coef.unsigned_abs() as f64);
             }
         }
@@ -1288,7 +1292,7 @@ impl Population {
             };
 
             // Sign purity: 0 = perfectly pure, 1 = perfectly mixed
-            let purity = if total == 0.0 {
+            let sign_entropy = if total == 0.0 {
                 0.0
             } else {
                 let p = pos / total;
@@ -1308,7 +1312,7 @@ impl Population {
                 aggreg_method: None,
                 importance: prevalence,
                 is_scaled: false,
-                dispersion: 0.0,
+                dispersion: sign_entropy,
                 scope_pct: prevalence,
                 direction: Some(direction),
             });
