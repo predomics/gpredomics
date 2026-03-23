@@ -280,11 +280,20 @@ impl Jury {
         // Apply expert count constraints
         let n = jury.experts.individuals.len();
         if param.voting.max_experts > 0 && n > param.voting.max_experts {
-            debug!(
-                "Jury truncated from {} to {} experts (max_experts)",
-                n, param.voting.max_experts
+            // Ensure odd number of experts for clean majority voting
+            let target = if param.voting.max_experts % 2 == 0
+                && param.voting.max_experts > 1
+                && n > param.voting.max_experts
+            {
+                param.voting.max_experts - 1
+            } else {
+                param.voting.max_experts
+            };
+            info!(
+                "Jury truncated from {} to {} experts (max_experts={})",
+                n, target, param.voting.max_experts
             );
-            jury.experts.individuals.truncate(param.voting.max_experts);
+            jury.experts.individuals.truncate(target);
         }
         if param.voting.min_experts > 0 && jury.experts.individuals.len() < param.voting.min_experts
         {

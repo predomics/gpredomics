@@ -838,11 +838,16 @@ pub fn mutate_ternary(
 ) {
     let p1 = param.ga.mutation_non_null_chance_pct / 200.0;
     let p2 = 2.0 * p1;
+    let k_max = param.ga.k_max;
 
     for i in feature_indices {
         if individual.features.contains_key(&i) {
             individual.k -= 1;
             individual.features.remove(&i);
+        }
+        // Skip addition if already at k_max
+        if k_max > 0 && individual.k >= k_max {
+            continue;
         }
         match rng.gen::<f64>() {
             r if r < p1 => {
@@ -873,11 +878,16 @@ pub fn mutate_binary(
     rng: &mut ChaCha8Rng,
 ) {
     let p1 = param.ga.mutation_non_null_chance_pct / 100.0;
+    let k_max = param.ga.k_max;
 
     for i in feature_indices {
         if individual.features.contains_key(&i) {
             individual.k -= 1;
             individual.features.remove(&i);
+        }
+        // Skip addition if already at k_max
+        if k_max > 0 && individual.k >= k_max {
+            continue;
         }
         match rng.gen::<f64>() {
             r if r < p1 => {
@@ -907,6 +917,7 @@ pub fn mutate_pow2(
     let p2 = 2.0 * p1;
     let p3 = 2.0 * p2;
     let p4 = 3.0 * p2;
+    let k_max = param.ga.k_max;
 
     for i in feature_indices {
         let value = if individual.features.contains_key(&i) {
@@ -915,6 +926,10 @@ pub fn mutate_pow2(
         } else {
             0
         };
+        // Skip addition if already at k_max
+        if k_max > 0 && individual.k >= k_max {
+            continue;
+        }
         match rng.gen::<f64>() {
             r if r < p1 => {
                 individual.k += 1;
