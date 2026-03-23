@@ -289,16 +289,15 @@ impl Population {
     /// ```
     pub fn remove_clone(&mut self) -> u32 {
         let mut clone_number: u32 = 0;
-        let mut unique_individuals: Vec<Individual> = Vec::new();
-        let mut hash_vector: Vec<u64> = Vec::new();
+        let mut unique_individuals: Vec<Individual> = Vec::with_capacity(self.individuals.len());
+        let mut seen_hashes: HashSet<u64> = HashSet::with_capacity(self.individuals.len());
 
         let individuals = mem::take(&mut self.individuals);
         for individual in individuals.into_iter() {
-            if hash_vector.contains(&individual.hash) {
-                clone_number += 1;
-            } else {
-                hash_vector.push(individual.hash);
+            if seen_hashes.insert(individual.hash) {
                 unique_individuals.push(individual);
+            } else {
+                clone_number += 1;
             }
         }
         self.individuals = unique_individuals;

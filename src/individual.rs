@@ -2348,20 +2348,36 @@ impl Individual {
     /// let dissimilarity = individual1.signed_jaccard_dissimilarity_with(&individual2);
     /// ```
     pub fn signed_jaccard_dissimilarity_with(&self, other: &Individual) -> f64 {
-        let signed_set1: HashSet<(usize, i8)> = self
+        // Use sorted vectors instead of HashSets to avoid allocation overhead
+        let mut set1: Vec<(usize, i8)> = self
             .features
             .iter()
-            .map(|(id, coef)| (*id, coef.signum() as i8))
+            .map(|(&id, &coef)| (id, coef.signum()))
             .collect();
+        set1.sort_unstable();
 
-        let signed_set2: HashSet<(usize, i8)> = other
+        let mut set2: Vec<(usize, i8)> = other
             .features
             .iter()
-            .map(|(id, coef)| (*id, coef.signum() as i8))
+            .map(|(&id, &coef)| (id, coef.signum()))
             .collect();
+        set2.sort_unstable();
 
-        let intersection = signed_set1.intersection(&signed_set2).count();
-        let union = signed_set1.union(&signed_set2).count();
+        // Merge-join on sorted arrays: O(n+m) instead of O(n*m)
+        let mut intersection = 0usize;
+        let (mut i, mut j) = (0, 0);
+        while i < set1.len() && j < set2.len() {
+            match set1[i].cmp(&set2[j]) {
+                std::cmp::Ordering::Equal => {
+                    intersection += 1;
+                    i += 1;
+                    j += 1;
+                }
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
+            }
+        }
+        let union = set1.len() + set2.len() - intersection;
 
         if union == 0 {
             return 0.0;
