@@ -27,6 +27,9 @@ pub struct Jury {
     /// Weighting method used for assigning weights to experts
     pub weighting_method: WeightingMethod,
 
+    /// Per-expert specialization (only set when specialized weighting is used)
+    pub specializations: Option<Vec<JudgeSpecialization>>,
+
     /// Weights assigned to each expert after evaluation
     pub weights: Option<Vec<f64>>,
 
@@ -183,6 +186,7 @@ impl Jury {
             voting_threshold: *voting_threshold,
             threshold_window: window,
             weighting_method: weighting_method.clone(),
+            specializations: None,
             weights: None,
             auc: 0.0,
             accuracy: 0.0,
@@ -254,18 +258,19 @@ impl Jury {
             voting_pop = voting_pop.sort();
         }
 
-        // let weighting_method = if param.voting.specialized {
-        //         warn!("Specialized voting mode is experimental");
-        //         if param.voting.specialized_pos_threshold < 0.0 || param.voting.specialized_pos_threshold > 1.0 {
-        //             panic!("Sensitivity threshold must be in [0,1]");
-        //         }
-        //         if param.voting.specialized_neg_threshold < 0.0 || param.voting.specialized_neg_threshold > 1.0 {
-        //             panic!("Specificity threshold must be in [0,1]");
-        //         }
-        //         WeightingMethod::Specialized {sensitivity_threshold: param.voting.specialized_pos_threshold, specificity_threshold: param.voting.specialized_neg_threshold}
-        //     } else {
-        //         WeightingMethod::Uniform
-        //     };
+        let weighting_method = if param.voting.specialized {
+            info!(
+                "Specialized voting: sensitivity_threshold={:.2}, specificity_threshold={:.2}",
+                param.voting.specialized_sensitivity_threshold,
+                param.voting.specialized_specificity_threshold
+            );
+            WeightingMethod::Specialized {
+                sensitivity_threshold: param.voting.specialized_sensitivity_threshold,
+                specificity_threshold: param.voting.specialized_specificity_threshold,
+            }
+        } else {
+            WeightingMethod::Uniform
+        };
 
         let mut jury = Jury::new(
             &voting_pop,
@@ -274,7 +279,7 @@ impl Jury {
             &param.voting.method,
             &param.voting.method_threshold,
             &param.voting.threshold_windows_pct,
-            &WeightingMethod::Uniform,
+            &weighting_method,
         );
 
         // Apply expert count constraints
@@ -546,13 +551,48 @@ impl Jury {
     /// # Returns
     ///
     /// A vector of weights corresponding to each expert
-    fn compute_weights_by_method(&self, _data: &Data) -> Vec<f64> {
+    fn compute_weights_by_method(&mut self, _data: &Data) -> Vec<f64> {
         match &self.weighting_method {
-            WeightingMethod::Uniform => vec![1.0; self.experts.individuals.len()],
+            WeightingMethod::Uniform => {
+                self.specializations = None;
+                vec![1.0; self.experts.individuals.len()]
+            }
             WeightingMethod::Specialized {
                 sensitivity_threshold,
                 specificity_threshold,
-            } => self.compute_group_strict_weights(*sensitivity_threshold, *specificity_threshold),
+            } => {
+                let sens_t = *sensitivity_threshold;
+                let spec_t = *specificity_threshold;
+                // Compute and store specializations for class-restricted voting
+                let specs: Vec<JudgeSpecialization> = self
+                    .experts
+                    .individuals
+                    .iter()
+                    .map(|e| self.get_expert_specialization(e, sens_t, spec_t))
+                    .collect();
+
+                let mut pos = 0usize;
+                let mut neg = 0usize;
+                let mut bal = 0usize;
+                for s in &specs {
+                    match s {
+                        JudgeSpecialization::PositiveSpecialist => pos += 1,
+                        JudgeSpecialization::NegativeSpecialist => neg += 1,
+                        JudgeSpecialization::Balanced => bal += 1,
+                        JudgeSpecialization::Ineffective => {}
+                    }
+                }
+                info!(
+                    "Expert specializations: {} positive, {} negative, {} balanced, {} ineffective",
+                    pos,
+                    neg,
+                    bal,
+                    self.experts.individuals.len() - pos - neg - bal
+                );
+
+                self.specializations = Some(specs);
+                self.compute_group_strict_weights(sens_t, spec_t)
+            }
         }
     }
 
@@ -619,15 +659,26 @@ impl Jury {
                     let prediction = expert_pred[sample_index];
                     let weight = weights[expert_idx];
 
-                    // Only count non-abstaining votes
-                    if weight > 0.0 && prediction != 2 {
-                        effective_total_weight += weight;
+                    // Only count non-abstaining votes with positive weight
+                    if weight <= 0.0 || prediction == 2 {
+                        continue;
+                    }
 
-                        if prediction == 1 {
-                            weighted_positive += weight;
-                        } else if prediction == 0 {
-                            weighted_negative += weight;
+                    // Class-restricted voting: specialists only vote on their class
+                    if let Some(ref specs) = self.specializations {
+                        match specs[expert_idx] {
+                            JudgeSpecialization::PositiveSpecialist if prediction == 0 => continue,
+                            JudgeSpecialization::NegativeSpecialist if prediction == 1 => continue,
+                            JudgeSpecialization::Ineffective => continue,
+                            _ => {}
                         }
+                    }
+
+                    effective_total_weight += weight;
+                    if prediction == 1 {
+                        weighted_positive += weight;
+                    } else if prediction == 0 {
+                        weighted_negative += weight;
                     }
                 }
             }
@@ -715,6 +766,20 @@ impl Jury {
                     }
 
                     let weight = weights[expert_idx];
+                    if weight == 0.0 {
+                        continue;
+                    }
+
+                    // Class-restricted voting: specialists only vote on their class
+                    if let Some(ref specs) = self.specializations {
+                        match specs[expert_idx] {
+                            JudgeSpecialization::PositiveSpecialist if vote == 0 => continue,
+                            JudgeSpecialization::NegativeSpecialist if vote == 1 => continue,
+                            JudgeSpecialization::Ineffective => continue,
+                            _ => {}
+                        }
+                    }
+
                     total_weight += weight;
                     if vote == 1 {
                         weighted_positive += weight;

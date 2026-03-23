@@ -281,6 +281,19 @@ pub struct Voting {
     pub min_experts: usize,
     #[serde(default = "uzero_default")]
     pub max_experts: usize,
+    /// Enable specialized weighting: experts are classified as PositiveSpecialist,
+    /// NegativeSpecialist, Balanced, or Ineffective based on their sensitivity/specificity.
+    /// Specialists only vote on their class; Balanced experts vote on both.
+    #[serde(default = "false_default")]
+    pub specialized: bool,
+    /// Sensitivity threshold for specialist classification (default 0.7).
+    /// Experts with sensitivity >= threshold are positive specialists.
+    #[serde(default = "specialist_threshold_default")]
+    pub specialized_sensitivity_threshold: f64,
+    /// Specificity threshold for specialist classification (default 0.7).
+    /// Experts with specificity >= threshold are negative specialists.
+    #[serde(default = "specialist_threshold_default")]
+    pub specialized_specificity_threshold: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -587,6 +600,9 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "fbm_ci_method",
         "min_experts",
         "max_experts",
+        "specialized",
+        "specialized_sensitivity_threshold",
+        "specialized_specificity_threshold",
     ]
     .iter()
     .cloned()
@@ -985,6 +1001,9 @@ fn n_permutations_mda_default() -> usize {
 }
 fn importance_aggregation_default() -> ImportanceAggregation {
     ImportanceAggregation::mean
+}
+fn specialist_threshold_default() -> f64 {
+    0.7
 }
 fn fit_default() -> FitFunction {
     FitFunction::auc
