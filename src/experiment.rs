@@ -296,6 +296,19 @@ impl ImportanceCollection {
 // Experiment structures and methods
 //-----------------------------------------------------------------------------
 
+/// Per-feature pheromone values from ACO
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PheromoneEntry {
+    /// Feature index
+    pub feature_idx: usize,
+    /// Pheromone for positive coefficient
+    pub tau_positive: f64,
+    /// Pheromone for negative coefficient
+    pub tau_negative: f64,
+    /// Total pheromone (positive + negative)
+    pub tau_total: f64,
+}
+
 /// Experiment associated metadata
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ExperimentMetadata {
@@ -308,6 +321,11 @@ pub enum ExperimentMetadata {
     Jury {
         /// Jury population
         jury: Jury,
+    },
+    /// ACO pheromone data
+    ACOPheromone {
+        /// Final pheromone values per feature (sorted by total pheromone descending)
+        pheromone: Vec<PheromoneEntry>,
     },
 }
 
@@ -346,6 +364,10 @@ pub struct Experiment {
 
     /// If available, other metadata associated with the experiment
     pub others: Option<ExperimentMetadata>,
+
+    /// ACO pheromone matrix (only for ACO runs)
+    #[serde(default)]
+    pub aco_pheromone: Option<Vec<PheromoneEntry>>,
 }
 
 impl Experiment {
@@ -1100,6 +1122,7 @@ mod tests {
                 importance_collection: None,
                 execution_time: 42.5,
                 others: None,
+                aco_pheromone: None,
             }
         }
     }

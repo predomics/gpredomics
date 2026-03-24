@@ -243,7 +243,14 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         parameters: param.clone(),
 
         cv_folds_ids: cv_folds_ids,
-        others: meta,
+        others: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { .. } => None,
+            _ => Some(m.clone()),
+        }),
+        aco_pheromone: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { pheromone } => Some(pheromone.clone()),
+            _ => None,
+        }),
     };
 
     if param.importance.compute_importance {
@@ -386,7 +393,14 @@ pub fn run_on_data(
         parameters: param.clone(),
 
         cv_folds_ids: cv_folds_ids,
-        others: meta,
+        others: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { .. } => None,
+            _ => Some(m.clone()),
+        }),
+        aco_pheromone: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { pheromone } => Some(pheromone.clone()),
+            _ => None,
+        }),
     };
 
     if param.importance.compute_importance && exp.parameters.general.algo != "mcmc" {
@@ -536,7 +550,14 @@ pub fn run_pop_and_data(
         parameters: param.clone(),
 
         cv_folds_ids: cv_folds_ids,
-        others: meta,
+        others: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { .. } => None,
+            _ => Some(m.clone()),
+        }),
+        aco_pheromone: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { pheromone } => Some(pheromone.clone()),
+            _ => None,
+        }),
     };
 
     if param.importance.compute_importance && exp.parameters.general.algo != "mcmc" {
@@ -624,7 +645,7 @@ pub fn run_training(
         }
         "aco" => {
             cinfo!(param.general.display_colorful, "Training using Ant Colony Optimization\n-----------------------------------------------------");
-            (collection, meta) = (aco_run(data, &mut None, initial_pop, &param, running), None);
+            (collection, meta) = aco_run(data, &mut None, initial_pop, &param, running);
             final_population = collection[collection.len() - 1].clone()
         }
         _ => {

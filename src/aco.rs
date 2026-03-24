@@ -11,6 +11,7 @@
 //! - Natural diversity: probabilistic construction avoids premature convergence
 
 use crate::data::Data;
+use crate::experiment::{ExperimentMetadata, PheromoneEntry};
 use crate::ga::{remove_out_of_bounds, remove_stillborn};
 use crate::individual::{self, Individual};
 use crate::param::Param;
@@ -246,8 +247,12 @@ fn local_search_remove(individual: &mut Individual, data: &Data, param: &Param) 
 
     let features: Vec<(usize, i8)> = individual.features.iter().map(|(&k, &v)| (k, v)).collect();
     let baseline_scores = individual.evaluate(data);
-    let (baseline_auc, _, _, _, _, _) =
-        crate::utils::compute_roc_and_metrics_from_value(&baseline_scores, &data.y, &crate::param::FitFunction::auc, None);
+    let (baseline_auc, _, _, _, _, _) = crate::utils::compute_roc_and_metrics_from_value(
+        &baseline_scores,
+        &data.y,
+        &crate::param::FitFunction::auc,
+        None,
+    );
 
     let mut improved = false;
     for &(feat, coef) in &features {
@@ -256,8 +261,12 @@ fn local_search_remove(individual: &mut Individual, data: &Data, param: &Param) 
         individual.k -= 1;
 
         let scores = individual.evaluate(data);
-        let (auc, _, _, _, _, _) =
-            crate::utils::compute_roc_and_metrics_from_value(&scores, &data.y, &crate::param::FitFunction::auc, None);
+        let (auc, _, _, _, _, _) = crate::utils::compute_roc_and_metrics_from_value(
+            &scores,
+            &data.y,
+            &crate::param::FitFunction::auc,
+            None,
+        );
 
         // Apply k_penalty to compare fairly
         let penalized_baseline = baseline_auc - param.general.k_penalty * (individual.k + 1) as f64;
@@ -281,14 +290,14 @@ fn display_aco_epoch_legend() -> String {
     "Legend: #iteration | best: Language:DataType  0 ▒▒▒▒▒ 1 [k=features, age=iterations_since_improvement]".to_string()
 }
 
-/// Main ACO entry point. Same signature as `ga()` for seamless integration.
+/// Main ACO entry point. Returns populations and pheromone metadata.
 pub fn aco(
     data: &mut Data,
     _test_data: &mut Option<Data>,
     _initial_pop: &mut Option<Population>,
     param: &Param,
     running: Arc<AtomicBool>,
-) -> Vec<Population> {
+) -> (Vec<Population>, Option<ExperimentMetadata>) {
     let time = Instant::now();
 
     // Feature selection (same as GA — avoid data leakage)
@@ -535,7 +544,28 @@ pub fn aco(
         populations.push(empty);
     }
 
-    populations
+    // Export final pheromone matrix sorted by total pheromone (descending)
+    let mut pheromone_entries: Vec<PheromoneEntry> = data
+        .feature_selection
+        .iter()
+        .map(|&f| {
+            let tp = *pheromone.positive.get(&f).unwrap_or(&0.0);
+            let tn = *pheromone.negative.get(&f).unwrap_or(&0.0);
+            PheromoneEntry {
+                feature_idx: f,
+                tau_positive: tp,
+                tau_negative: tn,
+                tau_total: tp + tn,
+            }
+        })
+        .collect();
+    pheromone_entries.sort_by(|a, b| b.tau_total.partial_cmp(&a.tau_total).unwrap());
+
+    let meta = Some(ExperimentMetadata::ACOPheromone {
+        pheromone: pheromone_entries,
+    });
+
+    (populations, meta)
 }
 
 #[cfg(test)]
@@ -557,7 +587,7 @@ mod tests {
         param.aco.min_iterations = 10;
 
         let running = Arc::new(AtomicBool::new(true));
-        let populations = aco(&mut data, &mut None, &mut None, &param, running);
+        let (populations, _meta) = aco(&mut data, &mut None, &mut None, &param, running);
 
         assert!(!populations.is_empty(), "ACO should produce populations");
         let final_pop = &populations[populations.len() - 1];
@@ -589,7 +619,7 @@ mod tests {
             param.aco.min_iterations = 10;
 
             let running = Arc::new(AtomicBool::new(true));
-            let populations = aco(&mut data, &mut None, &mut None, &param, running);
+            let (populations, _meta) = aco(&mut data, &mut None, &mut None, &param, running);
             let best = &populations.last().unwrap().individuals[0];
             (best.fit, best.auc, best.k, best.hash)
         };
@@ -639,7 +669,7 @@ mod tests {
         param.aco.k_max = 20; // Limit model size
 
         let running = Arc::new(AtomicBool::new(true));
-        let populations = aco(&mut data, &mut None, &mut None, &param, running);
+        let (populations, _meta) = aco(&mut data, &mut None, &mut None, &param, running);
         let best = &populations.last().unwrap().individuals[0];
 
         assert!(
