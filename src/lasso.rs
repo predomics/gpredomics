@@ -8,6 +8,7 @@
 //! This provides a baseline: how well can an optimal linear model do
 //! compared to gpredomics's discrete-coefficient heuristics?
 
+use crate::cinfo;
 use crate::data::Data;
 use crate::individual::{self, Individual, BINARY_LANG};
 use crate::param::Param;
