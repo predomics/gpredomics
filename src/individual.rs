@@ -1,7 +1,6 @@
 use crate::bayesian_mcmc::Betas;
 use crate::data::Data;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
-use crate::param::FitFunction;
 use crate::utils::serde_json_hashmap_numeric;
 use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value};
 use crate::utils::{compute_metrics_from_value, generate_random_vector, shuffle_row};
@@ -7418,9 +7417,7 @@ mod cls_refactor_tests {
     use super::*;
     use crate::data::Data;
     use crate::individual::{PREVALENCE_TYPE, TERNARY_LANG};
-    use crate::param::FitFunction;
     use crate::Param;
-    use std::collections::BTreeMap;
 
     #[test]
     fn test_cls_default_values() {
