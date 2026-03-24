@@ -7412,3 +7412,159 @@ mod tests {
         individual.prune_by_importance(&data, 0, 111, Some(0.0), None, 1);
     }
 }
+
+#[cfg(test)]
+mod cls_refactor_tests {
+    use super::*;
+    use crate::data::Data;
+    use crate::individual::{PREVALENCE_TYPE, TERNARY_LANG};
+    use crate::param::FitFunction;
+    use crate::Param;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn test_cls_default_values() {
+        let ind = Individual::new();
+        assert_eq!(ind.cls.auc, 0.0);
+        assert_eq!(ind.cls.sensitivity, 0.0);
+        assert_eq!(ind.cls.specificity, 0.0);
+        assert_eq!(ind.cls.accuracy, 0.0);
+        assert_eq!(ind.cls.threshold, 0.0);
+        assert!(ind.cls.threshold_ci.is_none());
+        assert!(ind.cls.additional.mcc.is_none());
+        assert!(ind.cls.additional.f1_score.is_none());
+    }
+
+    #[test]
+    fn test_cls_field_access_and_mutation() {
+        let mut ind = Individual::new();
+        ind.cls.auc = 0.95;
+        ind.cls.sensitivity = 0.88;
+        ind.cls.specificity = 0.92;
+        ind.cls.accuracy = 0.90;
+        ind.cls.threshold = 0.45;
+        ind.cls.additional.mcc = Some(0.85);
+        ind.fit = 0.94;
+
+        assert_eq!(ind.cls.auc, 0.95);
+        assert_eq!(ind.cls.sensitivity, 0.88);
+        assert_eq!(ind.cls.specificity, 0.92);
+        assert_eq!(ind.cls.accuracy, 0.90);
+        assert_eq!(ind.cls.threshold, 0.45);
+        assert_eq!(ind.cls.additional.mcc, Some(0.85));
+        assert_eq!(ind.fit, 0.94);
+    }
+
+    #[test]
+    fn test_cls_serialization_json_roundtrip() {
+        let mut ind = Individual::new();
+        ind.features.insert(0, 1);
+        ind.features.insert(5, -1);
+        ind.k = 2;
+        ind.cls.auc = 0.85;
+        ind.cls.sensitivity = 0.80;
+        ind.cls.specificity = 0.90;
+        ind.cls.accuracy = 0.85;
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.mcc = Some(0.7);
+        ind.fit = 0.84;
+
+        let json = serde_json::to_string(&ind).unwrap();
+        let deser: Individual = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(ind.cls.auc, deser.cls.auc);
+        assert_eq!(ind.cls.sensitivity, deser.cls.sensitivity);
+        assert_eq!(ind.cls.specificity, deser.cls.specificity);
+        assert_eq!(ind.cls.accuracy, deser.cls.accuracy);
+        assert_eq!(ind.cls.threshold, deser.cls.threshold);
+        assert_eq!(ind.cls.additional.mcc, deser.cls.additional.mcc);
+        assert_eq!(ind.fit, deser.fit);
+        assert_eq!(ind.features, deser.features);
+    }
+
+    #[test]
+    fn test_cls_serialization_bincode_roundtrip() {
+        let mut ind = Individual::new();
+        ind.features.insert(3, 1);
+        ind.k = 1;
+        ind.cls.auc = 0.92;
+        ind.cls.sensitivity = 0.85;
+        ind.cls.threshold_ci = Some(ThresholdCI {
+            lower: 0.4,
+            upper: 0.6,
+            rejection_rate: 0.05,
+        });
+
+        let encoded = bincode::serialize(&ind).unwrap();
+        let decoded: Individual = bincode::deserialize(&encoded).unwrap();
+
+        assert_eq!(ind.cls.auc, decoded.cls.auc);
+        assert_eq!(ind.cls.sensitivity, decoded.cls.sensitivity);
+        assert!(decoded.cls.threshold_ci.is_some());
+        let ci = decoded.cls.threshold_ci.unwrap();
+        assert_eq!(ci.lower, 0.4);
+        assert_eq!(ci.upper, 0.6);
+    }
+
+    #[test]
+    fn test_cls_hash_determinism() {
+        let mut ind1 = Individual::new();
+        ind1.features.insert(0, 1);
+        ind1.features.insert(3, -1);
+        ind1.compute_hash();
+
+        let mut ind2 = Individual::new();
+        ind2.features.insert(0, 1);
+        ind2.features.insert(3, -1);
+        ind2.compute_hash();
+
+        // Same features → same hash (cls fields don't affect hash)
+        assert_eq!(ind1.hash, ind2.hash);
+
+        // Different features → different hash
+        let mut ind3 = Individual::new();
+        ind3.features.insert(0, 1);
+        ind3.features.insert(4, -1);
+        ind3.compute_hash();
+        assert_ne!(ind1.hash, ind3.hash);
+    }
+
+    #[test]
+    fn test_cls_clone_independence() {
+        let mut ind = Individual::new();
+        ind.cls.auc = 0.9;
+        ind.cls.sensitivity = 0.85;
+        ind.cls.additional.mcc = Some(0.8);
+
+        let mut clone = ind.clone();
+        clone.cls.auc = 0.5;
+        clone.cls.additional.mcc = Some(0.3);
+
+        // Original unaffected
+        assert_eq!(ind.cls.auc, 0.9);
+        assert_eq!(ind.cls.additional.mcc, Some(0.8));
+        assert_eq!(clone.cls.auc, 0.5);
+    }
+
+    #[test]
+    fn test_evaluate_uses_cls_threshold() {
+        let data = Data::specific_significant_test(30, 20);
+        let mut param = Param::default();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+
+        let mut ind = Individual::new();
+        ind.language = TERNARY_LANG;
+        ind.data_type = PREVALENCE_TYPE;
+        ind.features.insert(0, 1);
+        ind.features.insert(1, -1);
+        ind.k = 2;
+
+        // Evaluate and check cls fields are populated
+        ind.compute_roc_and_metrics(&data, &crate::param::FitFunction::auc, None);
+
+        assert!(ind.cls.auc > 0.0, "AUC should be computed");
+        assert!(ind.cls.sensitivity >= 0.0 && ind.cls.sensitivity <= 1.0);
+        assert!(ind.cls.specificity >= 0.0 && ind.cls.specificity <= 1.0);
+        assert!(ind.cls.accuracy >= 0.0 && ind.cls.accuracy <= 1.0);
+    }
+}
