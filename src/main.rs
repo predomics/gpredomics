@@ -46,7 +46,7 @@ fn main() {
     }
 
     // Initialize the logger
-    let logger = if param.general.log_base.len() > 0 {
+    let logger = if !param.general.log_base.is_empty() {
         Logger::try_with_str(&param.general.log_level) // Set log level (e.g., "info")
             .unwrap()
             .log_to_file(
@@ -117,7 +117,7 @@ fn main() {
     let running_clone = Arc::clone(&running);
     let running_clone_for_signal = Arc::clone(&running);
     let mut signals =
-        Signals::new(&[SIGTERM, SIGHUP, SIGINT]).expect("Failed to set up signal handler");
+        Signals::new([SIGTERM, SIGHUP, SIGINT]).expect("Failed to set up signal handler");
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(param.general.thread_number as usize)
@@ -128,7 +128,7 @@ fn main() {
     let mut soft_kill = false;
     let _signal_thread = thread::spawn(move || {
         for sig in signals.forever() {
-            if soft_kill == false {
+            if !soft_kill {
                 match sig {
                     SIGTERM | SIGHUP | SIGINT => {
                         info!("Received signal: {}", sig);
@@ -189,7 +189,7 @@ fn main() {
         }
     }
 
-    if param.general.save_exp != "".to_string() {
+    if param.general.save_exp != *"" {
         info!("Saving experiment...");
         exp.save_auto(format!("{}_{}", timestamp, &param.general.save_exp))
             .expect("Error while exporting experiment");

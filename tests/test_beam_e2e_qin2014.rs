@@ -165,7 +165,7 @@ fn test_beam_qin2014_basic_run() {
     }
 
     let output = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
         .unwrap();
     let git_hash = String::from_utf8(output.stdout)
@@ -433,7 +433,7 @@ fn test_beam_qin2014_keep_trace() {
     );
     let beam_populations = &experiment.collections[0];
     assert!(
-        beam_populations.len() >= 1,
+        !beam_populations.is_empty(),
         "Should have at least one generation"
     );
 
@@ -1543,7 +1543,7 @@ fn test_beam_qin2014_with_voting() {
 
         // Verify voting results are valid
         assert!(
-            jury.experts.individuals.len() > 0,
+            !jury.experts.individuals.is_empty(),
             "Should have at least one expert"
         );
         assert!(
@@ -1857,7 +1857,7 @@ fn test_beam_qin2014_voting_with_pruning() {
 
         // Verify experts have been selected
         assert!(
-            jury.experts.individuals.len() > 0,
+            !jury.experts.individuals.is_empty(),
             "Should have experts after pruning"
         );
 

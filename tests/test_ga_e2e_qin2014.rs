@@ -139,7 +139,7 @@ fn test_ga_qin2014_basic_run() {
     let experiment = run(&param, running);
 
     let output = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
         .unwrap();
     let git_hash = String::from_utf8(output.stdout)
@@ -471,7 +471,7 @@ fn test_ga_qin2014_feature_selection() {
 
     // Verify feature selection worked
     assert!(
-        experiment.train_data.feature_selection.len() > 0,
+        !experiment.train_data.feature_selection.is_empty(),
         "Should have selected features"
     );
     assert!(
@@ -1448,7 +1448,7 @@ fn test_ga_qin2014_with_voting() {
 
         // Verify voting results are valid
         assert!(
-            jury.experts.individuals.len() > 0,
+            !jury.experts.individuals.is_empty(),
             "Should have at least one expert"
         );
         assert!(
@@ -1757,7 +1757,7 @@ fn test_ga_qin2014_voting_with_pruning() {
 
         // Verify experts have been selected
         assert!(
-            jury.experts.individuals.len() > 0,
+            !jury.experts.individuals.is_empty(),
             "Should have experts after pruning"
         );
 

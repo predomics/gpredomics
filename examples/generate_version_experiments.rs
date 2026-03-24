@@ -25,7 +25,7 @@ fn main() {
 
     let version = env!("CARGO_PKG_VERSION");
     let git_hash = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())

@@ -1,4 +1,3 @@
-use gpredomics;
 use gpredomics::experiment::Experiment;
 use gpredomics::param::Param;
 use std::process::Command;
@@ -66,7 +65,7 @@ fn test_mcmc_basic_run() {
     let experiment = gpredomics::run(&param, running);
 
     let output = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
         .unwrap();
     let git_hash = String::from_utf8(output.stdout)
@@ -87,14 +86,14 @@ fn test_mcmc_basic_run() {
 
     println!("Total MCMC samples: {}", population.individuals.len());
     assert!(
-        population.individuals.len() > 0,
+        !population.individuals.is_empty(),
         "MCMC should generate posterior samples"
     );
 
     // Check individuals have proper structure
     let first_sample = &population.individuals[0];
     assert!(
-        first_sample.features.len() > 0,
+        !first_sample.features.is_empty(),
         "Model should have features"
     );
 
@@ -162,7 +161,7 @@ fn test_mcmc_with_sbs() {
         "Total MCMC samples after SBS: {}",
         population.individuals.len()
     );
-    assert!(population.individuals.len() > 0);
+    assert!(!population.individuals.is_empty());
 
     // Check that features were selected
     let n_features = population.individuals[0].features.len();
@@ -236,7 +235,7 @@ fn test_mcmc_different_lambda() {
 
         results.push((lambda, train_auc, test_auc));
 
-        assert!(population.individuals.len() > 0);
+        assert!(!population.individuals.is_empty());
         assert!(
             train_auc > 0.6 && train_auc <= 1.0,
             "Lambda {} should give valid train AUC: {}",
@@ -289,7 +288,7 @@ fn test_mcmc_different_burn_in() {
             test_auc
         );
 
-        assert!(population.individuals.len() > 0);
+        assert!(!population.individuals.is_empty());
 
         // More burn-in means fewer samples but possibly better convergence
         let expected_samples = param.mcmc.n_iter - n_burn;
@@ -337,7 +336,7 @@ fn test_mcmc_different_data_types() {
             population.individuals[0].cls.auc
         );
 
-        assert!(population.individuals.len() > 0);
+        assert!(!population.individuals.is_empty());
         // AUC may be 0 for MCMC samples
     }
 }
@@ -367,7 +366,7 @@ fn test_mcmc_different_iterations() {
             population.individuals.len()
         );
 
-        assert!(population.individuals.len() > 0);
+        assert!(!population.individuals.is_empty());
 
         // More iterations should generally give more samples (after burn-in)
         let expected_min = (n_iter - param.mcmc.n_burn) / 2; // Allow for thinning
@@ -614,7 +613,7 @@ fn test_mcmc_test_predictions() {
 
     // Check samples exist
     assert!(
-        population.individuals.len() > 0,
+        !population.individuals.is_empty(),
         "Should have posterior samples"
     );
 
@@ -626,7 +625,7 @@ fn test_mcmc_test_predictions() {
             individual.features.len(),
             individual.cls.auc
         );
-        assert!(individual.features.len() > 0, "Should have features");
+        assert!(!individual.features.is_empty(), "Should have features");
     }
 
     println!("MCMC test predictions check completed");
@@ -690,7 +689,7 @@ fn test_mcmc_prevalence_epsilon() {
             population.individuals[0].cls.auc
         );
 
-        assert!(population.individuals.len() > 0);
+        assert!(!population.individuals.is_empty());
     }
 }
 
@@ -728,7 +727,7 @@ fn test_mcmc_sbs_different_nmin() {
             "Should keep at least nmin features"
         );
         assert!(
-            population.individuals.len() > 0,
+            !population.individuals.is_empty(),
             "Should have posterior samples"
         );
     }
@@ -760,7 +759,7 @@ fn test_mcmc_performance_metrics() {
         .collect();
 
     // Check we have samples
-    assert!(aucs.len() > 0, "Should have posterior samples");
+    assert!(!aucs.is_empty(), "Should have posterior samples");
 
     let mean_auc = aucs.iter().sum::<f64>() / aucs.len() as f64;
     let var_auc = aucs.iter().map(|x| (x - mean_auc).powi(2)).sum::<f64>() / aucs.len() as f64;

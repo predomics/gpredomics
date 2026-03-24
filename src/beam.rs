@@ -1394,6 +1394,7 @@ fn create_gpu_assays_for_folds_beam(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::individual::{AdditionalMetrics, ClassificationMetrics};
 
     fn create_test_individual() -> Individual {
         Individual {

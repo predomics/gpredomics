@@ -310,7 +310,7 @@ fn test_results_consistency() {
             let file_name = file_path.file_name().unwrap().to_string_lossy().to_string();
             file_groups
                 .entry(file_name.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((version_name.clone(), file_path));
         }
     }
