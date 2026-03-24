@@ -1243,7 +1243,7 @@ pub fn combine(
         if languages.contains(&BINARY_LANG)
             && (languages.contains(&TERNARY_LANG) || languages.contains(&RATIO_LANG))
         {
-            warn!("Too many features (leading to {} > {} models). Feature ideal count = {}. Keeping {}+{} features ({} {}-associated for Binary)", possible_nb, param.beam.max_nb_of_models, max_nb, features_to_keep_neg.len(), features_to_keep_pos.len(), bin_features_to_keep.len(), data.classes[1]);
+            warn!("Too many features (leading to {} > {} models). Feature ideal count = {}. Keeping {}+{} features ({} {}-associated for Binary)", possible_nb, param.beam.max_nb_of_models, max_nb, features_to_keep_neg.len(), features_to_keep_pos.len(), bin_features_to_keep.len(), data.classes.get(1).unwrap_or(&"class1".to_string()));
             combinations = generate_combinations(&new_features_to_keep, k);
             bin_combinations = generate_combinations(&bin_features_to_keep, k);
             combinations.extend(bin_combinations);
@@ -1251,7 +1251,7 @@ pub fn combine(
             warn!("Too many features (leading to {} > {} models). Feature ideal count = {}. Keeping only {}+{} features.", possible_nb, param.beam.max_nb_of_models, max_nb, features_to_keep_neg.len(), features_to_keep_pos.len());
             combinations = generate_combinations(&new_features_to_keep, k);
         } else {
-            warn!("Too many features (leading to {} > {} models). Feature ideal count = {}. Keeping {} {}-associated features for Binary", possible_nb, param.beam.max_nb_of_models, max_nb, bin_features_to_keep.len(), data.classes[1]);
+            warn!("Too many features (leading to {} > {} models). Feature ideal count = {}. Keeping {} {}-associated features for Binary", possible_nb, param.beam.max_nb_of_models, max_nb, bin_features_to_keep.len(), data.classes.get(1).unwrap_or(&"class1".to_string()));
             combinations = generate_combinations(&bin_features_to_keep, k);
         }
     } else {
