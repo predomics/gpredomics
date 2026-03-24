@@ -381,7 +381,7 @@ pub fn iterative_evolution(
 
         let best_model = &pop.individuals[0];
         if epoch >= param.ga.min_epochs {
-            if epoch - best_model.epoch + 1 > param.ga.max_age_best_model {
+            if epoch.saturating_sub(best_model.epoch) + 1 > param.ga.max_age_best_model {
                 info!("Best model has reached limit age...");
                 need_to_break = true;
             }

@@ -1767,7 +1767,8 @@ pub fn display_epoch(pop: &Population, param: &Param, epoch: usize) -> String {
             "".to_string()
         };
 
-        let epoch_line = format!("{}#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", analysis_tag, epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, epoch-best_model.epoch);
+        let age = epoch.saturating_sub(best_model.epoch);
+        let epoch_line = format!("{}#{: <5}{: <3}| \x1b[2mbest:\x1b[0m {: <20}\t\x1b[2m0\x1b[0m \x1b[1m{}\x1b[0m \x1b[2m1 [k={}, age={}]\x1b[0m", analysis_tag, epoch, special_epoch,  format!("{}:{}", best_model.get_language(), best_model.get_data_type()), output,  best_model.k, age);
         strip_ansi_if_needed(&epoch_line, param.general.display_colorful)
     } else {
         String::new()
