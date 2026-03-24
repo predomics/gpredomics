@@ -75,12 +75,15 @@ pub mod bayesian_mcmc;
 pub mod beam;
 /// Implements genetic algorithm functionalities.
 pub mod ga;
+/// Implements simulated annealing.
+pub mod sa;
 
 use crate::aco::aco as aco_run;
 use crate::bayesian_mcmc::mcmc;
 use crate::beam::{beam, keep_n_best_model_within_collection};
 use crate::experiment::{Experiment, ExperimentMetadata};
 use crate::ga::ga;
+use crate::sa::sa as sa_run;
 use chrono::Local;
 use cv::CV;
 use data::Data;
@@ -658,6 +661,11 @@ pub fn run_training(
         "aco" => {
             cinfo!(param.general.display_colorful, "Training using Ant Colony Optimization\n-----------------------------------------------------");
             (collection, meta) = aco_run(data, &mut None, initial_pop, &param, running);
+            final_population = collection[collection.len() - 1].clone()
+        }
+        "sa" => {
+            cinfo!(param.general.display_colorful, "Training using Simulated Annealing\n-----------------------------------------------------");
+            (collection, meta) = (sa_run(data, &mut None, initial_pop, &param, running), None);
             final_population = collection[collection.len() - 1].clone()
         }
         _ => {
