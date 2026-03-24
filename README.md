@@ -20,7 +20,7 @@
 
 - Interpretable languages: binary (subset sum), ternary (−1/0/1 algebraic sum), ratio (sum positive over sum negative), pow2 (ternary with powers of two coefficients).
 - Data encodings: raw values, prevalence via epsilon thresholding, and log transforms with epsilon flooring for numerical stability.
-- Optimizers: Genetic Algorithm (ga2 Predomics style), Beam search (LimitedExhaustive and ParallelForward), Ant Colony Optimization (Max-Min Ant System), and MCMC with Sequential Backward Selection (beta).
+- Optimizers: Genetic Algorithm (ga2 Predomics style), Beam search (LimitedExhaustive and ParallelForward), Ant Colony Optimization (Max-Min Ant System), Simulated Annealing, and MCMC with Sequential Backward Selection (beta).
 - Fitness targets: AUC, specificity, sensitivity, MCC, F1-score and G means with optional penalties on model size (k_penalty) and false‑rates (fr_penalty).
 - Confidence interval for classification threshold, allowing to discover divisive models and to avoid uncertain classifications.
 - Cross‑validation: stratified folds, Family of Best Models extraction, and MAD permutation importance aggregation across folds.
@@ -41,6 +41,7 @@
 - Algorithms:
   - [Genetic Algorithm](docs/ga.md)
   - [Ant Colony Optimization](docs/aco.md)
+  - [Simulated Annealing](docs/sa.md)
   - [Beam Search](docs/beam.md) (*coming soon*)
   - [MCMC](docs/mcmc.md) (*coming soon*)
 - To go further:
