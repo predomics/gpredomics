@@ -133,6 +133,10 @@ pub struct Param {
     #[serde(default)]
     pub lasso: LASSO,
 
+    /// Iterated Local Search parameters section
+    #[serde(default)]
+    pub ils: ILS,
+
     /// Voting ensemble parameters section
     #[serde(default)]
     pub voting: Voting,
@@ -486,6 +490,35 @@ pub struct LASSO {
     pub l1_ratio: f64,
 }
 
+/// Iterated Local Search parameters
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
+pub struct ILS {
+    /// Maximum number of perturbate-and-local-search iterations
+    #[serde(default = "ils_max_iterations_default")]
+    pub max_iterations: usize,
+    /// Number of random moves per perturbation (larger = more exploration)
+    #[serde(default = "ils_perturbation_size_default")]
+    pub perturbation_size: usize,
+    /// Maximum steps per local search phase
+    #[serde(default = "ils_local_search_steps_default")]
+    pub local_search_steps: usize,
+    /// Stop after this many iterations without improvement
+    #[serde(default = "ils_max_no_improve_default")]
+    pub max_no_improve: usize,
+    /// Iterations between snapshots
+    #[serde(default = "sa_snapshot_interval_default")]
+    pub snapshot_interval: usize,
+    /// Minimum features per model
+    #[serde(default = "one_default")]
+    #[serde(alias = "kmin")]
+    pub k_min: usize,
+    /// Maximum features per model
+    #[serde(default = "k_max_default")]
+    #[serde(alias = "kmax")]
+    pub k_max: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub struct GPU {
@@ -579,6 +612,12 @@ impl Default for SA {
 }
 
 impl Default for LASSO {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for ILS {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
@@ -821,6 +860,21 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
     .cloned()
     .collect();
 
+    let valid_ils_keys: HashSet<&str> = [
+        "max_iterations",
+        "perturbation_size",
+        "local_search_steps",
+        "max_no_improve",
+        "snapshot_interval",
+        "k_min",
+        "kmin",
+        "k_max",
+        "kmax",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
     let valid_lasso_keys: HashSet<&str> = [
         "alpha_min",
         "alpha_max",
@@ -866,6 +920,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "aco",
         "sa",
         "lasso",
+        "ils",
         "gpu",
         "importance",
         "experimental",
@@ -897,6 +952,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
                         "mcmc" => &valid_mcmc_keys,
                         "aco" => &valid_aco_keys,
                         "sa" => &valid_sa_keys,
+                        "ils" => &valid_ils_keys,
                         "lasso" => &valid_lasso_keys,
                         "gpu" => &valid_gpu_keys,
                         "importance" => &valid_importance_keys,
@@ -1235,6 +1291,18 @@ fn lasso_max_iter_default() -> usize {
 }
 fn lasso_tol_default() -> f64 {
     1e-4
+}
+fn ils_max_iterations_default() -> usize {
+    100
+}
+fn ils_perturbation_size_default() -> usize {
+    3
+}
+fn ils_local_search_steps_default() -> usize {
+    50
+}
+fn ils_max_no_improve_default() -> usize {
+    20
 }
 fn specialist_threshold_default() -> f64 {
     0.7

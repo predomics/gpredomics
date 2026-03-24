@@ -75,6 +75,8 @@ pub mod bayesian_mcmc;
 pub mod beam;
 /// Implements genetic algorithm functionalities.
 pub mod ga;
+/// Implements iterated local search.
+pub mod ils;
 /// Implements LASSO/Elastic Net via coordinate descent.
 pub mod lasso;
 /// Implements simulated annealing.
@@ -85,6 +87,7 @@ use crate::bayesian_mcmc::mcmc;
 use crate::beam::{beam, keep_n_best_model_within_collection};
 use crate::experiment::{Experiment, ExperimentMetadata};
 use crate::ga::ga;
+use crate::ils::ils as ils_run;
 use crate::lasso::lasso as lasso_run;
 use crate::sa::sa as sa_run;
 use chrono::Local;
@@ -677,6 +680,11 @@ pub fn run_training(
                 lasso_run(data, &mut None, initial_pop, &param, running),
                 None,
             );
+            final_population = collection[collection.len() - 1].clone()
+        }
+        "ils" => {
+            cinfo!(param.general.display_colorful, "Training using Iterated Local Search\n-----------------------------------------------------");
+            (collection, meta) = (ils_run(data, &mut None, initial_pop, &param, running), None);
             final_population = collection[collection.len() - 1].clone()
         }
         _ => {

@@ -31,7 +31,7 @@ use std::time::Instant;
 /// - Remove a random feature (if above k_min)
 /// - Swap a feature (remove one, add another)
 /// - Flip coefficient sign (for ternary/ratio/pow2)
-fn propose_neighbor(
+pub fn propose_neighbor(
     current: &Individual,
     feature_selection: &[usize],
     feature_class: &std::collections::HashMap<usize, u8>,
