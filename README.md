@@ -42,8 +42,9 @@
   - [Genetic Algorithm](docs/ga.md)
   - [Ant Colony Optimization](docs/aco.md)
   - [Simulated Annealing](docs/sa.md)
-  - [Beam Search](docs/beam.md) (*coming soon*)
-  - [MCMC](docs/mcmc.md) (*coming soon*)
+  - [Iterated Local Search](docs/ils.md)
+  - [Beam Search](docs/beam.md)
+  - [MCMC / Bayesian Inference](docs/mcmc.md)
 - To go further:
   - [Differences with legacy Predomics](docs/legacy.md) (*coming soon*)
   - [Technical documentation](docs/dev.md)

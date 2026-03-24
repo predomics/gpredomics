@@ -18,7 +18,7 @@ Or with a custom configuration:
 cargo run --release -- --config my_config.yaml
 ```
 
-The tool will load parameters, run the selected algorithm ([GA](ga.md), [Beam](beam.md), [ACO](aco.md), or MCMC), display results, and optionally save the experiment.
+The tool will load parameters, run the selected algorithm ([GA](ga.md), [Beam](beam.md), [ACO](aco.md), [SA](sa.md), [ILS](ils.md), [LASSO](lasso.md), or MCMC), display results, and optionally save the experiment.
 
 ### Command-line options
 
@@ -66,6 +66,9 @@ The `general.algo` parameter selects the optimization algorithm. Available algor
 - **ga** — [Genetic Algorithm](ga.md) (default)
 - **beam** — [Beam Search](beam.md)
 - **aco** — [Ant Colony Optimization](aco.md)
+- **sa** — [Simulated Annealing](sa.md)
+- **ils** — [Iterated Local Search](ils.md)
+- **lasso** — [LASSO / Elastic Net](lasso.md)
 - **mcmc** — Markov Chain Monte Carlo
 
 Example configuration for ACO:
@@ -171,4 +174,4 @@ Results are displayed in sections:
 
 **Voting analysis** (if enabled): Jury composition, voting method, ensemble metrics, and per-sample predictions
 
-*Last updated: v0.8.3*
+*Last updated: v0.9.0*
