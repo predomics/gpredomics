@@ -258,13 +258,12 @@ pub fn ils(
         param.ils.max_iterations, elapsed, best.cls.auc, best.k, best.fit
     );
 
-    // Final population
-    if populations.is_empty() || populations.last().unwrap().individuals[0].hash != best.hash {
-        let mut final_pop = Population::new();
-        final_pop.individuals.push(best);
-        final_pop.compute_hash();
-        populations.push(final_pop);
-    }
+    // Final population with full metrics computation
+    let mut final_pop = Population::new();
+    final_pop.individuals.push(best);
+    final_pop.fit(data, &mut None, &None, &None, param);
+    final_pop.compute_hash();
+    populations.push(final_pop);
 
     populations
 }

@@ -325,6 +325,12 @@ pub fn lasso(
             best.k,
             best.fit
         );
+        // Final population with full metrics (sensitivity, specificity, accuracy)
+        let mut final_pop = Population::new();
+        final_pop.individuals.push(best.clone());
+        final_pop.fit(data, &mut None, &None, &None, param);
+        final_pop.compute_hash();
+        populations.push(final_pop);
     } else {
         warn!("LASSO produced no non-empty models");
         let mut empty = Population::new();
