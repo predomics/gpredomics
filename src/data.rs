@@ -1,7 +1,7 @@
 use crate::param::Param;
 use crate::utils::{self, serde_json_hashmap_numeric};
 use crate::ChaCha8Rng;
-use fast_float::parse;
+use fast_float2::parse;
 use fishers_exact::fishers_exact;
 use log::{debug, error, info, warn};
 use rand::seq::SliceRandom;
