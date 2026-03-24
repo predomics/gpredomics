@@ -175,4 +175,4 @@ All randomness in the GA is controlled by the `seed` parameter (located in the `
 
 Using the same seed with identical parameters and data guarantees perfectly reproducible results across runs, even when GPU acceleration is enabled (the RNG is initialized **after** GPU setup to ensure deterministic behavior).
 
-*Last updated: v0.7.7*
+*Last updated: v0.8.2*
