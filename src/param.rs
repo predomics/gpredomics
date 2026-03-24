@@ -27,6 +27,12 @@ pub enum FitFunction {
     ppv,
     /// Geometric Mean of sensitivity and specificity
     g_mean,
+    /// Spearman rank correlation (regression mode)
+    spearman,
+    /// Root Mean Squared Error (regression mode, negated so higher = better)
+    rmse,
+    /// Mutual Information (regression/classification)
+    mutual_information,
 }
 
 /// Confidence interval methods for Family of Best Models (FBM) selection.

@@ -368,13 +368,18 @@ impl Population {
             if let Some(ref mut threshold_ci) = i.cls.threshold_ci {
                 i.fit = i.fit - (param.general.threshold_ci_penalty * threshold_ci.rejection_rate);
             };
-            // Bias penalty
-            if param.general.bias_penalty != 0.0 {
+            // Bias penalty (classification only — not applicable for regression)
+            if param.general.bias_penalty != 0.0
+                && !matches!(
+                    param.general.fit,
+                    FitFunction::spearman | FitFunction::rmse | FitFunction::mutual_information
+                )
+            {
                 if i.cls.sensitivity < 0.5 {
-                    i.fit = i.fit - (1.0 - i.cls.sensitivity) * param.general.bias_penalty
+                    i.fit -= (1.0 - i.cls.sensitivity) * param.general.bias_penalty
                 };
                 if i.cls.specificity < 0.5 {
-                    i.fit = i.fit - (1.0 - i.cls.specificity) * param.general.bias_penalty
+                    i.fit -= (1.0 - i.cls.specificity) * param.general.bias_penalty
                 };
             };
             // User penalties
@@ -474,6 +479,9 @@ impl Population {
                 let penalties = match param.general.fit {
                     FitFunction::sensitivity => Some([param.general.fr_penalty, 1.0]),
                     FitFunction::specificity => Some([1.0, param.general.fr_penalty]),
+                    FitFunction::spearman | FitFunction::rmse | FitFunction::mutual_information => {
+                        None
+                    }
                     _ => None,
                 };
                 match param.general.fit {
@@ -533,6 +541,18 @@ impl Population {
                             }
                         }
                         i.fit = i.cls.auc;
+                    }
+                    FitFunction::spearman => {
+                        let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
+                        i.fit = crate::utils::spearman_correlation(&scores, &y_f64);
+                    }
+                    FitFunction::rmse => {
+                        let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
+                        i.fit = crate::utils::neg_rmse(&scores, &y_f64);
+                    }
+                    FitFunction::mutual_information => {
+                        let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
+                        i.fit = crate::utils::mutual_information(&scores, &y_f64);
                     }
                     _ => {
                         if let Some(ref mut threshold_ci) = i.cls.threshold_ci {

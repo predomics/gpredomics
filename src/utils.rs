@@ -703,6 +703,8 @@ pub fn compute_roc_and_metrics_from_value(
         FitFunction::npv => npv(0, 0),
         FitFunction::ppv => ppv(tp_init, fp_init),
         FitFunction::g_mean => g_mean(sens_init, spec_init),
+        // Regression metrics — threshold optimization not applicable
+        FitFunction::spearman | FitFunction::rmse | FitFunction::mutual_information => 0.0,
     };
 
     if obj_init > best_objective {
@@ -759,6 +761,7 @@ pub fn compute_roc_and_metrics_from_value(
             FitFunction::npv => npv(tn, fn_count),
             FitFunction::ppv => ppv(tp, fp),
             FitFunction::g_mean => g_mean(sensitivity, specificity),
+            FitFunction::spearman | FitFunction::rmse | FitFunction::mutual_information => 0.0,
         };
 
         if objective > best_objective {
@@ -885,6 +888,155 @@ fn apply_threshold_balance(sensitivity: f64, specificity: f64, penalties: Option
 /// assert!((mean - 3.0).abs() < 1e-6);
 /// assert!((std - 1.4142135).abs() < 1e-6);
 /// ```
+/// Compute Spearman rank correlation coefficient between two vectors.
+///
+/// Returns a value in [-1, 1]. +1 = perfect positive rank correlation,
+/// -1 = perfect negative, 0 = no correlation.
+///
+/// Handles ties using average ranks.
+pub fn spearman_correlation(x: &[f64], y: &[f64]) -> f64 {
+    assert_eq!(x.len(), y.len(), "Spearman: vectors must have equal length");
+    let n = x.len();
+    if n < 2 {
+        return 0.0;
+    }
+
+    // Compute ranks with tie-handling (average rank method)
+    fn rank(v: &[f64]) -> Vec<f64> {
+        let n = v.len();
+        let mut indexed: Vec<(usize, f64)> = v.iter().cloned().enumerate().collect();
+        indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut ranks = vec![0.0; n];
+        let mut i = 0;
+        while i < n {
+            let mut j = i;
+            // Find tied group
+            while j < n - 1 && (indexed[j + 1].1 - indexed[j].1).abs() < 1e-12 {
+                j += 1;
+            }
+            // Average rank for tied group
+            let avg_rank = (i + j) as f64 / 2.0 + 1.0;
+            for k in i..=j {
+                ranks[indexed[k].0] = avg_rank;
+            }
+            i = j + 1;
+        }
+        ranks
+    }
+
+    let rx = rank(x);
+    let ry = rank(y);
+
+    // Pearson correlation on ranks
+    let n_f = n as f64;
+    let mean_rx: f64 = rx.iter().sum::<f64>() / n_f;
+    let mean_ry: f64 = ry.iter().sum::<f64>() / n_f;
+
+    let mut cov = 0.0;
+    let mut var_x = 0.0;
+    let mut var_y = 0.0;
+
+    for i in 0..n {
+        let dx = rx[i] - mean_rx;
+        let dy = ry[i] - mean_ry;
+        cov += dx * dy;
+        var_x += dx * dx;
+        var_y += dy * dy;
+    }
+
+    if var_x == 0.0 || var_y == 0.0 {
+        return 0.0;
+    }
+
+    cov / (var_x.sqrt() * var_y.sqrt())
+}
+
+/// Compute negative Root Mean Squared Error between predictions and targets.
+///
+/// Returns -RMSE so that higher = better (consistent with other fit functions).
+pub fn neg_rmse(predictions: &[f64], targets: &[f64]) -> f64 {
+    assert_eq!(
+        predictions.len(),
+        targets.len(),
+        "RMSE: vectors must have equal length"
+    );
+    let n = predictions.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let mse: f64 = predictions
+        .iter()
+        .zip(targets.iter())
+        .map(|(p, t)| (p - t).powi(2))
+        .sum::<f64>()
+        / n as f64;
+    -mse.sqrt()
+}
+
+/// Compute mutual information between two continuous vectors using histogram binning.
+///
+/// Uses 10 bins for each variable. Returns MI in nats (natural log).
+pub fn mutual_information(x: &[f64], y: &[f64]) -> f64 {
+    assert_eq!(
+        x.len(),
+        y.len(),
+        "Mutual information: vectors must have equal length"
+    );
+    let n = x.len();
+    if n < 2 {
+        return 0.0;
+    }
+
+    let n_bins = 10usize;
+
+    // Bin boundaries
+    fn bin_values(v: &[f64], n_bins: usize) -> Vec<usize> {
+        let min = v.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = v.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let range = max - min;
+        if range == 0.0 {
+            return vec![0; v.len()];
+        }
+        v.iter()
+            .map(|&val| {
+                let bin = ((val - min) / range * (n_bins as f64 - 1e-10)) as usize;
+                bin.min(n_bins - 1)
+            })
+            .collect()
+    }
+
+    let bx = bin_values(x, n_bins);
+    let by = bin_values(y, n_bins);
+
+    // Joint and marginal counts
+    let mut joint = vec![vec![0usize; n_bins]; n_bins];
+    let mut mx = vec![0usize; n_bins];
+    let mut my = vec![0usize; n_bins];
+
+    for i in 0..n {
+        joint[bx[i]][by[i]] += 1;
+        mx[bx[i]] += 1;
+        my[by[i]] += 1;
+    }
+
+    // MI = Σ p(x,y) * log(p(x,y) / (p(x) * p(y)))
+    let n_f = n as f64;
+    let mut mi = 0.0;
+    for i in 0..n_bins {
+        for j in 0..n_bins {
+            if joint[i][j] > 0 && mx[i] > 0 && my[j] > 0 {
+                let pxy = joint[i][j] as f64 / n_f;
+                let px = mx[i] as f64 / n_f;
+                let py = my[j] as f64 / n_f;
+                mi += pxy * (pxy / (px * py)).ln();
+            }
+        }
+    }
+    mi
+}
+
+/// Computes mean and standard deviation using Welford's algorithm.
 pub fn mean_and_std(values: &[f64]) -> (f64, f64) {
     let mut n = 0.0;
     let (mut mean, mut m2) = (0.0, 0.0); // Welford
@@ -6037,5 +6189,78 @@ mod tests {
             lo_w,
             lo_a
         );
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn test_spearman_perfect_positive() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![10.0, 20.0, 30.0, 40.0, 50.0];
+        let rho = spearman_correlation(&x, &y);
+        assert!((rho - 1.0).abs() < 1e-10, "Perfect positive: {}", rho);
+    }
+
+    #[test]
+    fn test_spearman_perfect_negative() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![50.0, 40.0, 30.0, 20.0, 10.0];
+        let rho = spearman_correlation(&x, &y);
+        assert!((rho + 1.0).abs() < 1e-10, "Perfect negative: {}", rho);
+    }
+
+    #[test]
+    fn test_spearman_no_correlation() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![3.0, 1.0, 5.0, 2.0, 4.0];
+        let rho = spearman_correlation(&x, &y);
+        assert!(rho.abs() < 0.5, "Low correlation: {}", rho);
+    }
+
+    #[test]
+    fn test_spearman_with_ties() {
+        let x = vec![1.0, 2.0, 2.0, 4.0, 5.0];
+        let y = vec![1.0, 3.0, 3.0, 4.0, 5.0];
+        let rho = spearman_correlation(&x, &y);
+        assert!(rho > 0.9, "High correlation with ties: {}", rho);
+    }
+
+    #[test]
+    fn test_neg_rmse_zero_error() {
+        let p = vec![1.0, 2.0, 3.0];
+        let t = vec![1.0, 2.0, 3.0];
+        let r = neg_rmse(&p, &t);
+        assert!((r - 0.0).abs() < 1e-10, "Zero error: {}", r);
+    }
+
+    #[test]
+    fn test_neg_rmse_nonzero() {
+        let p = vec![1.0, 2.0, 3.0];
+        let t = vec![1.1, 2.2, 2.8];
+        let r = neg_rmse(&p, &t);
+        assert!(r < 0.0, "Negative RMSE: {}", r);
+        assert!(r > -1.0, "Bounded: {}", r);
+    }
+
+    #[test]
+    fn test_mutual_information_identical() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let y = x.clone();
+        let mi = mutual_information(&x, &y);
+        assert!(
+            mi > 0.0,
+            "MI of identical vectors should be positive: {}",
+            mi
+        );
+    }
+    #[test]
+    fn test_mutual_information_nonnegative() {
+        let x: Vec<f64> = (0..50).map(|i| i as f64).collect();
+        let y: Vec<f64> = (0..50).map(|i| (i * 3 + 7) as f64).collect();
+        let mi = mutual_information(&x, &y);
+        assert!(mi >= 0.0, "MI should be non-negative: {}", mi);
     }
 }
