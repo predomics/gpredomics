@@ -995,7 +995,7 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
     // Initialize coefficients
     let mut ind = Individual::new();
     ind.language = MCMC_GENERIC_LANG;
-    ind.data_type = data_type(&param.general.data_type);
+    ind.data_type = data_type(param.general.data_type.split(',').next().unwrap_or("raw"));
     ind.epsilon = param.general.data_type_epsilon;
     ind.betas = Some(Betas::new(1.0, -1.0, 1.0));
 
