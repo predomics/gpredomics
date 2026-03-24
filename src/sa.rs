@@ -10,7 +10,7 @@
 //! - Very simple: only needs propose + accept/reject loop
 
 use crate::data::Data;
-use crate::ga::{remove_out_of_bounds, remove_stillborn};
+
 use crate::individual::{self, Individual};
 use crate::param::Param;
 use crate::population::Population;

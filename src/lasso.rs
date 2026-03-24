@@ -9,13 +9,11 @@
 //! compared to gpredomics's discrete-coefficient heuristics?
 
 use crate::data::Data;
-use crate::individual::{self, ClassificationMetrics, Individual, BINARY_LANG};
+use crate::individual::{self, Individual, BINARY_LANG};
 use crate::param::Param;
 use crate::population::Population;
 use crate::utils::compute_auc_from_value;
-use crate::{cinfo, individual::AdditionalMetrics};
 use log::{debug, info, warn};
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;

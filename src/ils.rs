@@ -6,13 +6,13 @@
 //!
 //! Key advantage: minimal hyperparameters, often outperforms complex methods.
 
+use crate::cinfo;
 use crate::data::Data;
 use crate::individual::{self, Individual};
 use crate::param::Param;
 use crate::population::Population;
 use crate::sa::propose_neighbor;
 use crate::utils::compute_auc_from_value;
-use crate::{cinfo, individual::BINARY_LANG};
 use log::{debug, info, warn};
 use rand::Rng;
 use rand::SeedableRng;
