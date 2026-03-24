@@ -5,6 +5,7 @@ use crate::gpu::GpuAssay;
 use crate::individual::data_type;
 use crate::individual::language;
 use crate::individual::AdditionalMetrics;
+use crate::individual::ClassificationMetrics;
 use crate::individual::Individual;
 use crate::individual::ThresholdCI;
 use crate::individual::BINARY_LANG;
@@ -1406,7 +1407,12 @@ mod tests {
                 threshold: 42.0,
                 threshold_ci: None,
                 additional: AdditionalMetrics {
-                mcc: None,
+                    mcc: None,
+                    f1_score: None,
+                    npv: None,
+                    ppv: None,
+                    g_mean: None,
+                },
             },
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
             fit: 0.8,
@@ -1418,13 +1424,6 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
-            cls: ClassificationMetrics {
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
-                },
-            },
         }
     }
 
@@ -1522,7 +1521,12 @@ mod tests {
                 threshold: 42.0,
                 threshold_ci: None,
                 additional: AdditionalMetrics {
-                mcc: None,
+                    mcc: None,
+                    f1_score: None,
+                    npv: None,
+                    ppv: None,
+                    g_mean: None,
+                },
             },
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
             fit: 0.8,
@@ -1534,13 +1538,6 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
-            cls: ClassificationMetrics {
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
-                },
-            },
         }
     }
 

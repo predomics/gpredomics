@@ -3669,8 +3669,7 @@ mod tests {
             "MCC should be in [-1, 1]"
         );
         assert!(
-            jury.metrics.f1_score.unwrap() >= 0.0
-                && jury.metrics.f1_score.unwrap() <= 1.0,
+            jury.metrics.f1_score.unwrap() >= 0.0 && jury.metrics.f1_score.unwrap() <= 1.0,
             "F1-score should be in [0, 1]"
         );
         assert!(
@@ -3682,8 +3681,7 @@ mod tests {
             "PPV should be in [0, 1]"
         );
         assert!(
-            jury.metrics.g_mean.unwrap() >= 0.0
-                && jury.metrics.g_mean.unwrap() <= 1.0,
+            jury.metrics.g_mean.unwrap() >= 0.0 && jury.metrics.g_mean.unwrap() <= 1.0,
             "G-mean should be in [0, 1]"
         );
     }
@@ -3765,10 +3763,7 @@ mod tests {
         jury.evaluate(&train_data);
 
         // Check train metrics are stored
-        assert!(
-            jury.metrics.mcc.is_some(),
-            "Train MCC should be computed"
-        );
+        assert!(jury.metrics.mcc.is_some(), "Train MCC should be computed");
         assert!(
             jury.metrics.f1_score.is_some(),
             "Train F1-score should be computed"
@@ -3885,9 +3880,7 @@ mod tests {
         );
 
         // Should still be in valid ranges
-        assert!(
-            jury.metrics.mcc.unwrap() >= -1.0 && jury.metrics.mcc.unwrap() <= 1.0
-        );
+        assert!(jury.metrics.mcc.unwrap() >= -1.0 && jury.metrics.mcc.unwrap() <= 1.0);
         assert!(jury.metrics.ppv.unwrap() >= 0.0 && jury.metrics.ppv.unwrap() <= 1.0);
         assert!(jury.metrics.npv.unwrap() >= 0.0 && jury.metrics.npv.unwrap() <= 1.0);
     }
@@ -3917,7 +3910,7 @@ mod tests {
 
         jury.evaluate(&data);
 
-        // Metrics in jury.cls.metrics should match those from compute_new_metrics
+        // Metrics in jury.metrics should match those from compute_new_metrics
         let (_, _, _, _, _, returned_metrics) = jury.compute_new_metrics(&data);
 
         assert_eq!(
@@ -4595,7 +4588,7 @@ mod tests {
 
         // Give additional metrics to only first 3 experts
         for i in 0..3 {
-            pop.individuals[i].cls.metrics = crate::individual::AdditionalMetrics {
+            pop.individuals[i].cls.additional = crate::individual::AdditionalMetrics {
                 mcc: Some(0.6 + 0.1 * i as f64),
                 f1_score: Some(0.7 + 0.05 * i as f64),
                 npv: Some(0.8),
@@ -4639,7 +4632,7 @@ mod tests {
         // 2. The computed metric is based on Jury's predictions vs ground truth
         // 3. Values are within valid bounds
 
-        let metrics = &jury.cls.metrics;
+        let metrics = &jury.metrics;
 
         // MCC: Should be present if at least one expert exposes it
         // Computed from Jury's confusion matrix, not averaged from experts

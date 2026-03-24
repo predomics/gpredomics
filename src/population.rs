@@ -1794,7 +1794,9 @@ impl fmt::Debug for Population {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::individual::{AdditionalMetrics, DEFAULT_MINIMUM, RAW_TYPE, TERNARY_LANG};
+    use crate::individual::{
+        AdditionalMetrics, ClassificationMetrics, DEFAULT_MINIMUM, RAW_TYPE, TERNARY_LANG,
+    };
     use rand::SeedableRng;
     use std::{
         collections::{BTreeMap, HashMap},
@@ -1822,7 +1824,12 @@ mod tests {
                         threshold: 42.0 + (i as f64),
                         threshold_ci: None,
                         additional: AdditionalMetrics {
-                        mcc: None,
+                            mcc: None,
+                            f1_score: None,
+                            npv: None,
+                            ppv: None,
+                            g_mean: None,
+                        },
                     },
                     features: vec![(0, i), (1, -i), (2, i * 2), (3, i % 3)]
                         .into_iter()
@@ -1836,13 +1843,6 @@ mod tests {
                     epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
                     parents: None,
                     betas: None,
-                    cls: ClassificationMetrics {
-                            f1_score: None,
-                            npv: None,
-                            ppv: None,
-                            g_mean: None,
-                        },
-                    },
                 };
                 pop.individuals.push(ind);
             }
@@ -1881,7 +1881,12 @@ mod tests {
                         threshold: 0.5,
                         threshold_ci: None,
                         additional: AdditionalMetrics {
-                        mcc: None,
+                            mcc: None,
+                            f1_score: None,
+                            npv: None,
+                            ppv: None,
+                            g_mean: None,
+                        },
                     },
                     features: features_map,
                     fit: 0.7,
@@ -1893,13 +1898,6 @@ mod tests {
                     epsilon: DEFAULT_MINIMUM,
                     parents: None,
                     betas: None,
-                    cls: ClassificationMetrics {
-                            f1_score: None,
-                            npv: None,
-                            ppv: None,
-                            g_mean: None,
-                        },
-                    },
                 });
             }
             Population { individuals }
@@ -2301,7 +2299,12 @@ mod tests {
                 threshold: 42.0,
                 threshold_ci: None,
                 additional: AdditionalMetrics {
-                mcc: None,
+                    mcc: None,
+                    f1_score: None,
+                    npv: None,
+                    ppv: None,
+                    g_mean: None,
+                },
             },
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
             fit: 0.8,
@@ -2313,13 +2316,6 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
-            cls: ClassificationMetrics {
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
-                },
-            },
         };
         let ind2 = Individual {
             cls: ClassificationMetrics {
@@ -2330,7 +2326,12 @@ mod tests {
                 threshold: 24.0,
                 threshold_ci: None,
                 additional: AdditionalMetrics {
-                mcc: None,
+                    mcc: None,
+                    f1_score: None,
+                    npv: None,
+                    ppv: None,
+                    g_mean: None,
+                },
             },
             features: vec![(0, -1), (1, 1), (2, 1), (3, 1)].into_iter().collect(),
             fit: 0.4,
@@ -2342,13 +2343,6 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
-            cls: ClassificationMetrics {
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
-                },
-            },
         };
         let ind_vec = vec![ind1, ind2];
         pop_to_add.individuals = ind_vec.clone();

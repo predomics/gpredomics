@@ -114,7 +114,6 @@ pub struct Individual {
     pub fit: f64,
 
     /// Classification metrics (auc, threshold, sensitivity, specificity, accuracy, etc.)
-    #[serde(flatten)]
     pub cls: ClassificationMetrics,
 
     /// Iteration of the algorithm that led to the emergence of the model
@@ -1342,6 +1341,7 @@ impl Individual {
         data_type: u8,
         epsilon: f64,
         prior_weight: Option<&HashMap<usize, f64>>,
+        threshold_ci: bool,
         rng: &mut ChaCha8Rng,
     ) -> Individual {
         if let Some(weights) = prior_weight {
@@ -1420,6 +1420,7 @@ impl Individual {
         language: u8,
         data_type: u8,
         epsilon: f64,
+        threshold_ci: bool,
         rng: &mut ChaCha8Rng,
     ) -> Individual {
         // chose k variables amount feature_selection
@@ -1571,6 +1572,7 @@ impl Individual {
         data_type: u8,
         epsilon: f64,
         prior_weight: &HashMap<usize, f64>,
+        threshold_ci: bool,
         rng: &mut ChaCha8Rng,
     ) -> Individual {
         let valid_pairs: Vec<(usize, f64)> = feature_selection
@@ -2435,6 +2437,7 @@ impl Individual {
         data: &Data,
         n_perm: usize,
         rng_seed: u64,
+        threshold: Option<f64>,
         quantile: Option<(f64, f64)>,
         min_k: usize,
     ) -> &mut Self {
@@ -2548,12 +2551,6 @@ impl Individual {
 
         self
     }
-    cls: ClassificationMetrics {
-            threshold_ci: bool,
-            threshold_ci: bool,
-            threshold_ci: bool,
-            threshold: Option<f64>,
-    },
 }
 
 impl fmt::Debug for Individual {
@@ -2638,6 +2635,15 @@ mod tests {
                 epsilon: f64::MIN_POSITIVE,
                 parents: None,
                 betas: None,
+                cls: ClassificationMetrics {
+                    auc: 0.4,
+                    specificity: 0.15,
+                    sensitivity: 0.16,
+                    accuracy: 0.23,
+                    threshold: 42.0,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
+                },
             }
         }
 
@@ -2658,6 +2664,15 @@ mod tests {
                 epsilon: f64::MIN_POSITIVE,
                 parents: None,
                 betas: None,
+                cls: ClassificationMetrics {
+                    auc: 0.4,
+                    specificity: 0.15,
+                    sensitivity: 0.16,
+                    accuracy: 0.23,
+                    threshold: 0.0,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
+                },
             }
         }
 
@@ -2682,6 +2697,15 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
+                cls: ClassificationMetrics {
+                    auc: 0.8,
+                    specificity: 0.1,
+                    sensitivity: 0.9,
+                    accuracy: 0.3,
+                    threshold: 0.5,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
+                },
             }
         }
 
@@ -2714,6 +2738,7 @@ mod tests {
                 epsilon: 0.0,
                 parents: None,
                 betas: None,
+                cls: ClassificationMetrics::default(),
             }
         }
 
@@ -2740,6 +2765,15 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
+                cls: ClassificationMetrics {
+                    auc: 0.8,
+                    specificity,
+                    sensitivity,
+                    accuracy,
+                    threshold: 0.5,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
+                },
             }
         }
 
@@ -2769,88 +2803,17 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
-            }
-        }
-        cls: ClassificationMetrics {
-                    auc: 0.4,
-                    specificity: 0.15,
-                    sensitivity: 0.16,
-                    accuracy: 0.23,
-                    threshold: 42.0,
-                    threshold_ci: None,
-                    auc: 0.4,
-                    specificity: 0.15,
-                    sensitivity: 0.16,
-                    accuracy: 0.23,
-                    threshold: 0.0,
-                    threshold_ci: None,
-                    auc: 0.8,
-                    specificity: 0.1,
-                    sensitivity: 0.9,
-                    accuracy: 0.3,
-                    threshold: 0.5,
-                    threshold_ci: None,
-                    auc: 0.0,
-                    specificity: 0.0,
-                    sensitivity: 0.0,
-                    accuracy: 0.0,
-                    threshold: 0.0,
-                    threshold_ci: None,
-                    auc: 0.8,
-                    specificity: specificity,
-                    sensitivity: sensitivity,
-                    accuracy: accuracy,
-                    threshold: 0.5,
-                    threshold_ci: None,
+                cls: ClassificationMetrics {
                     auc: 0.8,
                     specificity: 0.75,
                     sensitivity: 0.85,
                     accuracy: 0.80,
                     threshold: 0.5,
                     threshold_ci: None,
-                    additional: AdditionalMetrics {
-                        mcc: None,
-                        f1_score: None,
-                        npv: None,
-                        ppv: None,
-                        g_mean: None,
-                    },
-                    additional: AdditionalMetrics {
-                        mcc: None,
-                        f1_score: None,
-                        npv: None,
-                        ppv: None,
-                        g_mean: None,
-                    },
-                    additional: AdditionalMetrics {
-                        mcc: None,
-                        f1_score: None,
-                        npv: None,
-                        ppv: None,
-                        g_mean: None,
-                    },
-                    additional: AdditionalMetrics {
-                        mcc: None,
-                        f1_score: None,
-                        npv: None,
-                        ppv: None,
-                        g_mean: None,
-                    },
-                    additional: AdditionalMetrics {
-                        mcc: None,
-                        f1_score: None,
-                        npv: None,
-                        ppv: None,
-                        g_mean: None,
-                    },
-                    additional: AdditionalMetrics {
-                        mcc: None,
-                        f1_score: None,
-                        npv: None,
-                        ppv: None,
-                        g_mean: None,
-                    },
-        },
+                    additional: AdditionalMetrics::default(),
+                },
+            }
+        }
     }
 
     // test for language and data_types
@@ -4049,16 +4012,6 @@ mod tests {
         features_map.insert(2, 1i8); // Positive coefficient
 
         let individual = Individual {
-            cls: ClassificationMetrics {
-                auc: 0.8,
-                specificity: 0.75,
-                sensitivity: 0.85,
-                accuracy: 0.80,
-                threshold: 0.5,
-                threshold_ci: None,
-                additional: AdditionalMetrics {
-                mcc: None,
-            },
             features: features_map,
             fit: 0.7,
             k: 3,
@@ -4070,11 +4023,13 @@ mod tests {
             parents: None,
             betas: None,
             cls: ClassificationMetrics {
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
-                },
+                auc: 0.8,
+                specificity: 0.75,
+                sensitivity: 0.85,
+                accuracy: 0.80,
+                threshold: 0.5,
+                threshold_ci: None,
+                additional: AdditionalMetrics::default(),
             },
         };
 
