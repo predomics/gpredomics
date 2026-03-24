@@ -1345,10 +1345,10 @@ fn fallback_to_cpu_default() -> bool {
     true
 }
 fn n_iter_default() -> usize {
-    10_000
+    1_000
 }
 fn n_burn_default() -> usize {
-    5_000
+    500
 }
 fn lambda_default() -> f64 {
     0.001
