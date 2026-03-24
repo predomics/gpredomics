@@ -4,8 +4,6 @@ use crate::data::Data;
 use crate::gpu::GpuAssay;
 use crate::individual::data_type;
 use crate::individual::language;
-use crate::individual::AdditionalMetrics;
-use crate::individual::ClassificationMetrics;
 use crate::individual::Individual;
 use crate::individual::ThresholdCI;
 use crate::individual::BINARY_LANG;
