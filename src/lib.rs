@@ -67,6 +67,8 @@ pub mod voting;
 /// CSV performance report export.
 pub mod csv_report;
 
+/// Implements ant colony optimization.
+pub mod aco;
 /// Implements Bayesian MCMC algorithms for model training.
 pub mod bayesian_mcmc;
 /// Contains functions for beam search algorithms.
@@ -74,6 +76,7 @@ pub mod beam;
 /// Implements genetic algorithm functionalities.
 pub mod ga;
 
+use crate::aco::aco as aco_run;
 use crate::bayesian_mcmc::mcmc;
 use crate::beam::{beam, keep_n_best_model_within_collection};
 use crate::experiment::{Experiment, ExperimentMetadata};
@@ -618,6 +621,11 @@ pub fn run_training(
             );
             (collection, meta) = mcmc(data, param, running);
             final_population = Population::new();
+        }
+        "aco" => {
+            cinfo!(param.general.display_colorful, "Training using Ant Colony Optimization\n-----------------------------------------------------");
+            (collection, meta) = (aco_run(data, &mut None, initial_pop, &param, running), None);
+            final_population = collection[collection.len() - 1].clone()
         }
         _ => {
             panic!("Unknown algorithm: {}", param.general.algo);

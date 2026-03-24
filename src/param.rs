@@ -115,6 +115,10 @@ pub struct Param {
     #[serde(default)]
     pub mcmc: MCMC,
 
+    /// Ant Colony Optimization parameters section
+    #[serde(default)]
+    pub aco: ACO,
+
     /// Voting ensemble parameters section
     #[serde(default)]
     pub voting: Voting,
@@ -371,6 +375,50 @@ pub struct MCMC {
     pub save_trace_outdir: String,
 }
 
+/// Ant Colony Optimization parameters
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
+pub struct ACO {
+    /// Number of ants (solutions constructed per iteration)
+    #[serde(default = "aco_n_ants_default")]
+    pub n_ants: usize,
+    /// Maximum number of iterations
+    #[serde(default = "aco_max_iterations_default")]
+    pub max_iterations: usize,
+    /// Minimum iterations before early stopping
+    #[serde(default = "ten_default")]
+    pub min_iterations: usize,
+    /// Pheromone importance exponent (α)
+    #[serde(default = "one_f64_default")]
+    pub alpha: f64,
+    /// Heuristic information importance exponent (β)
+    #[serde(default = "aco_beta_default")]
+    pub beta: f64,
+    /// Pheromone evaporation rate (ρ ∈ [0,1])
+    #[serde(default = "aco_rho_default")]
+    pub rho: f64,
+    /// Minimum pheromone value (MMAS)
+    #[serde(default = "aco_tau_min_default")]
+    pub tau_min: f64,
+    /// Maximum pheromone value (MMAS)
+    #[serde(default = "one_f64_default")]
+    pub tau_max: f64,
+    /// Extra pheromone weight for global-best ant
+    #[serde(default = "aco_elite_weight_default")]
+    pub elite_weight: f64,
+    /// Minimum number of features per model
+    #[serde(default = "one_default")]
+    #[serde(alias = "kmin")]
+    pub k_min: usize,
+    /// Maximum number of features per model (0 = no limit)
+    #[serde(default = "k_max_default")]
+    #[serde(alias = "kmax")]
+    pub k_max: usize,
+    /// Early stopping: max generations without improvement
+    #[serde(default = "ten_default")]
+    pub max_age_best_model: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub struct GPU {
@@ -446,6 +494,12 @@ impl Default for BEAM {
 }
 
 impl Default for MCMC {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for ACO {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
@@ -653,6 +707,26 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
             .cloned()
             .collect();
 
+    let valid_aco_keys: HashSet<&str> = [
+        "n_ants",
+        "max_iterations",
+        "min_iterations",
+        "alpha",
+        "beta",
+        "rho",
+        "tau_min",
+        "tau_max",
+        "elite_weight",
+        "k_min",
+        "kmin",
+        "k_max",
+        "kmax",
+        "max_age_best_model",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
     let valid_gpu_keys: HashSet<&str> = [
         "memory_policy",
         "max_total_memory_mb",
@@ -683,6 +757,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "ga",
         "beam",
         "mcmc",
+        "aco",
         "gpu",
         "importance",
         "experimental",
@@ -712,6 +787,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
                         "ga" => &valid_ga_keys,
                         "beam" => &valid_beam_keys,
                         "mcmc" => &valid_mcmc_keys,
+                        "aco" => &valid_aco_keys,
                         "gpu" => &valid_gpu_keys,
                         "importance" => &valid_importance_keys,
                         "experimental" => &valid_experimental_keys,
@@ -1001,6 +1077,30 @@ fn n_permutations_mda_default() -> usize {
 }
 fn importance_aggregation_default() -> ImportanceAggregation {
     ImportanceAggregation::mean
+}
+fn aco_n_ants_default() -> usize {
+    100
+}
+fn aco_max_iterations_default() -> usize {
+    200
+}
+fn aco_beta_default() -> f64 {
+    2.0
+}
+fn aco_rho_default() -> f64 {
+    0.1
+}
+fn aco_tau_min_default() -> f64 {
+    0.01
+}
+fn aco_elite_weight_default() -> f64 {
+    2.0
+}
+fn ten_default() -> usize {
+    10
+}
+fn one_f64_default() -> f64 {
+    1.0
 }
 fn specialist_threshold_default() -> f64 {
     0.7
