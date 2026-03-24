@@ -844,12 +844,16 @@ impl Individual {
     fn evaluate_raw(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
         let mut score = vec![0.0; sample_len];
 
+        // Sort features by index for deterministic floating-point accumulation order
+        let mut sorted_features: Vec<(&usize, &i8)> = self.features.iter().collect();
+        sorted_features.sort_unstable_by_key(|(&k, _)| k);
+
         if self.language == RATIO_LANG {
             let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
-            for (feature_index, coef) in self.features.iter() {
-                let part = if *coef > 0 { 0 } else { 1 };
+            for (&feature_index, &coef) in &sorted_features {
+                let part = if coef > 0 { 0 } else { 1 };
                 for sample in 0..sample_len {
-                    r[sample][part] += X.get(&(sample, *feature_index)).unwrap_or(&0.0);
+                    r[sample][part] += X.get(&(sample, feature_index)).unwrap_or(&0.0);
                 }
             }
             for sample in 0..sample_len {
@@ -862,9 +866,9 @@ impl Individual {
                 .expect("MCMC Individuals must have betas coefficeints");
             let mut pos_sums = vec![0.0; sample_len];
             let mut neg_sums = vec![0.0; sample_len];
-            for (feature_index, coef) in self.features.iter() {
+            for (&feature_index, &coef) in &sorted_features {
                 for sample in 0..sample_len {
-                    let v = *X.get(&(sample, *feature_index)).unwrap_or(&0.0);
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
                     match coef {
                         1 => pos_sums[sample] += v,
                         -1 => neg_sums[sample] += v,
@@ -882,10 +886,10 @@ impl Individual {
                 })
                 .collect();
         } else {
-            for (feature_index, coef) in self.features.iter() {
-                let x_coef = *coef as f64;
+            for (&feature_index, &coef) in &sorted_features {
+                let x_coef = coef as f64;
                 for sample in 0..sample_len {
-                    score[sample] += X.get(&(sample, *feature_index)).unwrap_or(&0.0) * x_coef;
+                    score[sample] += X.get(&(sample, feature_index)).unwrap_or(&0.0) * x_coef;
                 }
             }
         }
@@ -915,14 +919,16 @@ impl Individual {
     /// ```
     fn evaluate_prevalence(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
         let mut score = vec![0.0; sample_len];
+        let mut sorted_features: Vec<(&usize, &i8)> = self.features.iter().collect();
+        sorted_features.sort_unstable_by_key(|(&k, _)| k);
 
         if self.language == RATIO_LANG {
             let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
-            for (feature_index, coef) in self.features.iter() {
-                let part = if *coef > 0 { 0 } else { 1 };
+            for (&feature_index, &coef) in &sorted_features {
+                let part = if coef > 0 { 0 } else { 1 };
                 for sample in 0..sample_len {
                     r[sample][part] +=
-                        if X.get(&(sample, *feature_index)).unwrap_or(&0.0) > &self.epsilon {
+                        if X.get(&(sample, feature_index)).unwrap_or(&0.0) > &self.epsilon {
                             1.0
                         } else {
                             0.0
@@ -939,9 +945,9 @@ impl Individual {
                 .expect("MCMC Individuals must have betas coefficeints");
             let mut pos_sums = vec![0.0; sample_len];
             let mut neg_sums = vec![0.0; sample_len];
-            for (feature_index, coef) in self.features.iter() {
+            for (&feature_index, &coef) in &sorted_features {
                 for sample in 0..sample_len {
-                    let v = if X.get(&(sample, *feature_index)).unwrap_or(&0.0) > &self.epsilon {
+                    let v = if X.get(&(sample, feature_index)).unwrap_or(&0.0) > &self.epsilon {
                         1.0
                     } else {
                         0.0
@@ -963,11 +969,11 @@ impl Individual {
                 })
                 .collect();
         } else {
-            for (feature_index, coef) in self.features.iter() {
-                let x_coef = *coef as f64;
+            for (&feature_index, &coef) in &sorted_features {
+                let x_coef = coef as f64;
                 for sample in 0..sample_len {
                     score[sample] +=
-                        if X.get(&(sample, *feature_index)).unwrap_or(&0.0) > &self.epsilon {
+                        if X.get(&(sample, feature_index)).unwrap_or(&0.0) > &self.epsilon {
                             1.0
                         } else {
                             0.0
@@ -1001,16 +1007,17 @@ impl Individual {
     /// let scores = individual.evaluate_log(&X, sample_len);
     /// ```
     fn evaluate_log(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
-        // Shouldn't + epsilon be added?
         let mut score = vec![0.0; sample_len];
+        let mut sorted_features: Vec<(&usize, &i8)> = self.features.iter().collect();
+        sorted_features.sort_unstable_by_key(|(&k, _)| k);
 
         if self.language == RATIO_LANG {
             let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
-            for (feature_index, coef) in self.features.iter() {
-                let part = if *coef > 0 { 0 } else { 1 };
+            for (&feature_index, &coef) in &sorted_features {
+                let part = if coef > 0 { 0 } else { 1 };
                 for sample in 0..sample_len {
-                    if let Some(val) = X.get(&(sample, *feature_index)) {
-                        r[sample][part] += (val / self.epsilon).ln() * coef.abs() as f64;
+                    if let Some(val) = X.get(&(sample, feature_index)) {
+                        r[sample][part] += (val / self.epsilon).ln() * coef.unsigned_abs() as f64;
                     }
                 }
             }
@@ -1024,9 +1031,9 @@ impl Individual {
                 .expect("MCMC Individuals must have betas coefficeints");
             let mut pos_sums = vec![0.0; sample_len];
             let mut neg_sums = vec![0.0; sample_len];
-            for (feature_index, coef) in self.features.iter() {
+            for (&feature_index, &coef) in &sorted_features {
                 for sample in 0..sample_len {
-                    if let Some(v) = X.get(&(sample, *feature_index)) {
+                    if let Some(v) = X.get(&(sample, feature_index)) {
                         match coef {
                             1 => pos_sums[sample] += (v / self.epsilon).ln(),
                             -1 => neg_sums[sample] += (v / self.epsilon).ln(),
@@ -1045,10 +1052,10 @@ impl Individual {
                 })
                 .collect();
         } else {
-            for (feature_index, coef) in self.features.iter() {
-                let x_coef = *coef as f64;
+            for (&feature_index, &coef) in &sorted_features {
+                let x_coef = coef as f64;
                 for sample in 0..sample_len {
-                    if let Some(val) = X.get(&(sample, *feature_index)) {
+                    if let Some(val) = X.get(&(sample, feature_index)) {
                         score[sample] += (val / self.epsilon).ln() * x_coef;
                     }
                 }

@@ -23,17 +23,18 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 /// Pheromone matrix: stores pheromone values for (feature, sign) pairs.
+/// Uses BTreeMap for deterministic iteration order across runs.
 struct PheromoneMatrix {
     /// Pheromone for positive sign: feature_idx -> τ
-    positive: HashMap<usize, f64>,
+    positive: BTreeMap<usize, f64>,
     /// Pheromone for negative sign: feature_idx -> τ
-    negative: HashMap<usize, f64>,
+    negative: BTreeMap<usize, f64>,
     /// MMAS bounds
     tau_min: f64,
     tau_max: f64,
@@ -41,8 +42,8 @@ struct PheromoneMatrix {
 
 impl PheromoneMatrix {
     fn new(features: &[usize], tau_init: f64, tau_min: f64, tau_max: f64) -> Self {
-        let mut positive = HashMap::with_capacity(features.len());
-        let mut negative = HashMap::with_capacity(features.len());
+        let mut positive = BTreeMap::new();
+        let mut negative = BTreeMap::new();
         for &f in features {
             positive.insert(f, tau_init);
             negative.insert(f, tau_init);
@@ -158,13 +159,14 @@ impl PheromoneMatrix {
 }
 
 /// Heuristic information for each feature (η), derived from feature significance.
+/// Uses BTreeMap for deterministic iteration order.
 struct HeuristicInfo {
-    values: HashMap<usize, f64>,
+    values: BTreeMap<usize, f64>,
 }
 
 impl HeuristicInfo {
     fn new(feature_selection: &[usize], feature_significance: &HashMap<usize, f64>) -> Self {
-        let mut values = HashMap::with_capacity(feature_selection.len());
+        let mut values = BTreeMap::new();
         for &f in feature_selection {
             let sig = feature_significance.get(&f).copied().unwrap_or(1.0);
             // For p-value methods: lower p-value = higher desirability
@@ -375,7 +377,7 @@ pub fn aco(
     );
 
     // Precompute available features per language (binary filters to class > 0)
-    let available_by_lang: HashMap<u8, Vec<usize>> = languages
+    let available_by_lang: BTreeMap<u8, Vec<usize>> = languages
         .iter()
         .map(|&lang| {
             let avail: Vec<usize> = if lang == BINARY_LANG {
@@ -425,7 +427,7 @@ pub fn aco(
         }
 
         // Precompute selection probabilities once per iteration (shared across ants)
-        let probs_by_lang: HashMap<u8, Vec<(usize, f64)>> = available_by_lang
+        let probs_by_lang: BTreeMap<u8, Vec<(usize, f64)>> = available_by_lang
             .iter()
             .map(|(&lang, avail)| {
                 (
