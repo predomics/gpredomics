@@ -125,6 +125,10 @@ pub struct Param {
     #[serde(default)]
     pub aco: ACO,
 
+    /// Simulated Annealing parameters section
+    #[serde(default)]
+    pub sa: SA,
+
     /// Voting ensemble parameters section
     #[serde(default)]
     pub voting: Voting,
@@ -425,6 +429,35 @@ pub struct ACO {
     pub max_age_best_model: usize,
 }
 
+/// Simulated Annealing parameters
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
+pub struct SA {
+    /// Initial temperature (higher = more exploration)
+    #[serde(default = "one_f64_default")]
+    pub initial_temperature: f64,
+    /// Cooling rate per iteration (T *= cooling_rate)
+    #[serde(default = "sa_cooling_rate_default")]
+    pub cooling_rate: f64,
+    /// Stop when temperature drops below this
+    #[serde(default = "sa_min_temp_default")]
+    pub min_temperature: f64,
+    /// Maximum number of iterations
+    #[serde(default = "sa_max_iterations_default")]
+    pub max_iterations: usize,
+    /// Iterations between snapshots (for generation_tracking)
+    #[serde(default = "sa_snapshot_interval_default")]
+    pub snapshot_interval: usize,
+    /// Minimum number of features per model
+    #[serde(default = "one_default")]
+    #[serde(alias = "kmin")]
+    pub k_min: usize,
+    /// Maximum number of features per model (0 = no limit)
+    #[serde(default = "k_max_default")]
+    #[serde(alias = "kmax")]
+    pub k_max: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub struct GPU {
@@ -506,6 +539,12 @@ impl Default for MCMC {
 }
 
 impl Default for ACO {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for SA {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
@@ -733,6 +772,21 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
     .cloned()
     .collect();
 
+    let valid_sa_keys: HashSet<&str> = [
+        "initial_temperature",
+        "cooling_rate",
+        "min_temperature",
+        "max_iterations",
+        "snapshot_interval",
+        "k_min",
+        "kmin",
+        "k_max",
+        "kmax",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
     let valid_gpu_keys: HashSet<&str> = [
         "memory_policy",
         "max_total_memory_mb",
@@ -764,6 +818,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "beam",
         "mcmc",
         "aco",
+        "sa",
         "gpu",
         "importance",
         "experimental",
@@ -794,6 +849,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
                         "beam" => &valid_beam_keys,
                         "mcmc" => &valid_mcmc_keys,
                         "aco" => &valid_aco_keys,
+                        "sa" => &valid_sa_keys,
                         "gpu" => &valid_gpu_keys,
                         "importance" => &valid_importance_keys,
                         "experimental" => &valid_experimental_keys,
@@ -1107,6 +1163,18 @@ fn ten_default() -> usize {
 }
 fn one_f64_default() -> f64 {
     1.0
+}
+fn sa_cooling_rate_default() -> f64 {
+    0.995
+}
+fn sa_min_temp_default() -> f64 {
+    0.001
+}
+fn sa_max_iterations_default() -> usize {
+    10000
+}
+fn sa_snapshot_interval_default() -> usize {
+    100
 }
 fn specialist_threshold_default() -> f64 {
     0.7
