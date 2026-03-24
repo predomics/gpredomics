@@ -1814,6 +1814,16 @@ mod tests {
 
             for i in 0..10 {
                 let ind = Individual {
+                    cls: ClassificationMetrics {
+                        auc: 0.4 + (i as f64 * 0.05),
+                        specificity: 0.15 + (i as f64 * 0.01),
+                        sensitivity: 0.16 + (i as f64 * 0.01),
+                        accuracy: 0.23 + (i as f64 * 0.03),
+                        threshold: 42.0 + (i as f64),
+                        threshold_ci: None,
+                        additional: AdditionalMetrics {
+                        mcc: None,
+                    },
                     features: vec![(0, i), (1, -i), (2, i * 2), (3, i % 3)]
                         .into_iter()
                         .collect(),
@@ -1827,14 +1837,6 @@ mod tests {
                     parents: None,
                     betas: None,
                     cls: ClassificationMetrics {
-                        auc: 0.4 + (i as f64 * 0.05),
-                        specificity: 0.15 + (i as f64 * 0.01),
-                        sensitivity: 0.16 + (i as f64 * 0.01),
-                        accuracy: 0.23 + (i as f64 * 0.03),
-                        threshold: 42.0 + (i as f64),
-                        threshold_ci: None,
-                        additional: AdditionalMetrics {
-                            mcc: None,
                             f1_score: None,
                             npv: None,
                             ppv: None,
@@ -1871,6 +1873,16 @@ mod tests {
                     features_map.insert(feature_idx + i, 1i8); // Features shift with i for variety
                 }
                 individuals.push(Individual {
+                    cls: ClassificationMetrics {
+                        auc: 0.8,
+                        specificity: 0.75,
+                        sensitivity: 0.85,
+                        accuracy: 0.80,
+                        threshold: 0.5,
+                        threshold_ci: None,
+                        additional: AdditionalMetrics {
+                        mcc: None,
+                    },
                     features: features_map,
                     fit: 0.7,
                     k: features_per_individual,
@@ -1882,14 +1894,6 @@ mod tests {
                     parents: None,
                     betas: None,
                     cls: ClassificationMetrics {
-                        auc: 0.8,
-                        specificity: 0.75,
-                        sensitivity: 0.85,
-                        accuracy: 0.80,
-                        threshold: 0.5,
-                        threshold_ci: None,
-                        additional: AdditionalMetrics {
-                            mcc: None,
                             f1_score: None,
                             npv: None,
                             ppv: None,
@@ -2289,6 +2293,16 @@ mod tests {
         let mut pop = Population::test();
         let mut pop_to_add = Population::new();
         let ind1 = Individual {
+            cls: ClassificationMetrics {
+                auc: 0.4,
+                specificity: 0.15,
+                sensitivity: 0.16,
+                accuracy: 0.23,
+                threshold: 42.0,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                mcc: None,
+            },
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
             fit: 0.8,
             k: 42,
@@ -2300,14 +2314,6 @@ mod tests {
             parents: None,
             betas: None,
             cls: ClassificationMetrics {
-                auc: 0.4,
-                specificity: 0.15,
-                sensitivity: 0.16,
-                accuracy: 0.23,
-                threshold: 42.0,
-                threshold_ci: None,
-                additional: AdditionalMetrics {
-                    mcc: None,
                     f1_score: None,
                     npv: None,
                     ppv: None,
@@ -2316,6 +2322,16 @@ mod tests {
             },
         };
         let ind2 = Individual {
+            cls: ClassificationMetrics {
+                auc: 0.2,
+                specificity: 0.6,
+                sensitivity: 0.8,
+                accuracy: 0.12,
+                threshold: 24.0,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                mcc: None,
+            },
             features: vec![(0, -1), (1, 1), (2, 1), (3, 1)].into_iter().collect(),
             fit: 0.4,
             k: 48,
@@ -2327,14 +2343,6 @@ mod tests {
             parents: None,
             betas: None,
             cls: ClassificationMetrics {
-                auc: 0.2,
-                specificity: 0.6,
-                sensitivity: 0.8,
-                accuracy: 0.12,
-                threshold: 24.0,
-                threshold_ci: None,
-                additional: AdditionalMetrics {
-                    mcc: None,
                     f1_score: None,
                     npv: None,
                     ppv: None,

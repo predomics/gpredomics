@@ -1398,6 +1398,16 @@ mod tests {
 
     fn create_test_individual() -> Individual {
         Individual {
+            cls: ClassificationMetrics {
+                auc: 0.4,
+                specificity: 0.15,
+                sensitivity: 0.16,
+                accuracy: 0.23,
+                threshold: 42.0,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                mcc: None,
+            },
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
             fit: 0.8,
             k: 42,
@@ -1409,14 +1419,6 @@ mod tests {
             parents: None,
             betas: None,
             cls: ClassificationMetrics {
-                auc: 0.4,
-                specificity: 0.15,
-                sensitivity: 0.16,
-                accuracy: 0.23,
-                threshold: 42.0,
-                threshold_ci: None,
-                additional: AdditionalMetrics {
-                    mcc: None,
                     f1_score: None,
                     npv: None,
                     ppv: None,
@@ -1512,6 +1514,16 @@ mod tests {
 
     fn create_test_individual_for_test_pop_from_combinations() -> Individual {
         Individual {
+            cls: ClassificationMetrics {
+                auc: 0.4,
+                specificity: 0.15,
+                sensitivity: 0.16,
+                accuracy: 0.23,
+                threshold: 42.0,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                mcc: None,
+            },
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
             fit: 0.8,
             k: 4,
@@ -1523,14 +1535,6 @@ mod tests {
             parents: None,
             betas: None,
             cls: ClassificationMetrics {
-                auc: 0.4,
-                specificity: 0.15,
-                sensitivity: 0.16,
-                accuracy: 0.23,
-                threshold: 42.0,
-                threshold_ci: None,
-                additional: AdditionalMetrics {
-                    mcc: None,
                     f1_score: None,
                     npv: None,
                     ppv: None,

@@ -290,43 +290,43 @@ impl Individual {
                         m, threshold_ci.rejection_rate, rej_test
                     );
                 }
-                if self.metrics.mcc.is_some() {
+                if self.cls.additional.mcc.is_some() {
                     m = format!(
                         "{} | MCC {:.3}/{:.3} ",
                         m,
-                        self.metrics.mcc.unwrap(),
+                        self.cls.additional.mcc.unwrap(),
                         additional.mcc.unwrap()
                     );
                 }
-                if self.metrics.f1_score.is_some() {
+                if self.cls.additional.f1_score.is_some() {
                     m = format!(
                         "{} | F1-score {:.3}/{:.3} ",
                         m,
-                        self.metrics.f1_score.unwrap(),
+                        self.cls.additional.f1_score.unwrap(),
                         additional.f1_score.unwrap()
                     );
                 }
-                if self.metrics.npv.is_some() {
+                if self.cls.additional.npv.is_some() {
                     m = format!(
                         "{} | NPV {:.3}/{:.3} ",
                         m,
-                        self.metrics.npv.unwrap(),
+                        self.cls.additional.npv.unwrap(),
                         additional.npv.unwrap()
                     );
                 }
-                if self.metrics.ppv.is_some() {
+                if self.cls.additional.ppv.is_some() {
                     m = format!(
                         "{} | PPV {:.3}/{:.3} ",
                         m,
-                        self.metrics.ppv.unwrap(),
+                        self.cls.additional.ppv.unwrap(),
                         additional.ppv.unwrap()
                     );
                 }
-                if self.metrics.g_mean.is_some() {
+                if self.cls.additional.g_mean.is_some() {
                     m = format!(
                         "{} | G-mean {:.3}/{:.3} ",
                         m,
-                        self.metrics.g_mean.unwrap(),
+                        self.cls.additional.g_mean.unwrap(),
                         additional.g_mean.unwrap()
                     );
                 }
@@ -340,24 +340,24 @@ impl Individual {
                 if let Some(ref threshold_ci) = self.cls.threshold_ci {
                     m = format!("{} | rejection rate {:.3}", m, threshold_ci.rejection_rate);
                 }
-                if self.metrics.mcc.is_some() {
-                    m = format!("{} | MCC {:.3} ", m, self.metrics.mcc.unwrap());
+                if self.cls.additional.mcc.is_some() {
+                    m = format!("{} | MCC {:.3} ", m, self.cls.additional.mcc.unwrap());
                 }
-                if self.metrics.f1_score.is_some() {
+                if self.cls.additional.f1_score.is_some() {
                     m = format!(
                         "{} | F1-score {:.3} ",
                         m,
-                        self.metrics.f1_score.unwrap()
+                        self.cls.additional.f1_score.unwrap()
                     );
                 }
-                if self.metrics.npv.is_some() {
-                    m = format!("{} | NPV {:.3} ", m, self.metrics.npv.unwrap());
+                if self.cls.additional.npv.is_some() {
+                    m = format!("{} | NPV {:.3} ", m, self.cls.additional.npv.unwrap());
                 }
-                if self.metrics.ppv.is_some() {
-                    m = format!("{} | PPV {:.3} ", m, self.metrics.ppv.unwrap());
+                if self.cls.additional.ppv.is_some() {
+                    m = format!("{} | PPV {:.3} ", m, self.cls.additional.ppv.unwrap());
                 }
-                if self.metrics.g_mean.is_some() {
-                    m = format!("{} | G-mean {:.3} ", m, self.metrics.g_mean.unwrap());
+                if self.cls.additional.g_mean.is_some() {
+                    m = format!("{} | G-mean {:.3} ", m, self.cls.additional.g_mean.unwrap());
                 }
                 m
             }
@@ -1716,11 +1716,11 @@ impl Individual {
     pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64, f64, AdditionalMetrics) {
         let value = self.evaluate(d);
         let others_to_compute: [bool; 5] = [
-            self.metrics.mcc.is_some(),
-            self.metrics.f1_score.is_some(),
-            self.metrics.npv.is_some(),
-            self.metrics.ppv.is_some(),
-            self.metrics.g_mean.is_some(),
+            self.cls.additional.mcc.is_some(),
+            self.cls.additional.f1_score.is_some(),
+            self.cls.additional.npv.is_some(),
+            self.cls.additional.ppv.is_some(),
+            self.cls.additional.g_mean.is_some(),
         ];
         if let Some(ref threshold_ci) = self.cls.threshold_ci {
             compute_metrics_from_value(
@@ -4049,6 +4049,16 @@ mod tests {
         features_map.insert(2, 1i8); // Positive coefficient
 
         let individual = Individual {
+            cls: ClassificationMetrics {
+                auc: 0.8,
+                specificity: 0.75,
+                sensitivity: 0.85,
+                accuracy: 0.80,
+                threshold: 0.5,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                mcc: None,
+            },
             features: features_map,
             fit: 0.7,
             k: 3,
@@ -4060,14 +4070,6 @@ mod tests {
             parents: None,
             betas: None,
             cls: ClassificationMetrics {
-                auc: 0.8,
-                specificity: 0.75,
-                sensitivity: 0.85,
-                accuracy: 0.80,
-                threshold: 0.5,
-                threshold_ci: None,
-                additional: AdditionalMetrics {
-                    mcc: None,
                     f1_score: None,
                     npv: None,
                     ppv: None,
