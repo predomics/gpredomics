@@ -20,8 +20,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -623,7 +623,7 @@ fn select_features_for_ratio(
 ///
 /// An individual containing all features assigned coefficients based on their classes.
 pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Param) -> Individual {
-    let mut features = HashMap::new();
+    let mut features = BTreeMap::new();
     for &feature_idx in &data.feature_selection {
         if let Some(&feature_class) = data.feature_class.get(&feature_idx) {
             let coefficient = if feature_class == 0 {

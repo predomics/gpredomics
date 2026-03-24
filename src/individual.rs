@@ -63,9 +63,9 @@ impl Default for AdditionalMetrics {
 /// Mathematical model with a set of variables and their corresponding signs
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Individual {
-    /// Map between feature indices and their corresponding signs
-    #[serde(with = "serde_json_hashmap_numeric::usize_i8")]
-    pub features: HashMap<usize, i8>,
+    /// Map between feature indices and their corresponding signs (BTreeMap for deterministic order)
+    #[serde(with = "serde_json_hashmap_numeric::usize_i8_btree")]
+    pub features: BTreeMap<usize, i8>,
     /// Number of variables used in the model
     pub k: usize,
 
@@ -199,7 +199,7 @@ impl Individual {
     /// ```
     pub fn new() -> Individual {
         Individual {
-            features: HashMap::new(),
+            features: BTreeMap::new(),
             auc: 0.0,
             specificity: 0.0,
             sensitivity: 0.0,
@@ -535,10 +535,8 @@ impl Individual {
     /// ```
     pub fn compute_hash(&mut self) {
         let mut hasher = DefaultHasher::new();
-
-        // Convert HashMap to a sorted representation
-        let sorted_features: BTreeMap<_, _> = self.features.iter().collect();
-        sorted_features.hash(&mut hasher);
+        // BTreeMap already iterates in sorted order — deterministic hashing
+        self.features.hash(&mut hasher);
         self.betas.hash(&mut hasher);
         self.hash = hasher.finish();
     }
@@ -844,13 +842,10 @@ impl Individual {
     fn evaluate_raw(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
         let mut score = vec![0.0; sample_len];
 
-        // Sort features by index for deterministic floating-point accumulation order
-        let mut sorted_features: Vec<(&usize, &i8)> = self.features.iter().collect();
-        sorted_features.sort_unstable_by_key(|(&k, _)| k);
-
+        // BTreeMap iterates in sorted key order — deterministic accumulation
         if self.language == RATIO_LANG {
             let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 let part = if coef > 0 { 0 } else { 1 };
                 for sample in 0..sample_len {
                     r[sample][part] += X.get(&(sample, feature_index)).unwrap_or(&0.0);
@@ -866,7 +861,7 @@ impl Individual {
                 .expect("MCMC Individuals must have betas coefficeints");
             let mut pos_sums = vec![0.0; sample_len];
             let mut neg_sums = vec![0.0; sample_len];
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 for sample in 0..sample_len {
                     let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
                     match coef {
@@ -886,7 +881,7 @@ impl Individual {
                 })
                 .collect();
         } else {
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 let x_coef = coef as f64;
                 for sample in 0..sample_len {
                     score[sample] += X.get(&(sample, feature_index)).unwrap_or(&0.0) * x_coef;
@@ -919,12 +914,10 @@ impl Individual {
     /// ```
     fn evaluate_prevalence(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
         let mut score = vec![0.0; sample_len];
-        let mut sorted_features: Vec<(&usize, &i8)> = self.features.iter().collect();
-        sorted_features.sort_unstable_by_key(|(&k, _)| k);
 
         if self.language == RATIO_LANG {
             let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 let part = if coef > 0 { 0 } else { 1 };
                 for sample in 0..sample_len {
                     r[sample][part] +=
@@ -945,7 +938,7 @@ impl Individual {
                 .expect("MCMC Individuals must have betas coefficeints");
             let mut pos_sums = vec![0.0; sample_len];
             let mut neg_sums = vec![0.0; sample_len];
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 for sample in 0..sample_len {
                     let v = if X.get(&(sample, feature_index)).unwrap_or(&0.0) > &self.epsilon {
                         1.0
@@ -969,7 +962,7 @@ impl Individual {
                 })
                 .collect();
         } else {
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 let x_coef = coef as f64;
                 for sample in 0..sample_len {
                     score[sample] +=
@@ -1008,12 +1001,10 @@ impl Individual {
     /// ```
     fn evaluate_log(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
         let mut score = vec![0.0; sample_len];
-        let mut sorted_features: Vec<(&usize, &i8)> = self.features.iter().collect();
-        sorted_features.sort_unstable_by_key(|(&k, _)| k);
 
         if self.language == RATIO_LANG {
             let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 let part = if coef > 0 { 0 } else { 1 };
                 for sample in 0..sample_len {
                     if let Some(val) = X.get(&(sample, feature_index)) {
@@ -1031,7 +1022,7 @@ impl Individual {
                 .expect("MCMC Individuals must have betas coefficeints");
             let mut pos_sums = vec![0.0; sample_len];
             let mut neg_sums = vec![0.0; sample_len];
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 for sample in 0..sample_len {
                     if let Some(v) = X.get(&(sample, feature_index)) {
                         match coef {
@@ -1052,7 +1043,7 @@ impl Individual {
                 })
                 .collect();
         } else {
-            for (&feature_index, &coef) in &sorted_features {
+            for (&feature_index, &coef) in &self.features {
                 let x_coef = coef as f64;
                 for sample in 0..sample_len {
                     if let Some(val) = X.get(&(sample, feature_index)) {
@@ -1266,7 +1257,7 @@ impl Individual {
     /// let random_individual = Individual::random(&data, &mut rng);
     /// ```
     pub fn random(d: &Data, rng: &mut ChaCha8Rng) -> Individual {
-        let mut features: HashMap<usize, i8> = HashMap::new();
+        let mut features: BTreeMap<usize, i8> = BTreeMap::new();
         for (i, coef) in generate_random_vector(d.feature_len, rng)
             .iter()
             .enumerate()
@@ -1473,7 +1464,7 @@ impl Individual {
         // Randomly pick k values
         let random_values = chosen_feature_set.choose_multiple(rng, k as usize);
 
-        let features: HashMap<usize, i8> = match language {
+        let features: BTreeMap<usize, i8> = match language {
             BINARY_LANG => random_values
                 .collect::<Vec<&usize>>()
                 .iter()
@@ -1611,7 +1602,7 @@ impl Individual {
             .collect();
 
         // Create the individual with the selected features
-        let mut features = HashMap::new();
+        let mut features = BTreeMap::new();
         for &feature_idx in &selected_features {
             let coef = Individual::random_coefficient(
                 language,
@@ -2690,7 +2681,7 @@ mod tests {
         /// An Individual object with the specified features and predefined metrics
         pub fn test_with_these_given_features(features_vec: Vec<(usize, i8)>) -> Individual {
             Individual {
-                features: features_vec.into_iter().collect::<HashMap<usize, i8>>(),
+                features: features_vec.into_iter().collect::<BTreeMap<usize, i8>>(),
                 auc: 0.8,
                 fit: 0.7,
                 specificity: 0.1,
@@ -2810,7 +2801,7 @@ mod tests {
         ///
         /// An Individual object with the specified features and predefined metrics
         pub fn specific_test(features: &[usize]) -> Individual {
-            let mut features_map = HashMap::new();
+            let mut features_map = BTreeMap::new();
             for &feature_idx in features {
                 features_map.insert(feature_idx, 1i8);
             }
@@ -2889,8 +2880,8 @@ mod tests {
         ind.compute_hash();
 
         let mut hasher = DefaultHasher::new();
-        let sorted_features: BTreeMap<_, _> = ind.features.iter().collect();
-        sorted_features.hash(&mut hasher);
+
+        ind.features.hash(&mut hasher);
         ind.betas.hash(&mut hasher);
         let expected_hash = hasher.finish();
 
@@ -2915,8 +2906,8 @@ mod tests {
         );
 
         let mut hasher = DefaultHasher::new();
-        let sorted_features: BTreeMap<_, _> = ind.features.iter().collect();
-        sorted_features.hash(&mut hasher);
+
+        ind.features.hash(&mut hasher);
         ind.betas.hash(&mut hasher);
         let expected_hash = hasher.finish();
 
@@ -3367,7 +3358,7 @@ mod tests {
     #[test]
     fn test_random_select_k() {
         let features = vec![0, 1, 2, 3, 4];
-        let mut expected_features = HashMap::new();
+        let mut expected_features = BTreeMap::new();
         let mut feature_class = HashMap::new();
         feature_class.insert(0, 1);
         feature_class.insert(1, 0);
@@ -4033,7 +4024,7 @@ mod tests {
     #[test]
     fn test_compute_mda_feature_importance_individual_with_mixed_coefficients() {
         // Test individual with mixed positive/negative coefficients
-        let mut features_map = HashMap::new();
+        let mut features_map = BTreeMap::new();
         features_map.insert(0, 1i8); // Positive coefficient
         features_map.insert(1, -1i8); // Negative coefficient
         features_map.insert(2, 1i8); // Positive coefficient

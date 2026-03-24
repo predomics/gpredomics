@@ -1790,7 +1790,10 @@ mod tests {
     use super::*;
     use crate::individual::{AdditionalMetrics, DEFAULT_MINIMUM, RAW_TYPE, TERNARY_LANG};
     use rand::SeedableRng;
-    use std::{collections::HashMap, f64::MAX};
+    use std::{
+        collections::{BTreeMap, HashMap},
+        f64::MAX,
+    };
 
     impl Population {
         /// Generates a test population with predefined individuals for testing purposes.
@@ -1855,7 +1858,7 @@ mod tests {
         ) -> Population {
             let mut individuals = Vec::new();
             for i in 0..num_individuals {
-                let mut features_map = HashMap::new();
+                let mut features_map = BTreeMap::new();
                 for feature_idx in 0..features_per_individual {
                     features_map.insert(feature_idx + i, 1i8); // Features shift with i for variety
                 }
@@ -2559,7 +2562,7 @@ mod tests {
         };
 
         // Individual 0: feature [0]
-        let mut features1 = HashMap::new();
+        let mut features1 = BTreeMap::new();
         features1.insert(0, 1i8);
         pop.individuals.push(Individual {
             features: features1,
@@ -2569,7 +2572,7 @@ mod tests {
         });
 
         // Individual 1: feature [0]
-        let mut features2 = HashMap::new();
+        let mut features2 = BTreeMap::new();
         features2.insert(0, 1i8);
         pop.individuals.push(Individual {
             features: features2,
@@ -2579,7 +2582,7 @@ mod tests {
         });
 
         // Individual 2: feature [1]
-        let mut features3 = HashMap::new();
+        let mut features3 = BTreeMap::new();
         features3.insert(1, 1i8);
         pop.individuals.push(Individual {
             features: features3,
@@ -2624,7 +2627,7 @@ mod tests {
         };
 
         // Testing `if values.is_empty() { continue; }`
-        let mut features = HashMap::new();
+        let mut features = BTreeMap::new();
         features.insert(999, 1i8); // Unexistent feature
         pop.individuals.push(Individual {
             features,
@@ -2792,7 +2795,7 @@ mod tests {
         // Individuals avec hashes dans un ordre spécifique
         for i in [3, 1, 2, 0] {
             // Intentionally unordered hashes
-            let mut features = HashMap::new();
+            let mut features = BTreeMap::new();
             features.insert(i, 1i8);
             pop.individuals.push(Individual {
                 features,
@@ -2885,7 +2888,7 @@ mod tests {
         };
 
         // Individual 0: features [0, 1]
-        let mut features1 = HashMap::new();
+        let mut features1 = BTreeMap::new();
         features1.insert(0, 1i8);
         features1.insert(1, 1i8);
         pop.individuals.push(Individual {
@@ -2896,7 +2899,7 @@ mod tests {
         });
 
         // Individual 1: features [2, 3]
-        let mut features2 = HashMap::new();
+        let mut features2 = BTreeMap::new();
         features2.insert(2, 1i8);
         features2.insert(3, 1i8);
         pop.individuals.push(Individual {
@@ -2968,7 +2971,7 @@ mod tests {
         };
 
         // Individual avec features complètement en dehors des données
-        let mut features = HashMap::new();
+        let mut features = BTreeMap::new();
         features.insert(100, 1i8);
         features.insert(101, 1i8);
         pop.individuals.push(Individual {

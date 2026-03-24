@@ -204,7 +204,7 @@ fn construct_solution(
 
     // Working copy of probabilities (we remove selected features)
     let mut available: Vec<(usize, f64)> = probs.to_vec();
-    let mut selected_features: HashMap<usize, i8> = HashMap::with_capacity(k);
+    let mut selected_features: BTreeMap<usize, i8> = BTreeMap::new();
 
     for _ in 0..k {
         if available.is_empty() {

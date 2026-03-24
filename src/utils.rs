@@ -2117,9 +2117,9 @@ fn round_down_nicely(value: f64) -> f64 {
 /// ```
 pub mod serde_json_hashmap_numeric {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
-    /// HashMap<usize, T>
+    /// Serialize any map with usize keys as string keys for JSON compatibility
     pub fn serialize_usize<S, T>(map: &HashMap<usize, T>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -2132,7 +2132,7 @@ pub mod serde_json_hashmap_numeric {
         map_as_string.serialize(serializer)
     }
 
-    /// HashMap<usize, T>
+    /// Deserialize string keys back to usize keys (HashMap)
     pub fn deserialize_usize<'de, D, T>(deserializer: D) -> Result<HashMap<usize, T>, D::Error>
     where
         D: Deserializer<'de>,
@@ -2140,6 +2140,40 @@ pub mod serde_json_hashmap_numeric {
     {
         let map_as_string: HashMap<String, T> = HashMap::deserialize(deserializer)?;
         let mut map = HashMap::new();
+        for (k, v) in map_as_string {
+            if let Ok(idx) = k.parse() {
+                map.insert(idx, v);
+            }
+        }
+        Ok(map)
+    }
+
+    /// Serialize BTreeMap with usize keys as string keys for JSON compatibility
+    pub fn serialize_usize_btree<S, T>(
+        map: &BTreeMap<usize, T>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize + Clone,
+    {
+        let map_as_string: BTreeMap<String, T> = map
+            .iter()
+            .map(|(&k, v)| (k.to_string(), v.clone()))
+            .collect();
+        map_as_string.serialize(serializer)
+    }
+
+    /// Deserialize string keys back to usize keys (BTreeMap)
+    pub fn deserialize_usize_btree<'de, D, T>(
+        deserializer: D,
+    ) -> Result<BTreeMap<usize, T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        let map_as_string: HashMap<String, T> = HashMap::deserialize(deserializer)?;
+        let mut map = BTreeMap::new();
         for (k, v) in map_as_string {
             if let Ok(idx) = k.parse() {
                 map.insert(idx, v);
@@ -2210,6 +2244,27 @@ pub mod serde_json_hashmap_numeric {
             D: Deserializer<'de>,
         {
             deserialize_usize(deserializer)
+        }
+    }
+
+    /// BTreeMap<usize, i8> (Individual.features)
+    pub mod usize_i8_btree {
+        use super::*;
+
+        /// Serialize BTreeMap<usize, i8>
+        pub fn serialize<S>(map: &BTreeMap<usize, i8>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serialize_usize_btree(map, serializer)
+        }
+
+        /// Deserialize BTreeMap<usize, i8>
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<usize, i8>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserialize_usize_btree(deserializer)
         }
     }
 

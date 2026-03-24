@@ -2,7 +2,7 @@ use crate::individual::{Individual, LOG_TYPE, PREVALENCE_TYPE, RATIO_LANG, RAW_T
 use crate::param::{GpuMemoryPolicy, GPU};
 use bytemuck;
 use log::warn;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use wgpu::util::DeviceExt;
 use wgpu::{BindGroupEntry, BindingResource, CommandEncoderDescriptor, ComputePassDescriptor};
 
@@ -127,7 +127,7 @@ fn hashmap_to_csr(
 ///  A (col_ptr, row_idx, val) where `col_ptr`: length = num_cols + 1, `row_idx`, `val`: each length = total number of nonzeros
 ///  For column c, the nonzero entries are in index range [col_ptr[c] .. col_ptr[c+1]) of `row_idx`/`val`.
 fn vechash_to_csc(
-    mat_cols: &Vec<HashMap<usize, i8>>,
+    mat_cols: &Vec<BTreeMap<usize, i8>>,
     row_selection: &HashMap<usize, usize>,
 ) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
     let num_cols = mat_cols.len();
@@ -1166,14 +1166,14 @@ mod tests {
     #[test]
     fn test_vechash_to_csc_basic() {
         // Create 3 columns with some values
-        let mut col0 = HashMap::new();
+        let mut col0 = BTreeMap::new();
         col0.insert(0, 1);
         col0.insert(2, -1);
 
-        let mut col1 = HashMap::new();
+        let mut col1 = BTreeMap::new();
         col1.insert(1, 1);
 
-        let mut col2 = HashMap::new();
+        let mut col2 = BTreeMap::new();
         col2.insert(0, 1);
         col2.insert(2, 1);
 
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[test]
     fn test_vechash_to_csc_empty() {
-        let mat_cols: Vec<HashMap<usize, i8>> = vec![HashMap::new(), HashMap::new()];
+        let mat_cols: Vec<BTreeMap<usize, i8>> = vec![BTreeMap::new(), BTreeMap::new()];
         let row_selection = HashMap::new();
 
         let (col_ptr, row_idx, val) = vechash_to_csc(&mat_cols, &row_selection);
@@ -1553,7 +1553,7 @@ mod tests {
     #[test]
     fn test_vechash_to_csc_unsorted_rows() {
         // Insert rows in random order
-        let mut col0 = HashMap::new();
+        let mut col0 = BTreeMap::new();
         col0.insert(2, 3); // Out of order
         col0.insert(0, 1);
         col0.insert(1, 2);
