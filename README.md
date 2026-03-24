@@ -1,5 +1,6 @@
-# Gpredomics - Rapid, Interpretable and Accurate machine learning for omics data
+# Gpredomics
 
+### Rapid, Interpretable and Accurate Machine Learning for Omics Data
 
 [![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/predomics/gpredomics/releases)
 [![Rust](https://img.shields.io/badge/Rust-1.89+-orange.svg)](https://www.rust-lang.org)
@@ -10,198 +11,238 @@
 [![Rust CI](https://github.com/predomics/gpredomics/actions/workflows/rust.yml/badge.svg)](https://github.com/predomics/gpredomics/actions/workflows/rust.yml)
 ![GitHub bugs](https://img.shields.io/github/issues/predomics/gpredomics/bug)
 
-**Gpredomics** is a high-performance Rust implementation of the Predomics framework for discovering interpretable predictive signatures in omics data (metagenomics, microbiome, metabolomics). It learns Binary/Ternary/Ratio (BTR) models with discrete coefficients {-1, 0, 1} for maximum interpretability, making it ideal for clinical diagnostics and biomarker discovery.
-
-<div style="text-align: center;">
-  <img src="docs/logo_predomics.png" alt="Official Predomics logo" width="300" height="300">
+<div align="center">
+  <img src="docs/logo_predomics.png" alt="Official Predomics logo" width="200">
 </div>
 
-### Features
+**Gpredomics** discovers sparse, interpretable predictive signatures from high-dimensional omics data. Unlike black-box models, gpredomics learns models with **discrete coefficients** ({-1, 0, +1}) that clinicians can read, verify, and trust. Built in Rust for speed, with GPU acceleration and a full-featured web interface.
 
-- Interpretable languages: binary (subset sum), ternary (−1/0/1 algebraic sum), ratio (sum positive over sum negative), pow2 (ternary with powers of two coefficients).
-- Data encodings: raw values, prevalence via epsilon thresholding, and log transforms with epsilon flooring for numerical stability.
-- Optimizers: Genetic Algorithm (ga2 Predomics style), Beam search (LimitedExhaustive and ParallelForward), Ant Colony Optimization (Max-Min Ant System), Simulated Annealing, and MCMC with Sequential Backward Selection (beta).
-- Fitness targets: AUC, specificity, sensitivity, MCC, F1-score and G means with optional penalties on model size (k_penalty) and false‑rates (fr_penalty).
-- Confidence interval for classification threshold, allowing to discover divisive models and to avoid uncertain classifications.
-- Cross‑validation: stratified folds, Family of Best Models extraction, and MAD permutation importance aggregation across folds.
-- GPU acceleration: wgpu‑based scoring with configurable memory policy and safe CPU fallback when device limits are reached.
+> *"Is this patient's microbiome associated with disease? Which species matter, and in which direction?"*
+> Gpredomics answers this with models like: **score = Bacteroides + Faecalibacterium - Enterococcus**
 
-## Table of Contents
+---
 
-- [Quick start](#quick-start)
-- Configuration:
-  - [Usage](docs/use.md)
-  - [Data management](docs/data.md) 
-  - [Parameters](docs/param.md) (*coming soon*)
-  - [Cross-validation](docs/cv.md)
-- Concepts:
-  - [Individual](docs/individual.md)
-  - [Population](docs/population.md)
-  - [Rejection](docs/rejection.md)
-- Algorithms:
-  - [Genetic Algorithm](docs/ga.md)
-  - [Ant Colony Optimization](docs/aco.md)
-  - [Simulated Annealing](docs/sa.md)
-  - [Iterated Local Search](docs/ils.md)
-  - [Beam Search](docs/beam.md)
-  - [MCMC / Bayesian Inference](docs/mcmc.md)
-- To go further:
-  - [Differences with legacy Predomics](docs/legacy.md) (*coming soon*)
-  - [Technical documentation](docs/dev.md)
-- You may be interested in:
-  - [GpredomicsR, an R package using Gpredomics](https://github.com/predomics/gpredomicsR)
-  - [Legacy Predomics](https://github.com/predomics/predomicspkg/tree/master)
-  - [Multiclass classification via Predomics](https://github.com/UMMISCO/predomicsmc)
+## Why Gpredomics?
 
-## Quick start
+| Challenge | Gpredomics Solution |
+|-----------|-------------------|
+| Black-box ML models can't be trusted in clinical settings | **Interpretable BTR models** with discrete coefficients |
+| Feature selection on 10,000+ features is slow | **7 optimization algorithms** from 0.05s to 7s |
+| Overfitting on small cohorts (n=50-500) | **Cross-validation**, threshold CI, k-penalty, voting ensemble |
+| Need to compare approaches systematically | **LASSO baseline** + 6 metaheuristics + SOTA sklearn classifiers |
+| Reproducibility across runs | **Deterministic** execution with fixed seed (BTreeMap-based) |
 
-### Installation
+## Performance at a Glance
 
-Install a recent Rust toolchain and build in release mode for performance on CPU and GPU.
+Benchmark on **Qin2014** cirrhosis dataset (1,980 features, 180 samples, ternary:prevalence):
 
-`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+| Algorithm | Test AUC | Model Size (k) | Time |
+|-----------|---------|----------------|------|
+| **Simulated Annealing** | **0.911** | 48 | 0.3s |
+| LASSO / Elastic Net | 0.853 | 70 | 0.1s |
+| Iterated Local Search | 0.813 | **22** | **0.05s** |
+| Ant Colony Optimization | 0.802 | 52 | 7.1s |
+| Genetic Algorithm | 0.791 | 48 | 0.5s |
 
-At the root of this repository, compile gpredomics: 
+All algorithms produce models that a biologist can read: `score = species_A + species_B - species_C`
 
-`cargo build --release`
+---
 
-If you want the binary to embed a git hash in logs and experiment metadata, set `GPREDOMICS_GIT_SHA` at build time. If it is not set, it defaults to `unknown`.
+## Architecture
 
-Example:
+```
+                    ┌─────────────────────────────────────┐
+                    │         predomicsapp-web             │
+                    │     Vue.js frontend + FastAPI        │
+                    │   (visualization, batch runs, ...)   │
+                    └──────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────▼──────────────────────┐
+                    │          gpredomicspy                │
+                    │     Python bindings (PyO3)           │
+                    │  clinical integration, benchmarks    │
+                    └──────────────┬──────────────────────┘
+                                   │
+  ┌────────────────────────────────▼────────────────────────────────┐
+  │                        gpredomics (Rust)                        │
+  │                                                                 │
+  │  ┌─────────┐ ┌──────┐ ┌──────┐ ┌─────┐ ┌────┐ ┌───────┐ ┌───┐│
+  │  │   GA    │ │ Beam │ │ ACO  │ │ SA  │ │ILS │ │ LASSO │ │MCM││
+  │  │ evolve  │ │search│ │ ants │ │annea│ │local│ │coord. │ │Bay││
+  │  └────┬────┘ └──┬───┘ └──┬───┘ └──┬──┘ └─┬──┘ └───┬───┘ └─┬─┘│
+  │       └─────────┴────────┴────────┴──────┴────────┴───────┘   │
+  │                    Individual (BTR model)                       │
+  │              features: {species_A: +1, species_C: -1}          │
+  │                                                                 │
+  │  ┌──────────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐ │
+  │  │ Feature      │  │ Voting / │  │ Importance │  │    GPU    │ │
+  │  │ Selection    │  │  Jury    │  │   (MDA)    │  │  (wgpu)   │ │
+  │  └──────────────┘  └──────────┘  └───────────┘  └───────────┘ │
+  └─────────────────────────────────────────────────────────────────┘
+```
 
-`GPREDOMICS_GIT_SHA=$(git rev-parse --short HEAD) cargo build --release`
+## Key Features
 
-### Use 
+### Model Languages
+- **Binary**: subset sum — `score = A + B + C` (presence/absence)
+- **Ternary**: algebraic sum — `score = A + B - C` (directional)
+- **Ratio**: `score = (A + B) / (C + D)` (relative abundance)
+- **Pow2**: ternary with powers of two — `score = 4A + 2B - 8C` (weighted)
 
-The executable loads param.yaml from the current working directory on startup.
-This configuration file contains information about the inputs and experiments to be launched. 
+### 7 Optimization Algorithms
+| Algorithm | Type | Strength |
+|-----------|------|----------|
+| [Genetic Algorithm](docs/ga.md) | Population, recombinative | Broad exploration, diverse FBM |
+| [Beam Search](docs/beam.md) | Systematic, exhaustive | Guaranteed coverage of small k |
+| [Ant Colony Optimization](docs/aco.md) | Population, constructive | Feature discovery via pheromone |
+| [Simulated Annealing](docs/sa.md) | Single-solution, perturbative | Deep refinement, best AUC |
+| [Iterated Local Search](docs/ils.md) | Single-solution, perturbative | Fastest, sparsest models |
+| [LASSO / Elastic Net](docs/lasso.md) | Direct optimization | Mathematical baseline |
+| [MCMC / Bayesian](docs/mcmc.md) | Bayesian posterior | Uncertainty quantification |
 
-To launch gpredomics, simply type: 
+### Fitness Functions
+**Classification**: AUC, sensitivity, specificity, MCC, F1, PPV, NPV, G-mean
+**Regression**: Spearman rank correlation, RMSE, Mutual Information
 
-`cargo run --release`
+### Advanced Capabilities
+- **Cross-validation**: stratified K-fold with inner/outer folds and overfitting penalty
+- **Voting ensemble**: jury of diverse experts with specialization (class-restricted voting)
+- **Threshold confidence intervals**: bootstrap CI for robust classification boundaries
+- **Feature importance**: MDA permutation + prevalence + coefficient analysis
+- **GPU acceleration**: wgpu-based scoring (Metal on macOS, Vulkan on Linux)
+- **Full determinism**: same seed = identical results across runs
 
-### Data format
+---
 
-Below are minimal TSV schemas that match the loader’s expectations.
+## Quick Start
 
-`X.tsv` : features by rows and samples by columns; first column contains feature names, subsequent columns contain numeric values per sample.
-| feature |	sample_a | sample_b	| sample_c
-| :-- | :-- | :-- | :-- 
-| feature_1 | 0.10 | 0.20 | 0.30
-| feature_2 | 0.00 | 0.05 | 0.10
-| feature_3 | 0.90 | 0.80 | 0.70
-
-`y.tsv`: two‑column TSV mapping sample to class; header line is ignored; classes: 0 (negative), 1 (positive), 2 (unknown, ignored in metrics).
-| sample | class
-| :-- | :-- 
-| sample_a| 0
-| sample_b| 1
-| sample_c| 1
-
-A new parameter now allows you to accept a transposed X format, which is standard in ML. To do this, set `features_in_rows` to `false` in param.yaml. 
-
-### CLI
-
-CLI commands can be specified to reload a saved experiment or evaluate a new dataset using the models selected during the experiment:
-
-- Default run: execute the binary in a directory that contains `param.yaml`; the program initializes logging and dispatches GA/Beam/MCMC according to general.algo.
-- Specific configuration: execute the binary using another configuration file using --config config.yaml.
-- Reload and display: use --load <experiment.(json|mp|bin)> to deserialize a saved Experiment; the format is auto‑detected at load time. 
-- Evaluate on external data: combine --load with --evaluate and provide --x-test and --y-test to score the saved run on a new dataset.
-
-#### Examples
-
-Flags are defined with clap:
+### Install
 
 ```bash
-# default execution (param.yaml in CWD)
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Build gpredomics
+git clone https://github.com/predomics/gpredomics.git
+cd gpredomics
+cargo build --release
+```
+
+### Run
+
+```bash
+# Place your param.yaml, X.tsv, and y.tsv in the working directory
+cargo run --release
+
+# Or specify a config file
+./target/release/gpredomics --config path/to/param.yaml
+```
+
+### Minimal param.yaml
+
+```yaml
+general:
+  algo: ga          # ga, beam, aco, sa, ils, lasso, mcmc
+  language: ter     # bin, ter, ratio, pow2
+  data_type: prev   # raw, prev, log
+  fit: auc          # auc, mcc, f1_score, spearman, rmse
+  seed: 42
+  k_penalty: 0.001
+
+data:
+  X: X_train.tsv
+  y: y_train.tsv
+  Xtest: X_test.tsv
+  ytest: y_test.tsv
+
+ga:
+  population_size: 5000
+  max_epochs: 200
+
+voting:
+  vote: true
+  fbm_ci_alpha: 0.05
+```
+
+### Data Format
+
+**X.tsv** (features × samples):
+| feature | sample_a | sample_b | sample_c |
+|---------|----------|----------|----------|
+| species_1 | 0.10 | 0.20 | 0.30 |
+| species_2 | 0.00 | 0.05 | 0.10 |
+
+**y.tsv** (sample → class):
+| sample | class |
+|--------|-------|
+| sample_a | 0 |
+| sample_b | 1 |
+
+Set `features_in_rows: false` for samples × features format (standard ML layout).
+
+---
+
+## Ecosystem
+
+| Component | Description | Link |
+|-----------|-------------|------|
+| **gpredomics** | Rust core engine (this repo) | [GitHub](https://github.com/predomics/gpredomics) |
+| **gpredomicspy** | Python bindings (PyO3) + clinical integration | [GitHub](https://github.com/predomics/gpredomicspy) |
+| **predomicsapp-web** | Full-stack web application (FastAPI + Vue.js) | [GitHub](https://github.com/predomics/predomicsapp-web) |
+| **GpredomicsR** | R package interface | [GitHub](https://github.com/predomics/gpredomicsR) |
+| **Legacy Predomics** | Original R implementation | [GitHub](https://github.com/predomics/predomicspkg) |
+
+## Documentation
+
+- **Getting Started**: [Usage](docs/use.md) · [Data management](docs/data.md) · [Cross-validation](docs/cv.md)
+- **Concepts**: [Individual](docs/individual.md) · [Population](docs/population.md) · [Rejection](docs/rejection.md)
+- **Algorithms**: [GA](docs/ga.md) · [Beam](docs/beam.md) · [ACO](docs/aco.md) · [SA](docs/sa.md) · [ILS](docs/ils.md) · [LASSO](docs/lasso.md) · [MCMC](docs/mcmc.md)
+- **Development**: [Technical docs](docs/dev.md)
+
+## CLI Reference
+
+```bash
+# Default run (reads param.yaml in current directory)
 gpredomics
 
-# specific config
-gpredomics --config ./path/config.yaml
+# Custom config
+gpredomics --config experiment.yaml
 
-# reload a saved experiment and print results
-gpredomics --load 2025-01-01_12-00-00_run.msgpack
+# Generate CSV performance report
+gpredomics --config experiment.yaml --csv-report
 
-# evaluate on an external test set
-gpredomics --load 2025-01-01_12-00-00_run.msgpack \
-  --evaluate --x-test /path/X_test.tsv --y-test /path/y_test.tsv
+# Reload and display saved experiment
+gpredomics --load 2025-01-01_run.msgpack
+
+# Evaluate saved model on new data
+gpredomics --load 2025-01-01_run.msgpack \
+  --evaluate --x-test X_test.tsv --y-test y_test.tsv
 ```
 
-**CSV performance report**:
-```bash
-# via CLI flag
-gpredomics --config param.yaml --csv-report
+## GPU Support
 
-# or set csv_report: true in param.yaml under general:
-```
-Generates a `<timestamp>_csvr.csv` file with three sections: best model, FBM (Family of Best Models averaged), and jury (if voting is enabled). All classification metrics (AUC, accuracy, sensitivity, specificity, F1, MCC, PPV, NPV, G-mean) are computed for both train and test sets, along with all experiment parameters as individual columns.
+| Platform | Backend | Setup |
+|----------|---------|-------|
+| **macOS (Apple Silicon)** | Metal | `brew install rustup llvm` then build normally |
+| **Linux (NVIDIA)** | Vulkan | `sudo apt install vulkan-tools libvulkan1 nvidia-driver-550` |
 
-Note that `--evaluate` requires `--load` and needs `--x-test` and `--y-test`.
-Termination signals are handled for clean shutdown.
-
-### GPU support
-
-The supported GPUs are:
-- Apple Silicons (Metal),
-- All GPU supported by Vulkan.
-
-#### Apple Metal
-
-For Apple, Metal is supported out of the box, however you need a recent version of LLVM, more recent at least than the default one. Here is the procedure:
-
-You're supposed to already have the developpers tools (installed with `xcode-select --install`, which you need anyway for Rust). 
-
-The recommanded procedure is to use Homebrew (at least for LLVM, and probably for rustup).
-
-```sh
-brew install rustup llvm
-# the following line is only required if you had already installed Rust with the https://rustup.sh site
-mv ~/.cargo ~/.cargo.backup # optionnally remove the line in the .zshrc that load the .cargo/env environment file
-export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-echo << EOF >> ~/.zshrc
-export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-EOF
-rustup default nightly
-rustup update
-```
-Then build normally with `cargo build --release`
-
-#### Linux
-For Linux, you *must* install Vulkan:
-```sh
-sudo apt install vulkan-tools libvulkan1 
-```
-
-For Nvidia cards, you will need also a driver, so for instance:
-```sh
-sudo apt install libnvidia-gl-550-server nvidia-driver-550 nvidia-utils-550
-```
-
-Check with `vulkaninfo` that your card is correctly detected.
-
-NB under Linux, I always do a fully optimized build, but that is not mandatory, a simple `cargo build --release` is enough:
-```sh
-RUSTFLAGS="-C target-cpu=native -C opt-level=3" cargo build --release
-```
+Set `general.gpu: true` in param.yaml. Falls back to CPU automatically if GPU is unavailable.
 
 ## Citation
 
-If you use **Gpredomics** in your research, please cite it as follows:
+If you use **Gpredomics** in your research, please cite:
 
 **Original Method:**
 > Prifti, E., Chevaleyre, Y., Hanczar, B., Belda, E., Danchin, A., Clément, K., & Zucker, J. D. (2020). Interpretable and accurate prediction models for metagenomics data. *GigaScience*, 9(3), giaa010. [https://doi.org/10.1093/gigascience/giaa010](https://doi.org/10.1093/gigascience/giaa010)
 
 **Software:**
-> Lesage, L., de Lahondès, R., Puller, V., & Prifti, E. (2025). *Gpredomics* (Version 0.7.7). GMT Science / IRD. [https://github.com/predomics/gpredomics](https://github.com/predomics/gpredomics)
+> Lesage, L., de Lahondès, R., Puller, V., & Prifti, E. (2025). *Gpredomics* (Version 0.9.0). GMT Science / IRD. [https://github.com/predomics/gpredomics](https://github.com/predomics/gpredomics)
 
-*A `CITATION.cff` file is available in this repository. If you use GitHub, you can use the **"Cite this repository"** option in the "About" section to export this citation in BibTeX or APA formats.*
+A `CITATION.cff` file is available — use GitHub's **"Cite this repository"** button for BibTeX/APA export.
 
 ## Contact
 
-If you have any questions, comments, or have found a bug, please contact us at the following address:
-
+- Issues: [GitHub Issues](https://github.com/predomics/gpredomics/issues)
 - Email: contact@predomics.com
-- GitHub Issues: [Gpredomics Issues](https://github.com/predomics/gpredomics/issues)
 
-*Last updated: v0.7.7*
+*Last updated: v0.9.0*
