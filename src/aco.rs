@@ -20,6 +20,7 @@ use log::{debug, info, warn};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use rayon::prelude::*;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,9 +28,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// Pheromone matrix: stores pheromone values for (feature, sign) pairs.
-///
-/// For each feature index, stores pheromone for positive (+1) and negative (-1) signs.
-/// The total pheromone for a feature is the sum of both signs.
 struct PheromoneMatrix {
     /// Pheromone for positive sign: feature_idx -> τ
     positive: HashMap<usize, f64>,
@@ -95,6 +93,25 @@ impl PheromoneMatrix {
             }
         }
     }
+
+    /// Get precomputed selection probabilities for all features (τ^α × η^β).
+    /// Returns sorted vec of (feature_idx, probability) for efficient sampling.
+    fn selection_probs(
+        &self,
+        available: &[usize],
+        heuristic: &HeuristicInfo,
+        alpha: f64,
+        beta: f64,
+    ) -> Vec<(usize, f64)> {
+        available
+            .iter()
+            .map(|&f| {
+                let tau = self.total(f);
+                let eta = heuristic.get(f);
+                (f, tau.powf(alpha) * eta.powf(beta))
+            })
+            .collect()
+    }
 }
 
 /// Heuristic information for each feature (η), derived from feature significance.
@@ -106,15 +123,12 @@ impl HeuristicInfo {
     fn new(feature_selection: &[usize], feature_significance: &HashMap<usize, f64>) -> Self {
         let mut values = HashMap::with_capacity(feature_selection.len());
         for &f in feature_selection {
-            // η = 1 / (p_value + ε) — lower p-value = higher heuristic desirability
             let sig = feature_significance.get(&f).copied().unwrap_or(1.0);
-            // For bayesian_fisher, significance is log_bayes_factor (higher = better)
-            // For p-value methods, lower = better
-            let eta = if sig >= 0.0 && sig <= 1.0 {
-                // Looks like a p-value
+            // For p-value methods: lower p-value = higher desirability
+            // For bayesian_fisher: higher score = better
+            let eta = if (0.0..=1.0).contains(&sig) {
                 1.0 / (sig + 1e-10)
             } else {
-                // Looks like a bayes factor or other score (higher = better)
                 sig.abs().max(1e-10)
             };
             values.insert(f, eta);
@@ -129,68 +143,30 @@ impl HeuristicInfo {
 
 /// Construct a single ant's solution (one Individual).
 fn construct_solution(
+    probs: &[(usize, f64)],
     pheromone: &PheromoneMatrix,
-    heuristic: &HeuristicInfo,
-    feature_selection: &[usize],
     feature_class: &HashMap<usize, u8>,
     language: u8,
     data_type: u8,
     epsilon: f64,
-    k_min: usize,
-    k_max: usize,
-    alpha: f64,
-    beta: f64,
+    k: usize,
     threshold_ci: bool,
     rng: &mut ChaCha8Rng,
 ) -> Individual {
-    let available: Vec<usize> = if language == BINARY_LANG {
-        feature_selection
-            .iter()
-            .cloned()
-            .filter(|f| feature_class.get(f).copied().unwrap_or(0) > 0)
-            .collect()
-    } else {
-        feature_selection.to_vec()
-    };
-
-    if available.is_empty() {
-        // Return empty individual that will be caught by remove_stillborn
+    if probs.is_empty() || k == 0 {
         return Individual::new();
     }
 
-    // Choose model size k
-    let effective_k_max = if k_max > 0 {
-        min(k_max, available.len())
-    } else {
-        available.len()
-    };
-    let effective_k_min = if k_min > 0 { k_min } else { 1 };
-    let k = if effective_k_min >= effective_k_max {
-        effective_k_max
-    } else {
-        rng.gen_range(effective_k_min..=effective_k_max)
-    };
-
-    // Compute selection probabilities
-    let mut probabilities: Vec<(usize, f64)> = available
-        .iter()
-        .map(|&f| {
-            let tau = pheromone.total(f);
-            let eta = heuristic.get(f);
-            let prob = tau.powf(alpha) * eta.powf(beta);
-            (f, prob)
-        })
-        .collect();
-
-    // Select k features using roulette wheel (without replacement)
+    // Working copy of probabilities (we remove selected features)
+    let mut available: Vec<(usize, f64)> = probs.to_vec();
     let mut selected_features: HashMap<usize, i8> = HashMap::with_capacity(k);
 
     for _ in 0..k {
-        if probabilities.is_empty() {
+        if available.is_empty() {
             break;
         }
 
-        let total_prob: f64 = probabilities.iter().map(|(_, p)| p).sum();
+        let total_prob: f64 = available.iter().map(|(_, p)| p).sum();
         if total_prob <= 0.0 {
             break;
         }
@@ -198,7 +174,7 @@ fn construct_solution(
         // Roulette wheel selection
         let mut r = rng.gen::<f64>() * total_prob;
         let mut chosen_idx = 0;
-        for (i, (_, p)) in probabilities.iter().enumerate() {
+        for (i, (_, p)) in available.iter().enumerate() {
             r -= p;
             if r <= 0.0 {
                 chosen_idx = i;
@@ -206,7 +182,7 @@ fn construct_solution(
             }
         }
 
-        let (feat, _) = probabilities.remove(chosen_idx);
+        let (feat, _) = available.swap_remove(chosen_idx); // O(1) removal
 
         // Choose coefficient sign based on pheromone and feature class
         let sign = match language {
@@ -215,16 +191,15 @@ fn construct_solution(
                 let tau_pos = pheromone.get(feat, 1);
                 let tau_neg = pheromone.get(feat, -1);
                 let class = feature_class.get(&feat).copied().unwrap_or(2);
+                let pos_prob = tau_pos / (tau_pos + tau_neg + 1e-10);
                 if class == 1 {
-                    // Feature associated with class 1 — bias toward positive
-                    if rng.gen::<f64>() < tau_pos / (tau_pos + tau_neg + 1e-10) {
+                    if rng.gen::<f64>() < pos_prob {
                         1
                     } else {
                         -1
                     }
                 } else {
-                    // Feature associated with class 0 — bias toward negative
-                    if rng.gen::<f64>() < tau_neg / (tau_pos + tau_neg + 1e-10) {
+                    if rng.gen::<f64>() < 1.0 - pos_prob {
                         -1
                     } else {
                         1
@@ -234,7 +209,6 @@ fn construct_solution(
             individual::POW2_LANG => {
                 let class = feature_class.get(&feat).copied().unwrap_or(2);
                 let base_sign: i8 = if class == 1 { 1 } else { -1 };
-                // Random power of 2: 2^0 to 2^3 (1, 2, 4, 8)
                 let power = rng.gen_range(0..=3);
                 base_sign * (1i8 << power)
             }
@@ -261,6 +235,45 @@ fn construct_solution(
         });
     }
     ind
+}
+
+/// Local search: try removing each feature, keep removal if fitness improves.
+/// Returns true if any improvement was made.
+fn local_search_remove(individual: &mut Individual, data: &Data, param: &Param) -> bool {
+    if individual.k <= 1 {
+        return false;
+    }
+
+    let features: Vec<(usize, i8)> = individual.features.iter().map(|(&k, &v)| (k, v)).collect();
+    let baseline_scores = individual.evaluate(data);
+    let (baseline_auc, _, _, _, _, _) =
+        crate::utils::compute_roc_and_metrics_from_value(&baseline_scores, &data.y, &crate::param::FitFunction::auc, None);
+
+    let mut improved = false;
+    for &(feat, coef) in &features {
+        // Try removing this feature
+        individual.features.remove(&feat);
+        individual.k -= 1;
+
+        let scores = individual.evaluate(data);
+        let (auc, _, _, _, _, _) =
+            crate::utils::compute_roc_and_metrics_from_value(&scores, &data.y, &crate::param::FitFunction::auc, None);
+
+        // Apply k_penalty to compare fairly
+        let penalized_baseline = baseline_auc - param.general.k_penalty * (individual.k + 1) as f64;
+        let penalized_new = auc - param.general.k_penalty * individual.k as f64;
+
+        if penalized_new >= penalized_baseline {
+            // Keep removal — sparser model with equal or better penalized fitness
+            improved = true;
+        } else {
+            // Restore feature
+            individual.features.insert(feat, coef);
+            individual.k += 1;
+        }
+    }
+
+    improved
 }
 
 /// Display legend for ACO epoch output
@@ -310,6 +323,23 @@ pub fn aco(
         param.aco.tau_max,
     );
 
+    // Precompute available features per language (binary filters to class > 0)
+    let available_by_lang: HashMap<u8, Vec<usize>> = languages
+        .iter()
+        .map(|&lang| {
+            let avail: Vec<usize> = if lang == BINARY_LANG {
+                data.feature_selection
+                    .iter()
+                    .cloned()
+                    .filter(|f| data.feature_class.get(f).copied().unwrap_or(0) > 0)
+                    .collect()
+            } else {
+                data.feature_selection.clone()
+            };
+            (lang, avail)
+        })
+        .collect();
+
     let n_ants = param.aco.n_ants;
     let n_combos = languages.len() * data_types.len();
     let ants_per_combo = n_ants / n_combos.max(1);
@@ -342,30 +372,65 @@ pub fn aco(
             break;
         }
 
-        // Construct solutions
-        let mut pop = Population::new();
-        for &lang in &languages {
-            for &dt in &data_types {
-                for _ in 0..ants_per_combo {
-                    let ind = construct_solution(
-                        &pheromone,
-                        &heuristic,
-                        &data.feature_selection,
-                        &data.feature_class,
-                        lang,
-                        dt,
-                        param.general.data_type_epsilon,
-                        param.aco.k_min,
-                        param.aco.k_max,
-                        param.aco.alpha,
-                        param.aco.beta,
-                        threshold_ci,
-                        &mut rng,
-                    );
-                    pop.individuals.push(ind);
-                }
-            }
-        }
+        // Precompute selection probabilities once per iteration (shared across ants)
+        let probs_by_lang: HashMap<u8, Vec<(usize, f64)>> = available_by_lang
+            .iter()
+            .map(|(&lang, avail)| {
+                (
+                    lang,
+                    pheromone.selection_probs(avail, &heuristic, param.aco.alpha, param.aco.beta),
+                )
+            })
+            .collect();
+
+        // Generate per-ant seeds from the master RNG for parallel determinism
+        let ant_configs: Vec<(u8, u8, u64)> = languages
+            .iter()
+            .flat_map(|&lang| {
+                data_types
+                    .iter()
+                    .flat_map(move |&dt| (0..ants_per_combo).map(move |_| (lang, dt)))
+            })
+            .map(|(lang, dt)| (lang, dt, rng.gen::<u64>()))
+            .collect();
+
+        // Parallel ant construction
+        let individuals: Vec<Individual> = ant_configs
+            .par_iter()
+            .map(|&(lang, dt, seed)| {
+                let mut ant_rng = ChaCha8Rng::seed_from_u64(seed);
+                let probs = &probs_by_lang[&lang];
+                let effective_k_max = if param.aco.k_max > 0 {
+                    min(param.aco.k_max, probs.len())
+                } else {
+                    probs.len()
+                };
+                let effective_k_min = if param.aco.k_min > 0 {
+                    param.aco.k_min
+                } else {
+                    1
+                };
+                let k = if effective_k_min >= effective_k_max {
+                    effective_k_max
+                } else {
+                    ant_rng.gen_range(effective_k_min..=effective_k_max)
+                };
+
+                construct_solution(
+                    probs,
+                    &pheromone,
+                    &data.feature_class,
+                    lang,
+                    dt,
+                    param.general.data_type_epsilon,
+                    k,
+                    threshold_ci,
+                    &mut ant_rng,
+                )
+            })
+            .collect();
+
+        let mut pop = Population { individuals };
 
         // Remove invalid individuals
         remove_stillborn(&mut pop);
@@ -379,11 +444,23 @@ pub fn aco(
             continue;
         }
 
-        // Evaluate fitness
+        // Evaluate fitness (already parallelized inside pop.fit)
         pop.fit(data, &mut None, &None, &None, param);
         pop = pop.sort();
         pop.compute_hash();
         pop.remove_clone();
+
+        // Local search on top models (try removing features to reduce k)
+        let n_local_search = min(5, pop.individuals.len());
+        for i in 0..n_local_search {
+            local_search_remove(&mut pop.individuals[i], data, param);
+            pop.individuals[i].k = pop.individuals[i].features.len();
+        }
+        // Re-evaluate and re-sort after local search
+        if n_local_search > 0 {
+            pop.fit(data, &mut None, &None, &None, param);
+            pop = pop.sort();
+        }
 
         // Track best
         let iteration_best = &pop.individuals[0];
@@ -545,5 +622,30 @@ mod tests {
 
         assert!(pm.get(0, 1) > 0.45);
         assert!(pm.get(1, -1) > 0.45);
+    }
+
+    #[test]
+    fn test_aco_produces_sparse_models_with_k_penalty() {
+        let mut data = Data::specific_significant_test(50, 50);
+        let mut param = Param::default();
+        param.general.algo = "aco".to_string();
+        param.general.language = "ternary".to_string();
+        param.general.data_type = "prevalence".to_string();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+        param.general.k_penalty = 0.01; // Strong k penalty
+        param.aco.n_ants = 100;
+        param.aco.max_iterations = 20;
+        param.aco.min_iterations = 20;
+        param.aco.k_max = 20; // Limit model size
+
+        let running = Arc::new(AtomicBool::new(true));
+        let populations = aco(&mut data, &mut None, &mut None, &param, running);
+        let best = &populations.last().unwrap().individuals[0];
+
+        assert!(
+            best.k <= 20,
+            "Best model k ({}) should be <= k_max (20)",
+            best.k
+        );
     }
 }
