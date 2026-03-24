@@ -11,7 +11,7 @@
 //! - Natural diversity: probabilistic construction avoids premature convergence
 
 use crate::data::Data;
-use crate::experiment::{ExperimentMetadata, PheromoneEntry};
+use crate::experiment::{ExperimentMetadata, PheromoneEntry, PheromoneSnapshot};
 use crate::ga::{remove_out_of_bounds, remove_stillborn};
 use crate::individual::{self, Individual};
 use crate::param::Param;
@@ -93,6 +93,48 @@ impl PheromoneMatrix {
                 }
             }
         }
+    }
+
+    /// Snapshot the top-N features by total pheromone, returning (feature_idx, tau_pos, tau_neg).
+    fn snapshot_top(&self, n: usize) -> Vec<(usize, f64, f64)> {
+        let mut entries: Vec<(usize, f64, f64, f64)> = self
+            .positive
+            .keys()
+            .map(|&f| {
+                let tp = *self.positive.get(&f).unwrap_or(&0.0);
+                let tn = *self.negative.get(&f).unwrap_or(&0.0);
+                (f, tp, tn, tp + tn)
+            })
+            .collect();
+        entries.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
+        entries
+            .into_iter()
+            .take(n)
+            .map(|(f, tp, tn, _)| (f, tp, tn))
+            .collect()
+    }
+
+    /// Compute Shannon entropy of the pheromone distribution (normalized to [0,1]).
+    fn entropy(&self) -> f64 {
+        let totals: Vec<f64> = self.positive.keys().map(|&f| self.total(f)).collect();
+        let sum: f64 = totals.iter().sum();
+        if sum <= 0.0 {
+            return 1.0;
+        }
+        let n = totals.len() as f64;
+        let max_entropy = n.ln();
+        if max_entropy <= 0.0 {
+            return 0.0;
+        }
+        let entropy: f64 = totals
+            .iter()
+            .filter(|&&t| t > 0.0)
+            .map(|&t| {
+                let p = t / sum;
+                -p * p.ln()
+            })
+            .sum();
+        entropy / max_entropy // normalize to [0,1]
     }
 
     /// Get precomputed selection probabilities for all features (τ^α × η^β).
@@ -374,6 +416,7 @@ pub fn aco(
     let mut populations: Vec<Population> = Vec::new();
     let mut global_best: Option<Individual> = None;
     let mut best_age: usize = 0;
+    let mut pheromone_timeline: Vec<PheromoneSnapshot> = Vec::new();
 
     for iteration in 0..param.aco.max_iterations {
         if !running.load(Ordering::Relaxed) {
@@ -518,6 +561,13 @@ pub fn aco(
             pheromone.deposit(gb, elite_amount);
         }
 
+        // Snapshot pheromone state for timeline visualization (top 30 features)
+        pheromone_timeline.push(PheromoneSnapshot {
+            iteration,
+            top_features: pheromone.snapshot_top(30),
+            entropy: pheromone.entropy(),
+        });
+
         populations.push(pop);
 
         // Early stopping
@@ -563,6 +613,7 @@ pub fn aco(
 
     let meta = Some(ExperimentMetadata::ACOPheromone {
         pheromone: pheromone_entries,
+        timeline: pheromone_timeline,
     });
 
     (populations, meta)

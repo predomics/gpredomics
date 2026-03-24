@@ -248,7 +248,11 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
             _ => Some(m.clone()),
         }),
         aco_pheromone: meta.as_ref().and_then(|m| match m {
-            ExperimentMetadata::ACOPheromone { pheromone } => Some(pheromone.clone()),
+            ExperimentMetadata::ACOPheromone { pheromone, .. } => Some(pheromone.clone()),
+            _ => None,
+        }),
+        aco_pheromone_timeline: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { timeline, .. } => Some(timeline.clone()),
             _ => None,
         }),
     };
@@ -398,7 +402,11 @@ pub fn run_on_data(
             _ => Some(m.clone()),
         }),
         aco_pheromone: meta.as_ref().and_then(|m| match m {
-            ExperimentMetadata::ACOPheromone { pheromone } => Some(pheromone.clone()),
+            ExperimentMetadata::ACOPheromone { pheromone, .. } => Some(pheromone.clone()),
+            _ => None,
+        }),
+        aco_pheromone_timeline: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { timeline, .. } => Some(timeline.clone()),
             _ => None,
         }),
     };
@@ -555,7 +563,11 @@ pub fn run_pop_and_data(
             _ => Some(m.clone()),
         }),
         aco_pheromone: meta.as_ref().and_then(|m| match m {
-            ExperimentMetadata::ACOPheromone { pheromone } => Some(pheromone.clone()),
+            ExperimentMetadata::ACOPheromone { pheromone, .. } => Some(pheromone.clone()),
+            _ => None,
+        }),
+        aco_pheromone_timeline: meta.as_ref().and_then(|m| match m {
+            ExperimentMetadata::ACOPheromone { timeline, .. } => Some(timeline.clone()),
             _ => None,
         }),
     };

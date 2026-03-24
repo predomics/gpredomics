@@ -309,6 +309,17 @@ pub struct PheromoneEntry {
     pub tau_total: f64,
 }
 
+/// Per-iteration pheromone snapshot for timeline visualization
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PheromoneSnapshot {
+    /// Iteration number
+    pub iteration: usize,
+    /// Top features with their pheromone values: (feature_idx, tau_positive, tau_negative)
+    pub top_features: Vec<(usize, f64, f64)>,
+    /// Pheromone distribution entropy (0 = converged, 1 = uniform)
+    pub entropy: f64,
+}
+
 /// Experiment associated metadata
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ExperimentMetadata {
@@ -326,6 +337,8 @@ pub enum ExperimentMetadata {
     ACOPheromone {
         /// Final pheromone values per feature (sorted by total pheromone descending)
         pheromone: Vec<PheromoneEntry>,
+        /// Per-iteration pheromone snapshots for timeline visualization
+        timeline: Vec<PheromoneSnapshot>,
     },
 }
 
@@ -368,6 +381,10 @@ pub struct Experiment {
     /// ACO pheromone matrix (only for ACO runs)
     #[serde(default)]
     pub aco_pheromone: Option<Vec<PheromoneEntry>>,
+
+    /// ACO pheromone timeline: per-iteration snapshots (only for ACO runs)
+    #[serde(default)]
+    pub aco_pheromone_timeline: Option<Vec<PheromoneSnapshot>>,
 }
 
 impl Experiment {
@@ -1123,6 +1140,7 @@ mod tests {
                 execution_time: 42.5,
                 others: None,
                 aco_pheromone: None,
+                aco_pheromone_timeline: None,
             }
         }
     }
