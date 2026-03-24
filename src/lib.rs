@@ -229,20 +229,20 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
             timestamp
         )
         .to_string(),
-        gpredomics_version: gpredomics_version,
+        gpredomics_version,
         timestamp: timestamp.clone(),
 
         train_data: data,
-        test_data: test_data,
+        test_data,
 
         final_population: Some(final_population),
-        collections: collections,
+        collections,
 
         importance_collection: None,
         execution_time: exec_time,
         parameters: param.clone(),
 
-        cv_folds_ids: cv_folds_ids,
+        cv_folds_ids,
         others: meta.as_ref().and_then(|m| match m {
             ExperimentMetadata::ACOPheromone { .. } => None,
             _ => Some(m.clone()),
@@ -383,20 +383,20 @@ pub fn run_on_data(
             timestamp
         )
         .to_string(),
-        gpredomics_version: gpredomics_version,
+        gpredomics_version,
         timestamp: timestamp.clone(),
 
         train_data: data,
-        test_data: test_data,
+        test_data,
 
         final_population: Some(final_population),
-        collections: collections,
+        collections,
 
         importance_collection: None,
         execution_time: exec_time,
         parameters: param.clone(),
 
-        cv_folds_ids: cv_folds_ids,
+        cv_folds_ids,
         others: meta.as_ref().and_then(|m| match m {
             ExperimentMetadata::ACOPheromone { .. } => None,
             _ => Some(m.clone()),
@@ -544,20 +544,20 @@ pub fn run_pop_and_data(
             timestamp
         )
         .to_string(),
-        gpredomics_version: gpredomics_version,
+        gpredomics_version,
         timestamp: timestamp.clone(),
 
         train_data: data,
-        test_data: test_data,
+        test_data,
 
         final_population: Some(final_population),
-        collections: collections,
+        collections,
 
         importance_collection: None,
         execution_time: exec_time,
         parameters: param.clone(),
 
-        cv_folds_ids: cv_folds_ids,
+        cv_folds_ids,
         others: meta.as_ref().and_then(|m| match m {
             ExperimentMetadata::ACOPheromone { .. } => None,
             _ => Some(m.clone()),

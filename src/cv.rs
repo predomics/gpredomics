@@ -72,8 +72,8 @@ impl CV {
         }
 
         CV {
-            validation_folds: validation_folds,
-            training_sets: training_sets,
+            validation_folds,
+            training_sets,
             fold_collections: vec![],
         }
     }
@@ -170,8 +170,8 @@ impl CV {
         }
 
         CV {
-            validation_folds: validation_folds,
-            training_sets: training_sets,
+            validation_folds,
+            training_sets,
             fold_collections: vec![],
         }
     }

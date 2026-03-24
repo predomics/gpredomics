@@ -1,6 +1,7 @@
 use crate::bayesian_mcmc::Betas;
 use crate::data::Data;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
+use crate::param::FitFunction;
 use crate::utils::serde_json_hashmap_numeric;
 use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value};
 use crate::utils::{compute_metrics_from_value, generate_random_vector, shuffle_row};
@@ -2613,6 +2614,7 @@ pub fn gene_convert_from_to(parent_language: u8, child_language: u8, value: i8) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::param::FitFunction;
     use rand::prelude::*;
     use std::collections::{BTreeMap, HashMap};
 
