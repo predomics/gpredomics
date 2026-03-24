@@ -129,6 +129,10 @@ pub struct Param {
     #[serde(default)]
     pub sa: SA,
 
+    /// LASSO/Elastic Net parameters section
+    #[serde(default)]
+    pub lasso: LASSO,
+
     /// Voting ensemble parameters section
     #[serde(default)]
     pub voting: Voting,
@@ -458,6 +462,30 @@ pub struct SA {
     pub k_max: usize,
 }
 
+/// LASSO/Elastic Net parameters (coordinate descent along regularization path)
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[allow(missing_docs)]
+pub struct LASSO {
+    /// Minimum regularization parameter (least regularization = most features)
+    #[serde(default = "lasso_alpha_min_default")]
+    pub alpha_min: f64,
+    /// Maximum regularization parameter (most regularization = fewest features)
+    #[serde(default = "one_f64_default")]
+    pub alpha_max: f64,
+    /// Number of alpha values along the regularization path
+    #[serde(default = "lasso_n_alphas_default")]
+    pub n_alphas: usize,
+    /// Maximum coordinate descent iterations per alpha
+    #[serde(default = "lasso_max_iter_default")]
+    pub max_iter: usize,
+    /// Convergence tolerance
+    #[serde(default = "lasso_tol_default")]
+    pub tolerance: f64,
+    /// L1/L2 mixing ratio (1.0 = pure LASSO, 0.0 = pure Ridge, between = Elastic Net)
+    #[serde(default = "one_f64_default")]
+    pub l1_ratio: f64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(missing_docs)]
 pub struct GPU {
@@ -545,6 +573,12 @@ impl Default for ACO {
 }
 
 impl Default for SA {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+}
+
+impl Default for LASSO {
     fn default() -> Self {
         serde_json::from_value(serde_json::json!({})).unwrap()
     }
@@ -787,6 +821,18 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
     .cloned()
     .collect();
 
+    let valid_lasso_keys: HashSet<&str> = [
+        "alpha_min",
+        "alpha_max",
+        "n_alphas",
+        "max_iter",
+        "tolerance",
+        "l1_ratio",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
     let valid_gpu_keys: HashSet<&str> = [
         "memory_policy",
         "max_total_memory_mb",
@@ -819,6 +865,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "mcmc",
         "aco",
         "sa",
+        "lasso",
         "gpu",
         "importance",
         "experimental",
@@ -850,6 +897,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
                         "mcmc" => &valid_mcmc_keys,
                         "aco" => &valid_aco_keys,
                         "sa" => &valid_sa_keys,
+                        "lasso" => &valid_lasso_keys,
                         "gpu" => &valid_gpu_keys,
                         "importance" => &valid_importance_keys,
                         "experimental" => &valid_experimental_keys,
@@ -1175,6 +1223,18 @@ fn sa_max_iterations_default() -> usize {
 }
 fn sa_snapshot_interval_default() -> usize {
     100
+}
+fn lasso_alpha_min_default() -> f64 {
+    0.001
+}
+fn lasso_n_alphas_default() -> usize {
+    100
+}
+fn lasso_max_iter_default() -> usize {
+    1000
+}
+fn lasso_tol_default() -> f64 {
+    1e-4
 }
 fn specialist_threshold_default() -> f64 {
     0.7
