@@ -8,7 +8,6 @@ use std::error::Error;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
-
 /// Fit function options for model evaluation
 pub enum FitFunction {
     /// Area Under the Curve (AUC) of the Receiver Operating Characteristic (ROC)
@@ -1180,7 +1179,6 @@ fn validate_penalties(param: &mut Param) -> Result<(), String> {
 }
 
 /// Default value definitions
-
 fn seed_default() -> u64 {
     4815162342
 }

@@ -1287,7 +1287,7 @@ impl Data {
         });
 
         Data {
-            X: X,
+            X,
             y: samples.iter().map(|i| self.y[*i]).collect(),
             features: self.features.clone(),
             samples: samples.iter().map(|i| self.samples[*i].clone()).collect(),
@@ -1298,7 +1298,7 @@ impl Data {
             sample_len: samples.len(),
             classes: self.classes.clone(),
             feature_annotations: self.feature_annotations.clone(),
-            sample_annotations: sample_annotations,
+            sample_annotations,
         }
     }
 
@@ -1313,7 +1313,7 @@ impl Data {
     /// A new Data instance with the updated feature matrix.
     pub fn clone_with_new_x(&self, X: HashMap<(usize, usize), f64>) -> Data {
         Data {
-            X: X,
+            X,
             y: self.y.clone(),
             features: self.features.clone(),
             samples: self.samples.clone(),

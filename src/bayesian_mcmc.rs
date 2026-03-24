@@ -554,7 +554,7 @@ impl MCMCAnalysisTrace {
             log_post_trace: Vec::with_capacity(n_features),
             post_mean: 0.0,
             post_var: 0.0,
-            param: param,
+            param,
         }
     }
 
@@ -1033,8 +1033,8 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
         }
         for i in 0..nbeta {
             let cost = NegLogPostToMinimize {
-                bp: bp,
-                i: i,
+                bp,
+                i,
                 ind: &ind,
                 z: &z,
             };

@@ -403,9 +403,7 @@ impl CV {
             importances.push(collection_importance);
         }
 
-        Ok(ImportanceCollection {
-            importances: importances,
-        })
+        Ok(ImportanceCollection { importances })
     }
 
     /// Extracts the `Family of Best Models` population for a specific fold.
@@ -621,7 +619,7 @@ impl CV {
         Ok(CV {
             validation_folds,
             training_sets,
-            fold_collections: fold_collections,
+            fold_collections,
         })
     }
 }
