@@ -60,6 +60,40 @@ impl Default for AdditionalMetrics {
     }
 }
 
+/// Classification-specific metrics for an Individual model
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct ClassificationMetrics {
+    /// Area Under the Curve obtained regarding the model prediction on the training set
+    pub auc: f64,
+    /// Decision threshold used for binary classification
+    pub threshold: f64,
+    /// Confidence interval for the threshold if applicable and associated rejection rate
+    pub threshold_ci: Option<ThresholdCI>,
+    /// Sensitivity obtained regarding the model prediction on the training set
+    pub sensitivity: f64,
+    /// Specificity obtained regarding the model prediction on the training set
+    pub specificity: f64,
+    /// Accuracy obtained regarding the model prediction on the training set
+    pub accuracy: f64,
+    /// If computed, additional metrics for the individual
+    #[serde(default)]
+    pub additional: AdditionalMetrics,
+}
+
+impl Default for ClassificationMetrics {
+    fn default() -> Self {
+        ClassificationMetrics {
+            auc: 0.0,
+            threshold: 0.0,
+            threshold_ci: None,
+            sensitivity: 0.0,
+            specificity: 0.0,
+            accuracy: 0.0,
+            additional: AdditionalMetrics::default(),
+        }
+    }
+}
+
 /// Mathematical model with a set of variables and their corresponding signs
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Individual {
@@ -76,23 +110,11 @@ pub struct Individual {
     /// Epsilon value used during score calculation
     pub epsilon: f64,
 
-    /// Fit value of the model
+    /// Fit value of the model (penalized objective — universal across task types)
     pub fit: f64,
-    /// Area Under the Curve obtained regarding the model prediction on the training set
-    pub auc: f64,
-    /// Decision threshold used for binary classification
-    pub threshold: f64,
-    /// Confidence interval for the threshold if applicable and associated rejection rate
-    pub threshold_ci: Option<ThresholdCI>,
-    /// Sensitivity obtained regarding the model prediction on the training set
-    pub sensitivity: f64,
-    /// Specificity obtained regarding the model prediction on the training set
-    pub specificity: f64,
-    /// Accuracy obtained regarding the model prediction on the training set
-    pub accuracy: f64,
-    /// If computed, additional metrics for the individual
-    #[serde(default)]
-    pub metrics: AdditionalMetrics,
+
+    /// Classification metrics (auc, threshold, sensitivity, specificity, accuracy, etc.)
+    pub cls: ClassificationMetrics,
 
     /// Iteration of the algorithm that led to the emergence of the model
     pub epoch: usize, // generation or other counter important in the strategy
@@ -200,12 +222,8 @@ impl Individual {
     pub fn new() -> Individual {
         Individual {
             features: BTreeMap::new(),
-            auc: 0.0,
-            specificity: 0.0,
-            sensitivity: 0.0,
-            accuracy: 0.0,
-            threshold: 0.0,
             fit: 0.0,
+            cls: ClassificationMetrics::default(),
             k: 0,
             epoch: 0,
             language: BINARY_LANG,
@@ -214,14 +232,6 @@ impl Individual {
             epsilon: DEFAULT_MINIMUM,
             parents: None,
             betas: None,
-            threshold_ci: None,
-            metrics: AdditionalMetrics {
-                mcc: None,
-                f1_score: None,
-                npv: None,
-                ppv: None,
-                g_mean: None,
-            },
         }
     }
 
@@ -270,52 +280,52 @@ impl Individual {
                     self.compute_metrics(test_data);
                 let mut m = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}",
                     self.get_language(), self.get_data_type(), self.features.len(), algo_str, self.fit,
-                    self.auc, self.compute_new_auc(test_data), self.accuracy, acc_test,
-                    self.sensitivity, se_test, self.specificity, sp_test);
+                    self.cls.auc, self.compute_new_auc(test_data), self.cls.accuracy, acc_test,
+                    self.cls.sensitivity, se_test, self.cls.specificity, sp_test);
 
-                if let Some(ref threshold_ci) = self.threshold_ci {
+                if let Some(ref threshold_ci) = self.cls.threshold_ci {
                     m = format!(
                         "{} | rejection rate {:.3}/{:.3}",
                         m, threshold_ci.rejection_rate, rej_test
                     );
                 }
-                if self.metrics.mcc.is_some() {
+                if self.cls.additional.mcc.is_some() {
                     m = format!(
                         "{} | MCC {:.3}/{:.3} ",
                         m,
-                        self.metrics.mcc.unwrap(),
+                        self.cls.additional.mcc.unwrap(),
                         additional.mcc.unwrap()
                     );
                 }
-                if self.metrics.f1_score.is_some() {
+                if self.cls.additional.f1_score.is_some() {
                     m = format!(
                         "{} | F1-score {:.3}/{:.3} ",
                         m,
-                        self.metrics.f1_score.unwrap(),
+                        self.cls.additional.f1_score.unwrap(),
                         additional.f1_score.unwrap()
                     );
                 }
-                if self.metrics.npv.is_some() {
+                if self.cls.additional.npv.is_some() {
                     m = format!(
                         "{} | NPV {:.3}/{:.3} ",
                         m,
-                        self.metrics.npv.unwrap(),
+                        self.cls.additional.npv.unwrap(),
                         additional.npv.unwrap()
                     );
                 }
-                if self.metrics.ppv.is_some() {
+                if self.cls.additional.ppv.is_some() {
                     m = format!(
                         "{} | PPV {:.3}/{:.3} ",
                         m,
-                        self.metrics.ppv.unwrap(),
+                        self.cls.additional.ppv.unwrap(),
                         additional.ppv.unwrap()
                     );
                 }
-                if self.metrics.g_mean.is_some() {
+                if self.cls.additional.g_mean.is_some() {
                     m = format!(
                         "{} | G-mean {:.3}/{:.3} ",
                         m,
-                        self.metrics.g_mean.unwrap(),
+                        self.cls.additional.g_mean.unwrap(),
                         additional.g_mean.unwrap()
                     );
                 }
@@ -324,25 +334,29 @@ impl Individual {
             None => {
                 let mut m = format!("{}:{} [k={}]{}[fit:{:.3}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}",
                     self.get_language(), self.get_data_type(), self.features.len(), algo_str,
-                    self.fit, self.auc, self.accuracy, self.sensitivity, self.specificity);
+                    self.fit, self.cls.auc, self.cls.accuracy, self.cls.sensitivity, self.cls.specificity);
 
-                if let Some(ref threshold_ci) = self.threshold_ci {
+                if let Some(ref threshold_ci) = self.cls.threshold_ci {
                     m = format!("{} | rejection rate {:.3}", m, threshold_ci.rejection_rate);
                 }
-                if self.metrics.mcc.is_some() {
-                    m = format!("{} | MCC {:.3} ", m, self.metrics.mcc.unwrap());
+                if self.cls.additional.mcc.is_some() {
+                    m = format!("{} | MCC {:.3} ", m, self.cls.additional.mcc.unwrap());
                 }
-                if self.metrics.f1_score.is_some() {
-                    m = format!("{} | F1-score {:.3} ", m, self.metrics.f1_score.unwrap());
+                if self.cls.additional.f1_score.is_some() {
+                    m = format!(
+                        "{} | F1-score {:.3} ",
+                        m,
+                        self.cls.additional.f1_score.unwrap()
+                    );
                 }
-                if self.metrics.npv.is_some() {
-                    m = format!("{} | NPV {:.3} ", m, self.metrics.npv.unwrap());
+                if self.cls.additional.npv.is_some() {
+                    m = format!("{} | NPV {:.3} ", m, self.cls.additional.npv.unwrap());
                 }
-                if self.metrics.ppv.is_some() {
-                    m = format!("{} | PPV {:.3} ", m, self.metrics.ppv.unwrap());
+                if self.cls.additional.ppv.is_some() {
+                    m = format!("{} | PPV {:.3} ", m, self.cls.additional.ppv.unwrap());
                 }
-                if self.metrics.g_mean.is_some() {
-                    m = format!("{} | G-mean {:.3} ", m, self.metrics.g_mean.unwrap());
+                if self.cls.additional.g_mean.is_some() {
+                    m = format!("{} | G-mean {:.3} ", m, self.cls.additional.g_mean.unwrap());
                 }
                 m
             }
@@ -418,7 +432,7 @@ impl Individual {
         let class1 = data.classes.get(1).map(|s| s.as_str()).unwrap_or("1");
 
         let (second_line_first_part, second_line_second_part) = if let Some(ref threshold_ci) =
-            self.threshold_ci
+            self.cls.threshold_ci
         {
             let threshold_text = format!("Class \x1b[95m{}\x1b[0m: score < {}\nClass \x1b[96m{}\x1b[0m: score > {}\nRejection zone \x1b[2m({:2}% CI)\x1b[0m: score ∈ [{:.3}; {:.3}]\nscore =",
                 class0, threshold_ci.lower, class1, threshold_ci.upper, (1.0-ci_alpha)*100.0,  threshold_ci.lower, threshold_ci.upper);
@@ -426,7 +440,7 @@ impl Individual {
         } else {
             (
                 format!("Class {}:", class1),
-                format!("≥ {}", self.threshold),
+                format!("≥ {}", self.cls.threshold),
             )
         };
 
@@ -656,8 +670,8 @@ impl Individual {
     /// A new Individual having inherited language and data_type from the main parent
     pub fn child(main_parent: &Individual) -> Individual {
         let mut i = Individual::new();
-        if main_parent.threshold_ci.is_some() {
-            i.threshold_ci = Some(ThresholdCI {
+        if main_parent.cls.threshold_ci.is_some() {
+            i.cls.threshold_ci = Some(ThresholdCI {
                 upper: 0.0,
                 lower: 0.0,
                 rejection_rate: 0.0,
@@ -693,7 +707,7 @@ impl Individual {
         let class = value
             .iter()
             .map(|&v| {
-                if let Some(ref threshold_ci) = self.threshold_ci {
+                if let Some(ref threshold_ci) = self.cls.threshold_ci {
                     if v > threshold_ci.upper {
                         1
                     } else if v < threshold_ci.lower {
@@ -702,7 +716,7 @@ impl Individual {
                         2
                     }
                 } else {
-                    if v >= self.threshold {
+                    if v >= self.cls.threshold {
                         1
                     } else {
                         0
@@ -738,7 +752,7 @@ impl Individual {
         value
             .iter()
             .map(|&v| {
-                if let Some(ref threshold_ci) = self.threshold_ci {
+                if let Some(ref threshold_ci) = self.cls.threshold_ci {
                     if v > threshold_ci.upper {
                         1
                     } else if v < threshold_ci.lower {
@@ -747,7 +761,7 @@ impl Individual {
                         2
                     }
                 } else {
-                    if v >= self.threshold {
+                    if v >= self.cls.threshold {
                         1
                     } else {
                         0
@@ -1056,7 +1070,7 @@ impl Individual {
         score
     }
 
-    /// Computes AUC and updates self.auc
+    /// Computes AUC and updates self.cls.auc
     ///
     /// # Arguments
     ///
@@ -1064,7 +1078,7 @@ impl Individual {
     ///
     /// # Returns
     ///
-    /// The computed AUC value and updates self.auc
+    /// The computed AUC value and updates self.cls.auc
     ///
     /// # Examples
     ///
@@ -1077,11 +1091,11 @@ impl Individual {
     /// ```
     pub fn compute_auc(&mut self, d: &Data) -> f64 {
         let value = self.evaluate(d);
-        self.auc = compute_auc_from_value(&value, &d.y);
-        self.auc
+        self.cls.auc = compute_auc_from_value(&value, &d.y);
+        self.cls.auc
     }
 
-    /// Computes AUC without updating self.auc
+    /// Computes AUC without updating self.cls.auc
     ///
     /// # Arguments
     ///
@@ -1105,7 +1119,7 @@ impl Individual {
     ///
     /// # Returns
     ///
-    /// The computed AUC value and updates self.auc
+    /// The computed AUC value and updates self.cls.auc
     ///
     /// # Examples
     ///
@@ -1123,8 +1137,8 @@ impl Individual {
         y: &Vec<u8>,
     ) -> f64 {
         let value = self.evaluate_from_features(X, y.len());
-        self.auc = compute_auc_from_value(&value, y);
-        self.auc
+        self.cls.auc = compute_auc_from_value(&value, y);
+        self.cls.auc
     }
 
     /// Computes ROC and various metrics, updating the Individual's fields
@@ -1162,19 +1176,19 @@ impl Individual {
         let objective;
         let scores: Vec<_> = self.evaluate(d);
         (
-            self.auc,
-            self.threshold,
-            self.accuracy,
-            self.sensitivity,
-            self.specificity,
+            self.cls.auc,
+            self.cls.threshold,
+            self.cls.accuracy,
+            self.cls.sensitivity,
+            self.cls.specificity,
             objective,
         ) = compute_roc_and_metrics_from_value(&scores, &d.y, fit_function, penalties);
         (
-            self.auc,
-            self.threshold,
-            self.accuracy,
-            self.sensitivity,
-            self.specificity,
+            self.cls.auc,
+            self.cls.threshold,
+            self.cls.accuracy,
+            self.cls.sensitivity,
+            self.cls.specificity,
             objective,
         )
     }
@@ -1210,7 +1224,7 @@ impl Individual {
             match data.y[i] {
                 1 => {
                     // Positive class
-                    if pred > self.threshold {
+                    if pred > self.cls.threshold {
                         tp += 1;
                     } else {
                         fn_count += 1;
@@ -1218,7 +1232,7 @@ impl Individual {
                 }
                 0 => {
                     // Negative class
-                    if pred > self.threshold {
+                    if pred > self.cls.threshold {
                         fp += 1;
                     } else {
                         tn += 1;
@@ -1490,10 +1504,10 @@ impl Individual {
         let mut i = Individual::new();
         i.features = features;
         if language == RATIO_LANG {
-            i.threshold = 1.0
+            i.cls.threshold = 1.0
         }
         if threshold_ci {
-            i.threshold_ci = Some(ThresholdCI {
+            i.cls.threshold_ci = Some(ThresholdCI {
                 upper: 0.0,
                 lower: 0.0,
                 rejection_rate: 0.0,
@@ -1618,7 +1632,7 @@ impl Individual {
         i.language = language;
         i.data_type = data_type;
         i.epsilon = epsilon;
-        i.threshold_ci = if threshold_ci {
+        i.cls.threshold_ci = if threshold_ci {
             Some(ThresholdCI {
                 upper: 0.0,
                 lower: 0.0,
@@ -1704,22 +1718,22 @@ impl Individual {
     pub fn compute_metrics(&self, d: &Data) -> (f64, f64, f64, f64, AdditionalMetrics) {
         let value = self.evaluate(d);
         let others_to_compute: [bool; 5] = [
-            self.metrics.mcc.is_some(),
-            self.metrics.f1_score.is_some(),
-            self.metrics.npv.is_some(),
-            self.metrics.ppv.is_some(),
-            self.metrics.g_mean.is_some(),
+            self.cls.additional.mcc.is_some(),
+            self.cls.additional.f1_score.is_some(),
+            self.cls.additional.npv.is_some(),
+            self.cls.additional.ppv.is_some(),
+            self.cls.additional.g_mean.is_some(),
         ];
-        if let Some(ref threshold_ci) = self.threshold_ci {
+        if let Some(ref threshold_ci) = self.cls.threshold_ci {
             compute_metrics_from_value(
                 &value,
                 &d.y,
-                self.threshold,
+                self.cls.threshold,
                 Some([threshold_ci.lower, threshold_ci.upper]),
                 others_to_compute,
             )
         } else {
-            compute_metrics_from_value(&value, &d.y, self.threshold, None, others_to_compute)
+            compute_metrics_from_value(&value, &d.y, self.cls.threshold, None, others_to_compute)
         }
     }
 
@@ -2028,10 +2042,10 @@ impl Individual {
         }
 
         let mut best_objective = f64::MIN;
-        self.threshold = f64::NEG_INFINITY;
-        self.sensitivity = 0.0;
-        self.specificity = 0.0;
-        self.accuracy = 0.0;
+        self.cls.threshold = f64::NEG_INFINITY;
+        self.cls.sensitivity = 0.0;
+        self.cls.specificity = 0.0;
+        self.cls.accuracy = 0.0;
 
         let mut tn = 0;
         let mut fn_count = 0;
@@ -2065,13 +2079,13 @@ impl Individual {
                 / (fpr_penalty + fnr_penalty);
 
             if objective > best_objective
-                || (objective == best_objective && current_score < self.threshold)
+                || (objective == best_objective && current_score < self.cls.threshold)
             {
                 best_objective = objective;
-                self.threshold = current_score;
-                self.sensitivity = sensitivity;
-                self.specificity = specificity;
-                self.accuracy = accuracy;
+                self.cls.threshold = current_score;
+                self.cls.sensitivity = sensitivity;
+                self.cls.specificity = specificity;
+                self.cls.accuracy = accuracy;
             }
         }
 
@@ -2612,12 +2626,7 @@ mod tests {
         pub fn test() -> Individual {
             Individual {
                 features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
-                auc: 0.4,
                 fit: 0.8,
-                specificity: 0.15,
-                sensitivity: 0.16,
-                accuracy: 0.23,
-                threshold: 42.0,
                 k: 42,
                 epoch: 42,
                 language: 0,
@@ -2626,13 +2635,14 @@ mod tests {
                 epsilon: f64::MIN_POSITIVE,
                 parents: None,
                 betas: None,
-                threshold_ci: None,
-                metrics: AdditionalMetrics {
-                    mcc: None,
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
+                cls: ClassificationMetrics {
+                    auc: 0.4,
+                    specificity: 0.15,
+                    sensitivity: 0.16,
+                    accuracy: 0.23,
+                    threshold: 42.0,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
                 },
             }
         }
@@ -2645,12 +2655,7 @@ mod tests {
         pub fn test2() -> Individual {
             Individual {
                 features: vec![(0, 1), (1, -1)].into_iter().collect(),
-                auc: 0.4,
                 fit: 0.8,
-                specificity: 0.15,
-                sensitivity: 0.16,
-                accuracy: 0.23,
-                threshold: 0.0,
                 k: 42,
                 epoch: 42,
                 language: 0,
@@ -2659,13 +2664,14 @@ mod tests {
                 epsilon: f64::MIN_POSITIVE,
                 parents: None,
                 betas: None,
-                threshold_ci: None,
-                metrics: AdditionalMetrics {
-                    mcc: None,
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
+                cls: ClassificationMetrics {
+                    auc: 0.4,
+                    specificity: 0.15,
+                    sensitivity: 0.16,
+                    accuracy: 0.23,
+                    threshold: 0.0,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
                 },
             }
         }
@@ -2682,12 +2688,7 @@ mod tests {
         pub fn test_with_these_given_features(features_vec: Vec<(usize, i8)>) -> Individual {
             Individual {
                 features: features_vec.into_iter().collect::<BTreeMap<usize, i8>>(),
-                auc: 0.8,
                 fit: 0.7,
-                specificity: 0.1,
-                sensitivity: 0.9,
-                accuracy: 0.3,
-                threshold: 0.5,
                 k: 0,
                 epoch: 0,
                 language: BINARY_LANG,
@@ -2696,13 +2697,14 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
-                threshold_ci: None,
-                metrics: AdditionalMetrics {
-                    mcc: None,
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
+                cls: ClassificationMetrics {
+                    auc: 0.8,
+                    specificity: 0.1,
+                    sensitivity: 0.9,
+                    accuracy: 0.3,
+                    threshold: 0.5,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
                 },
             }
         }
@@ -2727,12 +2729,7 @@ mod tests {
         ) -> Individual {
             Individual {
                 features: features.into_iter().collect(),
-                auc: 0.0,
                 fit,
-                specificity: 0.0,
-                sensitivity: 0.0,
-                accuracy: 0.0,
-                threshold: 0.0,
                 k: 0,
                 epoch: 0,
                 language,
@@ -2741,14 +2738,7 @@ mod tests {
                 epsilon: 0.0,
                 parents: None,
                 betas: None,
-                threshold_ci: None,
-                metrics: AdditionalMetrics {
-                    mcc: None,
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
-                },
+                cls: ClassificationMetrics::default(),
             }
         }
 
@@ -2766,12 +2756,7 @@ mod tests {
         pub fn test_with_metrics(sensitivity: f64, specificity: f64, accuracy: f64) -> Individual {
             Individual {
                 features: vec![(0, 1), (1, -1)].into_iter().collect(),
-                auc: 0.8,
                 fit: 0.7,
-                specificity: specificity,
-                sensitivity: sensitivity,
-                accuracy: accuracy,
-                threshold: 0.5,
                 k: 0,
                 epoch: 0,
                 language: BINARY_LANG,
@@ -2780,13 +2765,14 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
-                threshold_ci: None,
-                metrics: AdditionalMetrics {
-                    mcc: None,
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
+                cls: ClassificationMetrics {
+                    auc: 0.8,
+                    specificity,
+                    sensitivity,
+                    accuracy,
+                    threshold: 0.5,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
                 },
             }
         }
@@ -2808,12 +2794,7 @@ mod tests {
 
             Individual {
                 features: features_map,
-                auc: 0.8,
                 fit: 0.7,
-                specificity: 0.75,
-                sensitivity: 0.85,
-                accuracy: 0.80,
-                threshold: 0.5,
                 k: features.len(),
                 epoch: 0,
                 language: BINARY_LANG,
@@ -2822,13 +2803,14 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
-                threshold_ci: None,
-                metrics: AdditionalMetrics {
-                    mcc: None,
-                    f1_score: None,
-                    npv: None,
-                    ppv: None,
-                    g_mean: None,
+                cls: ClassificationMetrics {
+                    auc: 0.8,
+                    specificity: 0.75,
+                    sensitivity: 0.85,
+                    accuracy: 0.80,
+                    threshold: 0.5,
+                    threshold_ci: None,
+                    additional: AdditionalMetrics::default(),
                 },
             }
         }
@@ -3206,7 +3188,7 @@ mod tests {
     #[test]
     fn test_compute_auc() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         let data = Data::test2();
         assert_eq!(
             0.7380952380952381,
@@ -3272,7 +3254,7 @@ mod tests {
     #[test]
     fn test_calculate_confusion_matrix_basic() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         let data = Data::test2();
         let confusion_matrix = ind.calculate_confusion_matrix(&data);
         assert_eq!(
@@ -3296,7 +3278,7 @@ mod tests {
     #[test]
     fn test_calculate_confusion_matrix_class_2() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 2, 0, 0, 0, 0, 0, 1, 0];
         let confusion_matrix = ind.calculate_confusion_matrix(&data);
@@ -3455,7 +3437,7 @@ mod tests {
                 .all(|&v| vec![-4, 4].contains(&v)),
             "invalid initial coefficient for POW2_LANG"
         );
-        assert_eq!(ind_ratio.threshold, 1.0, "new individual created with random_select_k() with a RATIO_LANG should have a threshold of 1.0");
+        assert_eq!(ind_ratio.cls.threshold, 1.0, "new individual created with random_select_k() with a RATIO_LANG should have a threshold of 1.0");
 
         let ind = Individual::random_select_k(
             0,
@@ -3547,7 +3529,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_basic() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
         let metrics = ind.compute_metrics(&data);
@@ -3565,7 +3547,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_class2() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 2];
         assert_eq!(
@@ -3590,7 +3572,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_too_much_y() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1];
         assert_eq!((0.5_f64, 0.6666666666666666_f64, 0.42857142857142855_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_mean: None}), ind.compute_metrics(&data),
@@ -3600,7 +3582,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_not_enough_y() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 1];
         assert_eq!((0.25_f64, 0.3333333333333333_f64, 0.0_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_mean: None}), ind.compute_metrics(&data),
@@ -3662,7 +3644,7 @@ mod tests {
     //#[test]
     //fn test_compute_threshold_and_metrics_too_much_y() {
     //    let mut ind = Individual::test();
-    //    ind.threshold = 0.75;
+    //    ind.cls.threshold = 0.75;
     //    let mut data = Data::test2();
     //    data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1];
     //    assert_eq!((0.79_f64, 0.8_f64, 0.6666666666666666_f64, 0.8571428571428571_f64), ind.compute_threshold_and_metrics(&data),
@@ -3672,7 +3654,7 @@ mod tests {
     #[test]
     fn test_compute_threshold_and_metrics_not_enough_y() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 1];
         assert_eq!((0.89_f64, 0.5_f64, 0.3333333333333333_f64, 1.0_f64), ind.compute_threshold_and_metrics(&data),
@@ -4031,12 +4013,7 @@ mod tests {
 
         let individual = Individual {
             features: features_map,
-            auc: 0.8,
             fit: 0.7,
-            specificity: 0.75,
-            sensitivity: 0.85,
-            accuracy: 0.80,
-            threshold: 0.5,
             k: 3,
             epoch: 0,
             language: TERNARY_LANG, // Supports negative coefficients
@@ -4045,13 +4022,14 @@ mod tests {
             epsilon: DEFAULT_MINIMUM,
             parents: None,
             betas: None,
-            threshold_ci: None,
-            metrics: AdditionalMetrics {
-                mcc: None,
-                f1_score: None,
-                npv: None,
-                ppv: None,
-                g_mean: None,
+            cls: ClassificationMetrics {
+                auc: 0.8,
+                specificity: 0.75,
+                sensitivity: 0.85,
+                accuracy: 0.80,
+                threshold: 0.5,
+                threshold_ci: None,
+                additional: AdditionalMetrics::default(),
             },
         };
 
@@ -4382,25 +4360,25 @@ mod tests {
             "The best objective should be greater than 0.0"
         );
         assert!(
-            ind.sensitivity >= 0.0 && ind.sensitivity <= 1.0,
+            ind.cls.sensitivity >= 0.0 && ind.cls.sensitivity <= 1.0,
             "Sensitivity should be between 0.0 and 1.0"
         );
         assert!(
-            ind.specificity >= 0.0 && ind.specificity <= 1.0,
+            ind.cls.specificity >= 0.0 && ind.cls.specificity <= 1.0,
             "Specificity should be between 0.0 and 1.0"
         );
         assert!(
-            ind.accuracy >= 0.0 && ind.accuracy <= 1.0,
+            ind.cls.accuracy >= 0.0 && ind.cls.accuracy <= 1.0,
             "Accuracy should be between 0.0 and 1.0"
         );
         let _best_objective = ind.maximize_objective_with_scores(&scores, &data, 0.0, 1.0);
-        assert_eq!(ind.sensitivity, 1.0, "focusing only on sensitivity (fpr_penalty=0.0 and fnr_penalty=1.0) normally leads to a sensitivity of 1.0 (the model classifies everything positively)");
-        assert_eq!(ind.specificity, 0.0, "focusing only on sensitivity (fpr_penalty=0.0 and fnr_penalty=1.0) normally leads to a specificity of 0.0 (the model classifies everything positively)");
+        assert_eq!(ind.cls.sensitivity, 1.0, "focusing only on sensitivity (fpr_penalty=0.0 and fnr_penalty=1.0) normally leads to a sensitivity of 1.0 (the model classifies everything positively)");
+        assert_eq!(ind.cls.specificity, 0.0, "focusing only on sensitivity (fpr_penalty=0.0 and fnr_penalty=1.0) normally leads to a specificity of 0.0 (the model classifies everything positively)");
         // Function is broke : sp=1 VS se=0 never reached
         // Interesting fact : R selected threshold (0.89) is correctly reached by this function
         // let best_objective = ind.maximize_objective_with_scores(&scores, &data, 1.0, 0.0);
-        // assert_eq!(ind.sensitivity, 0.0, "focusing only on specificity (fpr_penalty=1.0 and fnr_penalty=0.0) normally leads to a sensitivity of 0.0 (the model classifies everything negatively)");
-        // assert_eq!(ind.specificity, 1.0, "focusing only on specificity (fpr_penalty=1.0 and fnr_penalty=0.0) normally leads to a specificity of 1.0 (the model classifies everything negatively)");
+        // assert_eq!(ind.cls.sensitivity, 0.0, "focusing only on specificity (fpr_penalty=1.0 and fnr_penalty=0.0) normally leads to a sensitivity of 0.0 (the model classifies everything negatively)");
+        // assert_eq!(ind.cls.specificity, 1.0, "focusing only on specificity (fpr_penalty=1.0 and fnr_penalty=0.0) normally leads to a specificity of 1.0 (the model classifies everything negatively)");
 
         // maybe add a panic! for fpr_penalty=0.O and fnr_penalty=0.0 to avoid NaN ?
         // let best_objective = ind.maximize_objective_with_scores(&scores, &data, 0.0, 0.0);
@@ -4543,11 +4521,11 @@ mod tests {
             × msp_0551⁺ × msp_0596⁺ × msp_0619⁺ × msp_0654⁺ × msp_0676⁺ × msp_0841⁺ × msp_0872⁺) ";
 
         (
-            individual.auc,
-            individual.threshold,
-            individual.accuracy,
-            individual.sensitivity,
-            individual.specificity,
+            individual.cls.auc,
+            individual.cls.threshold,
+            individual.cls.accuracy,
+            individual.cls.sensitivity,
+            individual.cls.specificity,
             _,
         ) = individual.compute_roc_and_metrics(&data, &FitFunction::auc, None);
 
@@ -4575,12 +4553,12 @@ mod tests {
         let (threshold, accuracy, sensitivity, specificity): (f64, f64, f64, f64) =
             individual.compute_threshold_and_metrics(&data);
 
-        assert_eq!(individual.compute_new_auc(&data), individual.auc, "AUC calculated with Individual.compute_auc() and Individual.compute_roc_and_metrics() should be the same" );
-        assert_eq!(accuracy,  individual.accuracy, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
-        assert_eq!(sensitivity, individual.sensitivity, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
-        assert_eq!(specificity,  individual.specificity, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
+        assert_eq!(individual.compute_new_auc(&data), individual.cls.auc, "AUC calculated with Individual.compute_auc() and Individual.compute_roc_and_metrics() should be the same" );
+        assert_eq!(accuracy,  individual.cls.accuracy, "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
+        assert_eq!(sensitivity, individual.cls.sensitivity, "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
+        assert_eq!(specificity,  individual.cls.specificity, "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_roc_and_metrics() should be the same" );
 
-        individual.threshold = threshold;
+        individual.cls.threshold = threshold;
         assert_eq!(accuracy, individual.compute_metrics(&data).0,  "Accuracy calculated with Individual.compute_threshold_and_metrics() and Individual.compute_metrics() should be the same");
         assert_eq!(sensitivity, individual.compute_metrics(&data).1,  "Sensitivity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_metrics() should be the same");
         assert_eq!(specificity, individual.compute_metrics(&data).2,  "Specificity calculated with Individual.compute_threshold_and_metrics() and Individual.compute_metrics() should be the same");
@@ -5161,20 +5139,20 @@ mod tests {
     #[test]
     fn test_threshold_ci_valid_bounds_ordering() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.3,
             upper: 0.7,
             rejection_rate: 0.0,
         });
 
-        let ci = ind.threshold_ci.as_ref().unwrap();
+        let ci = ind.cls.threshold_ci.as_ref().unwrap();
         assert!(
-            ci.lower < ind.threshold,
+            ci.lower < ind.cls.threshold,
             "Lower CI should be below threshold"
         );
         assert!(
-            ind.threshold < ci.upper,
+            ind.cls.threshold < ci.upper,
             "Upper CI should be above threshold"
         );
     }
@@ -5182,8 +5160,8 @@ mod tests {
     #[test]
     fn test_evaluate_class_with_threshold_ci_abstention_zone() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.3,
             upper: 0.7,
             rejection_rate: 0.0,
@@ -5208,8 +5186,8 @@ mod tests {
     #[test]
     fn test_evaluate_class_with_threshold_ci_scores_in_abstention() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.6,
             upper: 0.9,
             rejection_rate: 0.0,
@@ -5236,8 +5214,8 @@ mod tests {
     #[test]
     fn test_evaluate_class_without_threshold_ci() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = None;
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = None;
 
         let data = Data::test2();
         let classes = ind.evaluate_class(&data);
@@ -5255,8 +5233,8 @@ mod tests {
     #[test]
     fn test_evaluate_class_and_score_with_threshold_ci() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.4,
             upper: 0.8,
             rejection_rate: 0.0,
@@ -5289,8 +5267,8 @@ mod tests {
     #[test]
     fn test_rejection_rate_all_in_ci() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: -10.0,
             upper: 10.0,
             rejection_rate: 0.0,
@@ -5309,8 +5287,8 @@ mod tests {
     #[test]
     fn test_rejection_rate_none_in_ci() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.49,
             upper: 0.51,
             rejection_rate: 0.0,
@@ -5330,8 +5308,8 @@ mod tests {
     #[test]
     fn test_rejection_rate_bounds() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.3,
             upper: 0.7,
             rejection_rate: 0.0,
@@ -5350,8 +5328,8 @@ mod tests {
     #[test]
     fn test_threshold_ci_very_wide() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: -1000.0,
             upper: 1000.0,
             rejection_rate: 0.0,
@@ -5372,8 +5350,8 @@ mod tests {
     #[test]
     fn test_threshold_ci_very_narrow() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.4999,
             upper: 0.5001,
             rejection_rate: 0.0,
@@ -5394,8 +5372,8 @@ mod tests {
     #[test]
     fn test_threshold_ci_asymmetric() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.1, // Far below threshold
             upper: 0.6, // Close to threshold
             rejection_rate: 0.0,
@@ -5420,8 +5398,8 @@ mod tests {
     #[test]
     fn test_threshold_ci_equal_bounds() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.5,
             upper: 0.5,
             rejection_rate: 0.0,
@@ -5442,7 +5420,7 @@ mod tests {
     #[test]
     fn test_child_inherits_threshold_ci() {
         let mut parent = Individual::test();
-        parent.threshold_ci = Some(ThresholdCI {
+        parent.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.3,
             upper: 0.7,
             rejection_rate: 0.25,
@@ -5451,10 +5429,10 @@ mod tests {
         let child = Individual::child(&parent);
 
         assert!(
-            child.threshold_ci.is_some(),
+            child.cls.threshold_ci.is_some(),
             "Child should inherit threshold_ci structure"
         );
-        let ci = child.threshold_ci.unwrap();
+        let ci = child.cls.threshold_ci.unwrap();
         assert_eq!(ci.lower, 0.0, "Child CI should be reset to 0.0");
         assert_eq!(ci.upper, 0.0, "Child CI should be reset to 0.0");
         assert_eq!(
@@ -5466,12 +5444,12 @@ mod tests {
     #[test]
     fn test_child_no_threshold_ci_when_parent_has_none() {
         let parent = Individual::test();
-        assert!(parent.threshold_ci.is_none());
+        assert!(parent.cls.threshold_ci.is_none());
 
         let child = Individual::child(&parent);
 
         assert!(
-            child.threshold_ci.is_none(),
+            child.cls.threshold_ci.is_none(),
             "Child should not have CI when parent doesn't"
         );
     }
@@ -5485,23 +5463,23 @@ mod tests {
         let ind = Individual::new();
 
         assert!(
-            ind.metrics.mcc.is_none(),
+            ind.cls.additional.mcc.is_none(),
             "MCC should be None at initialization"
         );
         assert!(
-            ind.metrics.f1_score.is_none(),
+            ind.cls.additional.f1_score.is_none(),
             "F1-score should be None at initialization"
         );
         assert!(
-            ind.metrics.npv.is_none(),
+            ind.cls.additional.npv.is_none(),
             "NPV should be None at initialization"
         );
         assert!(
-            ind.metrics.ppv.is_none(),
+            ind.cls.additional.ppv.is_none(),
             "PPV should be None at initialization"
         );
         assert!(
-            ind.metrics.g_mean.is_none(),
+            ind.cls.additional.g_mean.is_none(),
             "G-mean should be None at initialization"
         );
     }
@@ -5509,8 +5487,8 @@ mod tests {
     #[test]
     fn test_additional_metrics_mcc_calculation() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.mcc = Some(0.0); // Signal that we want MCC computed
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.mcc = Some(0.0); // Signal that we want MCC computed
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5532,8 +5510,8 @@ mod tests {
     #[test]
     fn test_additional_metrics_f1_calculation() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.f1_score = Some(0.0); // Signal that we want F1 computed
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.f1_score = Some(0.0); // Signal that we want F1 computed
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5555,8 +5533,8 @@ mod tests {
     #[test]
     fn test_additional_metrics_npv_calculation() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.npv = Some(0.0); // Signal that we want NPV computed
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.npv = Some(0.0); // Signal that we want NPV computed
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5578,8 +5556,8 @@ mod tests {
     #[test]
     fn test_additional_metrics_ppv_calculation() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.ppv = Some(0.0); // Signal that we want PPV computed
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.ppv = Some(0.0); // Signal that we want PPV computed
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5601,8 +5579,8 @@ mod tests {
     #[test]
     fn test_additional_metrics_g_mean_calculation() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.g_mean = Some(0.0); // Signal that we want G-mean computed
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.g_mean = Some(0.0); // Signal that we want G-mean computed
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5624,13 +5602,13 @@ mod tests {
     #[test]
     fn test_additional_metrics_all_computed() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         // Request all metrics
-        ind.metrics.mcc = Some(0.0);
-        ind.metrics.f1_score = Some(0.0);
-        ind.metrics.npv = Some(0.0);
-        ind.metrics.ppv = Some(0.0);
-        ind.metrics.g_mean = Some(0.0);
+        ind.cls.additional.mcc = Some(0.0);
+        ind.cls.additional.f1_score = Some(0.0);
+        ind.cls.additional.npv = Some(0.0);
+        ind.cls.additional.ppv = Some(0.0);
+        ind.cls.additional.g_mean = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5650,7 +5628,7 @@ mod tests {
     #[test]
     fn test_additional_metrics_none_when_not_requested() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
+        ind.cls.threshold = 0.75;
         // Don't request any additional metrics
 
         let mut data = Data::test2();
@@ -5672,10 +5650,10 @@ mod tests {
     fn test_metrics_perfect_classification() {
         let mut ind = Individual::new();
         ind.features = vec![(0, 1)].into_iter().collect();
-        ind.threshold = 0.5;
-        ind.metrics.mcc = Some(0.0);
-        ind.metrics.f1_score = Some(0.0);
-        ind.metrics.g_mean = Some(0.0);
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.mcc = Some(0.0);
+        ind.cls.additional.f1_score = Some(0.0);
+        ind.cls.additional.g_mean = Some(0.0);
 
         let mut data = Data::new();
         data.sample_len = 10;
@@ -5727,8 +5705,8 @@ mod tests {
     #[test]
     fn test_metrics_inverse_classification() {
         let mut ind = Individual::test();
-        ind.threshold = 10.0; // Very high threshold - everything predicted as 0
-        ind.metrics.mcc = Some(0.0);
+        ind.cls.threshold = 10.0; // Very high threshold - everything predicted as 0
+        ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
@@ -5752,11 +5730,11 @@ mod tests {
     #[test]
     fn test_metrics_with_imbalanced_classes_99_1() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.metrics.ppv = Some(0.0);
-        ind.metrics.npv = Some(0.0);
-        ind.metrics.mcc = Some(0.0);
-        ind.metrics.g_mean = Some(0.0);
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.ppv = Some(0.0);
+        ind.cls.additional.npv = Some(0.0);
+        ind.cls.additional.mcc = Some(0.0);
+        ind.cls.additional.g_mean = Some(0.0);
 
         let mut data = Data::test2();
         // 99 negatives, 1 positive
@@ -5792,9 +5770,9 @@ mod tests {
     fn test_metrics_with_imbalanced_classes_1_99() {
         let mut ind = Individual::new();
         ind.features = vec![(0, 1)].into_iter().collect();
-        ind.threshold = 0.5;
-        ind.metrics.ppv = Some(0.0);
-        ind.metrics.npv = Some(0.0);
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.ppv = Some(0.0);
+        ind.cls.additional.npv = Some(0.0);
 
         let mut data = Data::new();
         // 1 negative, 99 positives
@@ -5825,9 +5803,9 @@ mod tests {
     #[test]
     fn test_metrics_with_class_2_ignored() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.mcc = Some(0.0);
-        ind.metrics.f1_score = Some(0.0);
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.mcc = Some(0.0);
+        ind.cls.additional.f1_score = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 2, 2, 0, 0, 2, 0, 1, 0]; // Include class 2
@@ -5850,8 +5828,8 @@ mod tests {
     #[test]
     fn test_metrics_consistency_ppv_formula() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.ppv = Some(0.0);
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.ppv = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5877,8 +5855,8 @@ mod tests {
     #[test]
     fn test_metrics_consistency_npv_formula() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.npv = Some(0.0);
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.npv = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5904,8 +5882,8 @@ mod tests {
     #[test]
     fn test_metrics_consistency_g_mean_formula() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.metrics.g_mean = Some(0.0);
+        ind.cls.threshold = 0.75;
+        ind.cls.additional.g_mean = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
@@ -5930,14 +5908,14 @@ mod tests {
     #[test]
     fn test_display_with_threshold_ci_and_metrics() {
         let mut ind = Individual::test2();
-        ind.threshold = 0.75;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.75;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.6,
             upper: 0.9,
             rejection_rate: 0.15,
         });
-        ind.metrics.mcc = Some(0.5);
-        ind.metrics.f1_score = Some(0.7);
+        ind.cls.additional.mcc = Some(0.5);
+        ind.cls.additional.f1_score = Some(0.7);
 
         let data = Data::test2();
         let display = ind.display(&data, None, &"ga".to_string(), 0.05);
@@ -5960,8 +5938,8 @@ mod tests {
     #[test]
     fn test_display_with_threshold_ci_train_and_test() {
         let mut ind = Individual::test2();
-        ind.threshold = 0.75;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.75;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.6,
             upper: 0.9,
             rejection_rate: 0.15,
@@ -5985,8 +5963,8 @@ mod tests {
     #[test]
     fn test_compute_metrics_returns_rejection_rate_with_ci() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.75;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.6,
             upper: 0.9,
             rejection_rate: 0.0,
@@ -6004,8 +5982,8 @@ mod tests {
     #[test]
     fn test_compute_metrics_rejection_rate_zero_without_ci() {
         let mut ind = Individual::test();
-        ind.threshold = 0.75;
-        ind.threshold_ci = None;
+        ind.cls.threshold = 0.75;
+        ind.cls.threshold_ci = None;
 
         let data = Data::test2();
         let (_, _, _, rejection_rate, _) = ind.compute_metrics(&data);
@@ -6035,10 +6013,10 @@ mod tests {
         );
 
         assert!(
-            ind.threshold_ci.is_some(),
+            ind.cls.threshold_ci.is_some(),
             "threshold_ci should be created when flag is true"
         );
-        let ci = ind.threshold_ci.unwrap();
+        let ci = ind.cls.threshold_ci.unwrap();
         assert_eq!(ci.upper, 0.0, "New CI should have upper = 0.0");
         assert_eq!(ci.lower, 0.0, "New CI should have lower = 0.0");
         assert_eq!(
@@ -6069,7 +6047,7 @@ mod tests {
         );
 
         assert!(
-            ind.threshold_ci.is_none(),
+            ind.cls.threshold_ci.is_none(),
             "threshold_ci should not be created when flag is false"
         );
     }
@@ -6475,7 +6453,7 @@ mod tests {
         );
 
         assert!(
-            ind_with_ci.threshold_ci.is_some(),
+            ind_with_ci.cls.threshold_ci.is_some(),
             "threshold_ci should be Some when threshold_ci parameter is true"
         );
 
@@ -6494,7 +6472,7 @@ mod tests {
         );
 
         assert!(
-            ind_without_ci.threshold_ci.is_none(),
+            ind_without_ci.cls.threshold_ci.is_none(),
             "threshold_ci should be None when threshold_ci parameter is false"
         );
     }
@@ -6616,7 +6594,7 @@ mod tests {
     #[test]
     fn test_metrics_with_zero_samples() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
+        ind.cls.threshold = 0.5;
 
         let mut data = Data::new();
         data.sample_len = 0;
@@ -6642,9 +6620,9 @@ mod tests {
     #[test]
     fn test_metrics_with_one_sample() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.metrics.mcc = Some(0.0);
-        ind.metrics.f1_score = Some(0.0);
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.mcc = Some(0.0);
+        ind.cls.additional.f1_score = Some(0.0);
 
         let mut data = Data::test2();
         data.sample_len = 1;
@@ -6664,8 +6642,8 @@ mod tests {
     #[test]
     fn test_metrics_with_two_samples_balanced() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.metrics.mcc = Some(0.0);
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::test2();
         data.sample_len = 2;
@@ -6684,10 +6662,10 @@ mod tests {
     #[test]
     fn test_metrics_all_class_zero() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.metrics.ppv = Some(0.0);
-        ind.metrics.npv = Some(0.0);
-        ind.metrics.mcc = Some(0.0);
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.ppv = Some(0.0);
+        ind.cls.additional.npv = Some(0.0);
+        ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![0; 10];
@@ -6715,10 +6693,10 @@ mod tests {
     #[test]
     fn test_metrics_all_class_one() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.metrics.ppv = Some(0.0);
-        ind.metrics.npv = Some(0.0);
-        ind.metrics.mcc = Some(0.0);
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.ppv = Some(0.0);
+        ind.cls.additional.npv = Some(0.0);
+        ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::test2();
         data.y = vec![1; 10];
@@ -6747,8 +6725,8 @@ mod tests {
     fn test_metrics_with_very_close_scores() {
         let mut ind = Individual::new();
         ind.features = vec![(0, 1)].into_iter().collect();
-        ind.threshold = 0.50000001;
-        ind.metrics.mcc = Some(0.0);
+        ind.cls.threshold = 0.50000001;
+        ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::new();
         data.sample_len = 10;
@@ -6776,8 +6754,8 @@ mod tests {
     fn test_metrics_with_extreme_scores() {
         let mut ind = Individual::new();
         ind.features = vec![(0, 1)].into_iter().collect();
-        ind.threshold = 0.0;
-        ind.metrics.mcc = Some(0.0);
+        ind.cls.threshold = 0.0;
+        ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::new();
         data.sample_len = 6;
@@ -6804,8 +6782,8 @@ mod tests {
     #[test]
     fn test_threshold_ci_with_extreme_imbalance() {
         let mut ind = Individual::test();
-        ind.threshold = 0.5;
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold = 0.5;
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.4,
             upper: 0.6,
             rejection_rate: 0.0,
@@ -6842,12 +6820,12 @@ mod tests {
         // on a fixed dataset for an Individual
 
         let mut ind = Individual::test2();
-        ind.threshold = 0.5;
+        ind.cls.threshold = 0.5;
 
         let data = Data::test2();
 
         // Initial narrow interval
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.45,
             upper: 0.55,
             rejection_rate: 0.0,
@@ -6856,7 +6834,7 @@ mod tests {
         let (_, _, _, rejection_rate_narrow, _) = ind.compute_metrics(&data);
 
         // Wider interval
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.3,
             upper: 0.7,
             rejection_rate: 0.0,
@@ -6873,7 +6851,7 @@ mod tests {
     fn test_individual_rejection_rate_monotonicity_multiple_intervals() {
         // Test monotonicity across multiple interval widths
         let mut ind = Individual::test2();
-        ind.threshold = 0.5;
+        ind.cls.threshold = 0.5;
 
         let data = Data::test2();
 
@@ -6888,7 +6866,7 @@ mod tests {
         let mut prev_rejection_rate = 0.0;
 
         for (lower, upper) in intervals {
-            ind.threshold_ci = Some(ThresholdCI {
+            ind.cls.threshold_ci = Some(ThresholdCI {
                 lower,
                 upper,
                 rejection_rate: 0.0,
@@ -6908,16 +6886,16 @@ mod tests {
     fn test_individual_rejection_rate_zero_width_interval() {
         // Edge case: zero-width interval should give same result as no threshold_ci
         let mut ind = Individual::test2();
-        ind.threshold = 0.5;
+        ind.cls.threshold = 0.5;
 
         let data = Data::test2();
 
         // Without threshold_ci
-        ind.threshold_ci = None;
+        ind.cls.threshold_ci = None;
         let (_, _, _, rejection_rate_none, _) = ind.compute_metrics(&data);
 
         // With zero-width interval (lower == upper == threshold)
-        ind.threshold_ci = Some(ThresholdCI {
+        ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.5,
             upper: 0.5,
             rejection_rate: 0.0,
@@ -6936,18 +6914,18 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Tests for FitFunction setting ind.fit and reflecting in ind.metrics
+    // Tests for FitFunction setting ind.fit and reflecting in ind.cls.metrics
     // -----------------------------------------------------------------
 
     #[test]
     fn test_fit_function_mcc_sets_fit_and_metrics() {
-        // Test that FitFunction::mcc properly sets ind.fit and ind.metrics.mcc
+        // Test that FitFunction::mcc properly sets ind.fit and ind.cls.additional.mcc
         use crate::param::Param;
         use crate::population::Population;
 
         let mut pop = Population::new();
         let mut ind = Individual::test2();
-        ind.metrics.mcc = Some(0.0); // Initialize to trigger metric tracking
+        ind.cls.additional.mcc = Some(0.0); // Initialize to trigger metric tracking
         pop.individuals.push(ind);
 
         let data = Data::test2();
@@ -6963,14 +6941,14 @@ mod tests {
             "fit should be set"
         );
         assert!(
-            fitted_ind.metrics.mcc.is_some(),
+            fitted_ind.cls.additional.mcc.is_some(),
             "MCC metric should be Some"
         );
 
-        let mcc_value = fitted_ind.metrics.mcc.unwrap();
+        let mcc_value = fitted_ind.cls.additional.mcc.unwrap();
         assert!(
             (fitted_ind.fit - mcc_value).abs() < 1e-10,
-            "ind.fit should equal ind.metrics.mcc for FitFunction::mcc: fit={}, mcc={}",
+            "ind.fit should equal ind.cls.additional.mcc for FitFunction::mcc: fit={}, mcc={}",
             fitted_ind.fit,
             mcc_value
         );
@@ -6983,7 +6961,7 @@ mod tests {
 
         let mut pop = Population::new();
         let mut ind = Individual::test2();
-        ind.metrics.f1_score = Some(0.0);
+        ind.cls.additional.f1_score = Some(0.0);
         pop.individuals.push(ind);
 
         let data = Data::test2();
@@ -6995,14 +6973,14 @@ mod tests {
         let fitted_ind = &pop.individuals[0];
 
         assert!(
-            fitted_ind.metrics.f1_score.is_some(),
+            fitted_ind.cls.additional.f1_score.is_some(),
             "F1-score metric should be Some"
         );
 
-        let f1_value = fitted_ind.metrics.f1_score.unwrap();
+        let f1_value = fitted_ind.cls.additional.f1_score.unwrap();
         assert!(
             (fitted_ind.fit - f1_value).abs() < 1e-10,
-            "ind.fit should equal ind.metrics.f1_score for FitFunction::f1_score: fit={}, f1={}",
+            "ind.fit should equal ind.cls.additional.f1_score for FitFunction::f1_score: fit={}, f1={}",
             fitted_ind.fit,
             f1_value
         );
@@ -7015,7 +6993,7 @@ mod tests {
 
         let mut pop = Population::new();
         let mut ind = Individual::test2();
-        ind.metrics.npv = Some(0.0);
+        ind.cls.additional.npv = Some(0.0);
         pop.individuals.push(ind);
 
         let data = Data::test2();
@@ -7027,14 +7005,14 @@ mod tests {
         let fitted_ind = &pop.individuals[0];
 
         assert!(
-            fitted_ind.metrics.npv.is_some(),
+            fitted_ind.cls.additional.npv.is_some(),
             "NPV metric should be Some"
         );
 
-        let npv_value = fitted_ind.metrics.npv.unwrap();
+        let npv_value = fitted_ind.cls.additional.npv.unwrap();
         assert!(
             (fitted_ind.fit - npv_value).abs() < 1e-10,
-            "ind.fit should equal ind.metrics.npv for FitFunction::npv: fit={}, npv={}",
+            "ind.fit should equal ind.cls.additional.npv for FitFunction::npv: fit={}, npv={}",
             fitted_ind.fit,
             npv_value
         );
@@ -7047,7 +7025,7 @@ mod tests {
 
         let mut pop = Population::new();
         let mut ind = Individual::test2();
-        ind.metrics.ppv = Some(0.0);
+        ind.cls.additional.ppv = Some(0.0);
         pop.individuals.push(ind);
 
         let data = Data::test2();
@@ -7059,14 +7037,14 @@ mod tests {
         let fitted_ind = &pop.individuals[0];
 
         assert!(
-            fitted_ind.metrics.ppv.is_some(),
+            fitted_ind.cls.additional.ppv.is_some(),
             "PPV metric should be Some"
         );
 
-        let ppv_value = fitted_ind.metrics.ppv.unwrap();
+        let ppv_value = fitted_ind.cls.additional.ppv.unwrap();
         assert!(
             (fitted_ind.fit - ppv_value).abs() < 1e-10,
-            "ind.fit should equal ind.metrics.ppv for FitFunction::ppv: fit={}, ppv={}",
+            "ind.fit should equal ind.cls.additional.ppv for FitFunction::ppv: fit={}, ppv={}",
             fitted_ind.fit,
             ppv_value
         );
@@ -7079,7 +7057,7 @@ mod tests {
 
         let mut pop = Population::new();
         let mut ind = Individual::test2();
-        ind.metrics.g_mean = Some(0.0);
+        ind.cls.additional.g_mean = Some(0.0);
         pop.individuals.push(ind);
 
         let data = Data::test2();
@@ -7091,14 +7069,14 @@ mod tests {
         let fitted_ind = &pop.individuals[0];
 
         assert!(
-            fitted_ind.metrics.g_mean.is_some(),
+            fitted_ind.cls.additional.g_mean.is_some(),
             "G-mean metric should be Some"
         );
 
-        let g_mean_value = fitted_ind.metrics.g_mean.unwrap();
+        let g_mean_value = fitted_ind.cls.additional.g_mean.unwrap();
         assert!(
             (fitted_ind.fit - g_mean_value).abs() < 1e-10,
-            "ind.fit should equal ind.metrics.g_mean for FitFunction::g_mean: fit={}, g_mean={}",
+            "ind.fit should equal ind.cls.additional.g_mean for FitFunction::g_mean: fit={}, g_mean={}",
             fitted_ind.fit,
             g_mean_value
         );
@@ -7123,27 +7101,27 @@ mod tests {
 
         // For FitFunction::auc, fit should be set to auc, but additional metrics should remain None
         assert!(
-            (fitted_ind.fit - fitted_ind.auc).abs() < 1e-10,
-            "For FitFunction::auc, ind.fit should equal ind.auc"
+            (fitted_ind.fit - fitted_ind.cls.auc).abs() < 1e-10,
+            "For FitFunction::auc, ind.fit should equal ind.cls.auc"
         );
         assert!(
-            fitted_ind.metrics.mcc.is_none(),
+            fitted_ind.cls.additional.mcc.is_none(),
             "MCC should be None for FitFunction::auc"
         );
         assert!(
-            fitted_ind.metrics.f1_score.is_none(),
+            fitted_ind.cls.additional.f1_score.is_none(),
             "F1-score should be None for FitFunction::auc"
         );
         assert!(
-            fitted_ind.metrics.npv.is_none(),
+            fitted_ind.cls.additional.npv.is_none(),
             "NPV should be None for FitFunction::auc"
         );
         assert!(
-            fitted_ind.metrics.ppv.is_none(),
+            fitted_ind.cls.additional.ppv.is_none(),
             "PPV should be None for FitFunction::auc"
         );
         assert!(
-            fitted_ind.metrics.g_mean.is_none(),
+            fitted_ind.cls.additional.g_mean.is_none(),
             "G-mean should be None for FitFunction::auc"
         );
     }
@@ -7297,7 +7275,7 @@ mod tests {
 
             if lang == RATIO_LANG {
                 individual.epsilon = 1e-5;
-                individual.threshold = 1.0;
+                individual.cls.threshold = 1.0;
             }
 
             let k_before = individual.k;
@@ -7432,5 +7410,161 @@ mod tests {
 
         // Should panic with 0 permutations
         individual.prune_by_importance(&data, 0, 111, Some(0.0), None, 1);
+    }
+}
+
+#[cfg(test)]
+mod cls_refactor_tests {
+    use super::*;
+    use crate::data::Data;
+    use crate::individual::{PREVALENCE_TYPE, TERNARY_LANG};
+    use crate::param::FitFunction;
+    use crate::Param;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn test_cls_default_values() {
+        let ind = Individual::new();
+        assert_eq!(ind.cls.auc, 0.0);
+        assert_eq!(ind.cls.sensitivity, 0.0);
+        assert_eq!(ind.cls.specificity, 0.0);
+        assert_eq!(ind.cls.accuracy, 0.0);
+        assert_eq!(ind.cls.threshold, 0.0);
+        assert!(ind.cls.threshold_ci.is_none());
+        assert!(ind.cls.additional.mcc.is_none());
+        assert!(ind.cls.additional.f1_score.is_none());
+    }
+
+    #[test]
+    fn test_cls_field_access_and_mutation() {
+        let mut ind = Individual::new();
+        ind.cls.auc = 0.95;
+        ind.cls.sensitivity = 0.88;
+        ind.cls.specificity = 0.92;
+        ind.cls.accuracy = 0.90;
+        ind.cls.threshold = 0.45;
+        ind.cls.additional.mcc = Some(0.85);
+        ind.fit = 0.94;
+
+        assert_eq!(ind.cls.auc, 0.95);
+        assert_eq!(ind.cls.sensitivity, 0.88);
+        assert_eq!(ind.cls.specificity, 0.92);
+        assert_eq!(ind.cls.accuracy, 0.90);
+        assert_eq!(ind.cls.threshold, 0.45);
+        assert_eq!(ind.cls.additional.mcc, Some(0.85));
+        assert_eq!(ind.fit, 0.94);
+    }
+
+    #[test]
+    fn test_cls_serialization_json_roundtrip() {
+        let mut ind = Individual::new();
+        ind.features.insert(0, 1);
+        ind.features.insert(5, -1);
+        ind.k = 2;
+        ind.cls.auc = 0.85;
+        ind.cls.sensitivity = 0.80;
+        ind.cls.specificity = 0.90;
+        ind.cls.accuracy = 0.85;
+        ind.cls.threshold = 0.5;
+        ind.cls.additional.mcc = Some(0.7);
+        ind.fit = 0.84;
+
+        let json = serde_json::to_string(&ind).unwrap();
+        let deser: Individual = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(ind.cls.auc, deser.cls.auc);
+        assert_eq!(ind.cls.sensitivity, deser.cls.sensitivity);
+        assert_eq!(ind.cls.specificity, deser.cls.specificity);
+        assert_eq!(ind.cls.accuracy, deser.cls.accuracy);
+        assert_eq!(ind.cls.threshold, deser.cls.threshold);
+        assert_eq!(ind.cls.additional.mcc, deser.cls.additional.mcc);
+        assert_eq!(ind.fit, deser.fit);
+        assert_eq!(ind.features, deser.features);
+    }
+
+    #[test]
+    fn test_cls_serialization_bincode_roundtrip() {
+        let mut ind = Individual::new();
+        ind.features.insert(3, 1);
+        ind.k = 1;
+        ind.cls.auc = 0.92;
+        ind.cls.sensitivity = 0.85;
+        ind.cls.threshold_ci = Some(ThresholdCI {
+            lower: 0.4,
+            upper: 0.6,
+            rejection_rate: 0.05,
+        });
+
+        let encoded = bincode::serialize(&ind).unwrap();
+        let decoded: Individual = bincode::deserialize(&encoded).unwrap();
+
+        assert_eq!(ind.cls.auc, decoded.cls.auc);
+        assert_eq!(ind.cls.sensitivity, decoded.cls.sensitivity);
+        assert!(decoded.cls.threshold_ci.is_some());
+        let ci = decoded.cls.threshold_ci.unwrap();
+        assert_eq!(ci.lower, 0.4);
+        assert_eq!(ci.upper, 0.6);
+    }
+
+    #[test]
+    fn test_cls_hash_determinism() {
+        let mut ind1 = Individual::new();
+        ind1.features.insert(0, 1);
+        ind1.features.insert(3, -1);
+        ind1.compute_hash();
+
+        let mut ind2 = Individual::new();
+        ind2.features.insert(0, 1);
+        ind2.features.insert(3, -1);
+        ind2.compute_hash();
+
+        // Same features → same hash (cls fields don't affect hash)
+        assert_eq!(ind1.hash, ind2.hash);
+
+        // Different features → different hash
+        let mut ind3 = Individual::new();
+        ind3.features.insert(0, 1);
+        ind3.features.insert(4, -1);
+        ind3.compute_hash();
+        assert_ne!(ind1.hash, ind3.hash);
+    }
+
+    #[test]
+    fn test_cls_clone_independence() {
+        let mut ind = Individual::new();
+        ind.cls.auc = 0.9;
+        ind.cls.sensitivity = 0.85;
+        ind.cls.additional.mcc = Some(0.8);
+
+        let mut clone = ind.clone();
+        clone.cls.auc = 0.5;
+        clone.cls.additional.mcc = Some(0.3);
+
+        // Original unaffected
+        assert_eq!(ind.cls.auc, 0.9);
+        assert_eq!(ind.cls.additional.mcc, Some(0.8));
+        assert_eq!(clone.cls.auc, 0.5);
+    }
+
+    #[test]
+    fn test_evaluate_uses_cls_threshold() {
+        let data = Data::specific_significant_test(30, 20);
+        let mut param = Param::default();
+        param.data.feature_maximal_adj_pvalue = 1.0;
+
+        let mut ind = Individual::new();
+        ind.language = TERNARY_LANG;
+        ind.data_type = PREVALENCE_TYPE;
+        ind.features.insert(0, 1);
+        ind.features.insert(1, -1);
+        ind.k = 2;
+
+        // Evaluate and check cls fields are populated
+        ind.compute_roc_and_metrics(&data, &crate::param::FitFunction::auc, None);
+
+        assert!(ind.cls.auc > 0.0, "AUC should be computed");
+        assert!(ind.cls.sensitivity >= 0.0 && ind.cls.sensitivity <= 1.0);
+        assert!(ind.cls.specificity >= 0.0 && ind.cls.specificity <= 1.0);
+        assert!(ind.cls.accuracy >= 0.0 && ind.cls.accuracy <= 1.0);
     }
 }

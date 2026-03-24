@@ -126,8 +126,8 @@ fn compute_full_metrics(
     let (acc, sens, spec, rejection, add) = compute_metrics_from_value(
         &value,
         &d.y,
-        ind.threshold,
-        ind.threshold_ci.as_ref().map(|ci| [ci.lower, ci.upper]),
+        ind.cls.threshold,
+        ind.cls.threshold_ci.as_ref().map(|ci| [ci.lower, ci.upper]),
         [true; 5],
     );
     (
@@ -152,8 +152,8 @@ fn compute_train_additional(ind: &Individual, d: &Data) -> (f64, f64, f64, f64, 
     let (_, _, _, _, add) = compute_metrics_from_value(
         &value,
         &d.y,
-        ind.threshold,
-        ind.threshold_ci.as_ref().map(|ci| [ci.lower, ci.upper]),
+        ind.cls.threshold,
+        ind.cls.threshold_ci.as_ref().map(|ci| [ci.lower, ci.upper]),
         [true; 5],
     );
     (
@@ -272,6 +272,7 @@ fn individual_metrics_cols(
     test_data: Option<&Data>,
 ) -> Vec<String> {
     let train_rejection = ind
+        .cls
         .threshold_ci
         .as_ref()
         .map(|ci| ci.rejection_rate)
@@ -313,11 +314,11 @@ fn individual_metrics_cols(
 
     vec![
         ind.k.to_string(),
-        fmt_f64(ind.auc),
+        fmt_f64(ind.cls.auc),
         fmt_f64(ind.fit),
-        fmt_f64(ind.accuracy),
-        fmt_f64(ind.sensitivity),
-        fmt_f64(ind.specificity),
+        fmt_f64(ind.cls.accuracy),
+        fmt_f64(ind.cls.sensitivity),
+        fmt_f64(ind.cls.specificity),
         fmt_f64(train_f1),
         fmt_f64(train_mcc),
         fmt_f64(train_ppv),
@@ -387,17 +388,18 @@ pub fn export_fbm_csv(exp: &Experiment, writer: &mut impl Write) -> Result<(), B
     let n = fbm.individuals.len();
 
     // Train metrics - force-compute all additional metrics
-    let train_aucs: Vec<f64> = fbm.individuals.iter().map(|i| i.auc).collect();
+    let train_aucs: Vec<f64> = fbm.individuals.iter().map(|i| i.cls.auc).collect();
     let train_fits: Vec<f64> = fbm.individuals.iter().map(|i| i.fit).collect();
-    let train_accs: Vec<f64> = fbm.individuals.iter().map(|i| i.accuracy).collect();
-    let train_sens: Vec<f64> = fbm.individuals.iter().map(|i| i.sensitivity).collect();
-    let train_specs: Vec<f64> = fbm.individuals.iter().map(|i| i.specificity).collect();
+    let train_accs: Vec<f64> = fbm.individuals.iter().map(|i| i.cls.accuracy).collect();
+    let train_sens: Vec<f64> = fbm.individuals.iter().map(|i| i.cls.sensitivity).collect();
+    let train_specs: Vec<f64> = fbm.individuals.iter().map(|i| i.cls.specificity).collect();
     let train_ks: Vec<f64> = fbm.individuals.iter().map(|i| i.k as f64).collect();
     let train_rejs: Vec<f64> = fbm
         .individuals
         .iter()
         .map(|i| {
-            i.threshold_ci
+            i.cls
+                .threshold_ci
                 .as_ref()
                 .map(|ci| ci.rejection_rate)
                 .unwrap_or(0.0)

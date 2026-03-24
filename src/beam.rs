@@ -5,6 +5,7 @@ use crate::gpu::GpuAssay;
 use crate::individual::data_type;
 use crate::individual::language;
 use crate::individual::AdditionalMetrics;
+use crate::individual::ClassificationMetrics;
 use crate::individual::Individual;
 use crate::individual::ThresholdCI;
 use crate::individual::BINARY_LANG;
@@ -640,39 +641,20 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
         }
     }
 
-    Individual {
-        features: features.clone(),
-        auc: 0.0,
-        fit: 0.0,
-        specificity: 0.0,
-        sensitivity: 0.0,
-        accuracy: 0.0,
-        threshold: 0.0,
-        threshold_ci: if param.general.threshold_ci_n_bootstrap > 0 {
-            Some(ThresholdCI {
-                lower: 0.0,
-                upper: 0.0,
-                rejection_rate: 0.0,
-            })
-        } else {
-            None
-        },
-        k: features.len(),
-        epoch: 0,
-        language: language,
-        data_type: data_type,
-        hash: 0,
-        epsilon: param.general.data_type_epsilon,
-        parents: None,
-        betas: None,
-        metrics: AdditionalMetrics {
-            mcc: None,
-            f1_score: None,
-            npv: None,
-            ppv: None,
-            g_mean: None,
-        },
+    let mut ind = Individual::new();
+    ind.features = features.clone();
+    ind.k = features.len();
+    ind.language = language;
+    ind.data_type = data_type;
+    ind.epsilon = param.general.data_type_epsilon;
+    if param.general.threshold_ci_n_bootstrap > 0 {
+        ind.cls.threshold_ci = Some(ThresholdCI {
+            lower: 0.0,
+            upper: 0.0,
+            rejection_rate: 0.0,
+        });
     }
+    ind
 }
 
 //-----------------------------------------------------------------------------
@@ -1417,13 +1399,23 @@ mod tests {
 
     fn create_test_individual() -> Individual {
         Individual {
+            cls: ClassificationMetrics {
+                auc: 0.4,
+                specificity: 0.15,
+                sensitivity: 0.16,
+                accuracy: 0.23,
+                threshold: 42.0,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                    mcc: None,
+                    f1_score: None,
+                    npv: None,
+                    ppv: None,
+                    g_mean: None,
+                },
+            },
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
-            auc: 0.4,
             fit: 0.8,
-            specificity: 0.15,
-            sensitivity: 0.16,
-            accuracy: 0.23,
-            threshold: 42.0,
             k: 42,
             epoch: 42,
             language: 0,
@@ -1432,14 +1424,6 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
-            threshold_ci: None,
-            metrics: AdditionalMetrics {
-                mcc: None,
-                f1_score: None,
-                npv: None,
-                ppv: None,
-                g_mean: None,
-            },
         }
     }
 
@@ -1529,13 +1513,23 @@ mod tests {
 
     fn create_test_individual_for_test_pop_from_combinations() -> Individual {
         Individual {
+            cls: ClassificationMetrics {
+                auc: 0.4,
+                specificity: 0.15,
+                sensitivity: 0.16,
+                accuracy: 0.23,
+                threshold: 42.0,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                    mcc: None,
+                    f1_score: None,
+                    npv: None,
+                    ppv: None,
+                    g_mean: None,
+                },
+            },
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
-            auc: 0.4,
             fit: 0.8,
-            specificity: 0.15,
-            sensitivity: 0.16,
-            accuracy: 0.23,
-            threshold: 42.0,
             k: 4,
             epoch: 42,
             language: TERNARY_LANG,
@@ -1544,14 +1538,6 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
-            threshold_ci: None,
-            metrics: AdditionalMetrics {
-                mcc: None,
-                f1_score: None,
-                npv: None,
-                ppv: None,
-                g_mean: None,
-            },
         }
     }
 
@@ -1848,15 +1834,15 @@ mod tests {
 
         let mut ind1 = Individual::new();
         ind1.features = vec![(0, 1), (1, -1), (2, 1)].into_iter().collect();
-        ind1.auc = 0.9;
+        ind1.cls.auc = 0.9;
 
         let mut ind2 = Individual::new();
         ind2.features = vec![(1, 1), (3, 1), (5, -1)].into_iter().collect();
-        ind2.auc = 0.85;
+        ind2.cls.auc = 0.85;
 
         let mut ind3 = Individual::new();
         ind3.features = vec![(2, 1), (4, 1)].into_iter().collect();
-        ind3.auc = 0.88;
+        ind3.cls.auc = 0.88;
 
         pop.individuals = vec![ind1, ind2, ind3];
 
@@ -2142,22 +2128,22 @@ mod tests {
     fn test_keep_n_best_model_within_collection() {
         let mut pop1 = Population::new();
         let mut ind1 = Individual::new();
-        ind1.auc = 0.9;
+        ind1.cls.auc = 0.9;
         ind1.fit = 0.9;
         pop1.individuals = vec![ind1];
 
         let mut pop2 = Population::new();
         let mut ind2 = Individual::new();
-        ind2.auc = 0.95;
+        ind2.cls.auc = 0.95;
         ind2.fit = 0.95;
         let mut ind3 = Individual::new();
-        ind3.auc = 0.85;
+        ind3.cls.auc = 0.85;
         ind3.fit = 0.85;
         pop2.individuals = vec![ind2, ind3];
 
         let mut pop3 = Population::new();
         let mut ind4 = Individual::new();
-        ind4.auc = 0.92;
+        ind4.cls.auc = 0.92;
         ind4.fit = 0.92;
         pop3.individuals = vec![ind4];
 
@@ -2166,11 +2152,11 @@ mod tests {
 
         assert_eq!(best.individuals.len(), 2, "Should keep only 2 best");
         assert_eq!(
-            best.individuals[0].auc, 0.95,
+            best.individuals[0].cls.auc, 0.95,
             "First should have highest AUC"
         );
         assert_eq!(
-            best.individuals[1].auc, 0.92,
+            best.individuals[1].cls.auc, 0.92,
             "Second should have second highest AUC"
         );
     }
@@ -2179,7 +2165,7 @@ mod tests {
     fn test_keep_n_best_model_within_collection_request_more_than_available() {
         let mut pop1 = Population::new();
         let mut ind1 = Individual::new();
-        ind1.auc = 0.9;
+        ind1.cls.auc = 0.9;
         ind1.fit = 0.9;
         pop1.individuals = vec![ind1];
 

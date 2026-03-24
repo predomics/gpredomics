@@ -118,11 +118,11 @@ fn compare_experiments(old: &Experiment, new: &Experiment) -> Vec<VersionDiffere
     // Compare best model AUC (if available)
     if let (Some(old_pop), Some(new_pop)) = (&old.final_population, &new.final_population) {
         if !old_pop.individuals.is_empty() && !new_pop.individuals.is_empty() {
-            let old_auc = old_pop.individuals[0].auc;
-            let new_auc = new_pop.individuals[0].auc;
+            let old_auc = old_pop.individuals[0].cls.auc;
+            let new_auc = new_pop.individuals[0].cls.auc;
             if (old_auc - new_auc).abs() > 1e-6 {
                 differences.push(VersionDifference {
-                    field: "best_model.auc".to_string(),
+                    field: "best_model.cls.auc".to_string(),
                     old_value: format!("{:.6}", old_auc),
                     new_value: format!("{:.6}", new_auc),
                 });
