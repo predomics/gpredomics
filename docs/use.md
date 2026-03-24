@@ -18,7 +18,7 @@ Or with a custom configuration:
 cargo run --release -- --config my_config.yaml
 ```
 
-The tool will load parameters, run the selected algorithm ([GA](ga.md), [Beam](beam.md), or MCMC), display results, and optionally save the experiment.
+The tool will load parameters, run the selected algorithm ([GA](ga.md), [Beam](beam.md), [ACO](aco.md), or MCMC), display results, and optionally save the experiment.
 
 ### Command-line options
 
@@ -58,6 +58,38 @@ general:
 ```
 
 The CSV includes all classification metrics (AUC, fit, accuracy, sensitivity, specificity, F1, MCC, PPV, NPV, G-mean, rejection rate) for both train and test, plus all experiment parameters as individual named columns. If the file already exists with a matching header, new rows are appended.
+
+### Algorithm selection
+
+The `general.algo` parameter selects the optimization algorithm. Available algorithms:
+
+- **ga** — [Genetic Algorithm](ga.md) (default)
+- **beam** — [Beam Search](beam.md)
+- **aco** — [Ant Colony Optimization](aco.md)
+- **mcmc** — Markov Chain Monte Carlo
+
+Example configuration for ACO:
+
+```yaml
+general:
+  algo: aco
+  language: ter
+  data_type: prev
+  seed: 42
+  fit: auc
+  k_penalty: 0.001
+
+aco:
+  n_ants: 200
+  max_iterations: 100
+  min_iterations: 20
+  alpha: 1.0
+  beta: 2.0
+  rho: 0.1
+  k_min: 1
+  k_max: 50
+  max_age_best_model: 15
+```
 
 ### Signal handling
 
@@ -139,4 +171,4 @@ Results are displayed in sections:
 
 **Voting analysis** (if enabled): Jury composition, voting method, ensemble metrics, and per-sample predictions
 
-*Last updated: v0.7.6*
+*Last updated: v0.8.3*

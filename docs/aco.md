@@ -203,4 +203,4 @@ voting:
 - Stützle, T. & Hoos, H. (2000). Max-Min Ant System. *Future Generation Computer Systems*, 16(8), 889–914.
 - Al-Ani, A. (2005). Feature subset selection using ant colony optimization. *Expert Systems with Applications*, 36(8), 11198–11204.
 
-*Last updated: v0.8.2*
+*Last updated: v0.8.3*

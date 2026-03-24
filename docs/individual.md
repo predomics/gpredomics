@@ -1,10 +1,10 @@
-# Individual 
+# Individual
 
 ## Concept
 
-In Gpredomics, an `individual` represents a unique predictive model, defined by a specific subset of features, their coefficients, and associated parameters. Individuals are the fundamental units manipulated by algorithms such as genetic algorithms and beam algorithms.
+In Gpredomics, an `Individual` represents a unique predictive model, defined by a specific subset of features, their coefficients, and associated parameters. Individuals are the fundamental units manipulated by algorithms such as genetic algorithms, beam search, and ant colony optimization (ACO).
 
-Currently, each model is a binary classification model, dependent on a threshold. Gpredomics is specifically designed for interpretable and easy-to-use models. 
+Currently, each model is a binary classification model, dependent on a threshold. Gpredomics is specifically designed for interpretable and easy-to-use models.
 
 Let's take the example of a fictive target disease called *Lightheadedness*, causing patients' heads to transform into giant light bulbs. The disease is mainly associated with three features called `L`, `U` and `X`. A Gpredomics equation that characterises this relationship could therefore be: 
 
@@ -50,6 +50,76 @@ Each model is additionally characterized by a data type:
 Here, $F_i$ represents Features and $C_i$ their coefficients.
 
 $\epsilon$ is a small positive constant used to avoid division by zero or logarithm of zero. Its default value is 1e-5 (0.00001), configurable via `datatype_epsilon` in the YAML configuration.
+
+## Struct layout
+
+An `Individual` contains the model definition, a universal fitness score, and nested classification metrics.
+
+### Individual fields
+
+| Field        | Type                          | Description                                                     |
+|--------------|-------------------------------|-----------------------------------------------------------------|
+| `features`   | `BTreeMap<usize, i8>`         | Feature indices mapped to their coefficients. Uses `BTreeMap` (not `HashMap`) for deterministic iteration order. |
+| `k`          | `usize`                       | Number of variables used in the model.                          |
+| `language`   | `u8`                          | Language of the model (bin, ter, ratio, pow2).                  |
+| `data_type`  | `u8`                          | Data type of the model (raw, prev, log).                        |
+| `epsilon`    | `f64`                         | Epsilon value used during score calculation.                    |
+| `fit`        | `f64`                         | Universal penalized objective (see [Fitness](#fitness) below).  |
+| `cls`        | `ClassificationMetrics`       | Nested classification metrics (see below).                      |
+| `epoch`      | `usize`                       | Iteration that produced this model.                             |
+| `parents`    | `Option<Vec<u64>>`            | Parent hashes in the generational context.                      |
+| `hash`       | `u64`                         | Identifier hash of the model.                                   |
+| `betas`      | `Option<Betas>`               | Beta coefficients (MCMC individuals only).                      |
+
+> **Note on `features`:** Prior to v0.8.3, `features` was a `HashMap<usize, i8>`. It is now a `BTreeMap<usize, i8>` so that feature iteration order is deterministic across runs and platforms, which matters for reproducibility of serialised models and score computation.
+
+### ClassificationMetrics
+
+The `ClassificationMetrics` struct groups all metrics that are specific to binary classification. It is stored in `Individual.cls`.
+
+| Field         | Type                     | Description                                               |
+|---------------|--------------------------|-----------------------------------------------------------|
+| `auc`          | `f64`                    | Area Under the ROC Curve on the training set.             |
+| `threshold`    | `f64`                    | Decision threshold used for binary classification.        |
+| `threshold_ci` | `Option<ThresholdCI>`    | Confidence interval for the threshold and rejection rate. |
+| `sensitivity`  | `f64`                    | True Positive Rate on the training set.                   |
+| `specificity`  | `f64`                    | True Negative Rate on the training set.                   |
+| `accuracy`     | `f64`                    | Accuracy on the training set.                             |
+| `additional`   | `AdditionalMetrics`      | Additional derived metrics (see below).                   |
+
+### AdditionalMetrics
+
+The `AdditionalMetrics` struct holds extra classification metrics that are computed on demand. It is stored in `Individual.cls.additional`.
+
+| Field      | Type            | Description                                    |
+|------------|-----------------|------------------------------------------------|
+| `mcc`       | `Option<f64>`   | Matthews Correlation Coefficient.              |
+| `f1_score`  | `Option<f64>`   | Harmonic mean of Precision and Sensitivity.    |
+| `npv`       | `Option<f64>`   | Negative Predictive Value — TN / (TN + FN).   |
+| `ppv`       | `Option<f64>`   | Positive Predictive Value — TP / (TP + FP).   |
+| `g_mean`    | `Option<f64>`   | Geometric mean of Sensitivity and Specificity. |
+
+### Accessing metrics — quick reference
+
+```rust
+// Universal objective (always on Individual)
+individual.fit
+
+// Core classification metrics
+individual.cls.auc
+individual.cls.threshold
+individual.cls.sensitivity
+individual.cls.specificity
+individual.cls.accuracy
+individual.cls.threshold_ci
+
+// Additional metrics (Option values)
+individual.cls.additional.mcc
+individual.cls.additional.f1_score
+individual.cls.additional.npv
+individual.cls.additional.ppv
+individual.cls.additional.g_mean
+```
 
 ## Threshold optimization
 
@@ -117,4 +187,4 @@ For each feature present in the individual, the algorithm randomly shuffles the 
 
 Please note that this feature allows you to evaluate the importance of a **single feature**, but does not allow you to evaluate its importance in conjunction with other features. In a metagenomic context, it can therefore be used to isolate features whose mere presence or absence is decisive, but it cannot capture group phenomena. 
 
-*Last updated: v0.7.6*
+*Last updated: v0.8.3*
