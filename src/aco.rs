@@ -270,10 +270,10 @@ fn construct_solution(
     ind.data_type = data_type;
     ind.epsilon = epsilon;
     if language == individual::RATIO_LANG {
-        ind.threshold = 1.0;
+        ind.cls.threshold = 1.0;
     }
     if threshold_ci {
-        ind.threshold_ci = Some(individual::ThresholdCI {
+        ind.cls.threshold_ci = Some(individual::ThresholdCI {
             upper: 0.0,
             lower: 0.0,
             rejection_rate: 0.0,
@@ -652,7 +652,7 @@ mod tests {
         let best = &final_pop.individuals[0];
         assert!(best.k > 0, "Best model should have features");
         assert!(
-            best.auc >= 0.0 && best.auc <= 1.0,
+            best.cls.auc >= 0.0 && best.cls.auc <= 1.0,
             "Best model should have valid AUC"
         );
     }
@@ -674,7 +674,7 @@ mod tests {
             let running = Arc::new(AtomicBool::new(true));
             let (populations, _meta) = aco(&mut data, &mut None, &mut None, &param, running);
             let best = &populations.last().unwrap().individuals[0];
-            (best.fit, best.auc, best.k, best.hash)
+            (best.fit, best.cls.auc, best.k, best.hash)
         };
 
         let (fit1, auc1, k1, hash1) = run_once();

@@ -206,15 +206,15 @@ fn test_ga_qin2014_basic_run() {
     // Verify best model
     let best_model = &final_pop.individuals[0];
     assert!(
-        best_model.auc >= 0.0 && best_model.auc <= 1.0,
+        best_model.cls.auc >= 0.0 && best_model.cls.auc <= 1.0,
         "AUC should be between 0 and 1"
     );
     assert!(
-        best_model.sensitivity >= 0.0 && best_model.sensitivity <= 1.0,
+        best_model.cls.sensitivity >= 0.0 && best_model.cls.sensitivity <= 1.0,
         "Sensitivity should be between 0 and 1"
     );
     assert!(
-        best_model.specificity >= 0.0 && best_model.specificity <= 1.0,
+        best_model.cls.specificity >= 0.0 && best_model.cls.specificity <= 1.0,
         "Specificity should be between 0 and 1"
     );
     assert!(
@@ -240,7 +240,7 @@ fn test_ga_qin2014_basic_run() {
     println!("  - Train samples: {}", experiment.train_data.sample_len);
     println!("  - Train features: {}", experiment.train_data.feature_len);
     println!("  - Test samples: {}", test_data.sample_len);
-    println!("  - Best model AUC: {:.4}", best_model.auc);
+    println!("  - Best model AUC: {:.4}", best_model.cls.auc);
     println!("  - Best model features: {}", best_model.k);
     println!("  - Execution time: {:.2}s", experiment.execution_time);
 }
@@ -297,9 +297,9 @@ fn test_ga_qin2014_serialization() {
     // Verify best model metrics
     let orig_best = &original_exp.final_population.as_ref().unwrap().individuals[0];
     let loaded_best = &loaded_exp.final_population.as_ref().unwrap().individuals[0];
-    assert_eq!(orig_best.auc, loaded_best.auc);
-    assert_eq!(orig_best.sensitivity, loaded_best.sensitivity);
-    assert_eq!(orig_best.specificity, loaded_best.specificity);
+    assert_eq!(orig_best.cls.auc, loaded_best.cls.auc);
+    assert_eq!(orig_best.cls.sensitivity, loaded_best.cls.sensitivity);
+    assert_eq!(orig_best.cls.specificity, loaded_best.cls.specificity);
     assert_eq!(orig_best.k, loaded_best.k);
     assert_eq!(orig_best.features, loaded_best.features);
 
@@ -346,9 +346,12 @@ fn test_ga_qin2014_with_keep_trace() {
     // Evolution should generally improve (not guaranteed, but likely with this dataset)
     println!(
         "  - First gen best AUC: {:.4}",
-        first_gen.individuals[0].auc
+        first_gen.individuals[0].cls.auc
     );
-    println!("  - Last gen best AUC: {:.4}", last_gen.individuals[0].auc);
+    println!(
+        "  - Last gen best AUC: {:.4}",
+        last_gen.individuals[0].cls.auc
+    );
     println!("  - Total generations: {}", experiment.collections[0].len());
 
     println!("✓ Keep trace test passed");
@@ -512,9 +515,9 @@ fn test_ga_qin2014_different_fit_functions() {
         );
         let best_model = &experiment.final_population.as_ref().unwrap().individuals[0];
 
-        println!("    - Best AUC: {:.4}", best_model.auc);
-        println!("    - Best Sensitivity: {:.4}", best_model.sensitivity);
-        println!("    - Best Specificity: {:.4}", best_model.specificity);
+        println!("    - Best AUC: {:.4}", best_model.cls.auc);
+        println!("    - Best Sensitivity: {:.4}", best_model.cls.sensitivity);
+        println!("    - Best Specificity: {:.4}", best_model.cls.specificity);
     }
 
     println!("✓ Different fit functions test passed");
@@ -578,11 +581,11 @@ fn test_ga_qin2014_reproducibility() {
         best1.features, best2.features,
         "Features should be identical"
     );
-    assert_eq!(best1.auc, best2.auc, "AUC should be identical");
+    assert_eq!(best1.cls.auc, best2.cls.auc, "AUC should be identical");
     assert_eq!(best1.k, best2.k, "Feature count should be identical");
 
-    println!("  - Run 1 AUC: {:.4}", best1.auc);
-    println!("  - Run 2 AUC: {:.4}", best2.auc);
+    println!("  - Run 1 AUC: {:.4}", best1.cls.auc);
+    println!("  - Run 2 AUC: {:.4}", best2.cls.auc);
 
     println!("✓ Reproducibility test passed");
 }
@@ -713,8 +716,14 @@ fn test_ga_qin2014_gpu_vs_cpu() {
     let best_cpu = &exp_cpu.final_population.as_ref().unwrap().individuals[0];
     let best_gpu = &exp_gpu.final_population.as_ref().unwrap().individuals[0];
 
-    println!("CPU best model: AUC={:.4}, k={}", best_cpu.auc, best_cpu.k);
-    println!("GPU best model: AUC={:.4}, k={}", best_gpu.auc, best_gpu.k);
+    println!(
+        "CPU best model: AUC={:.4}, k={}",
+        best_cpu.cls.auc, best_cpu.k
+    );
+    println!(
+        "GPU best model: AUC={:.4}, k={}",
+        best_gpu.cls.auc, best_gpu.k
+    );
 
     // With same seed, results should be identical (or very close if GPU)
     // Note: GPU might have slight numerical differences due to floating point operations
@@ -784,11 +793,11 @@ fn test_ga_gpu_with_inner_cv() {
 
     println!(
         "\nTop CPU model: k={}, AUC={:.6}, features={:?}",
-        best_cpu.k, best_cpu.auc, best_cpu.features
+        best_cpu.k, best_cpu.cls.auc, best_cpu.features
     );
     println!(
         "Top GPU model: k={}, AUC={:.6}, features={:?}",
-        best_gpu.k, best_gpu.auc, best_gpu.features
+        best_gpu.k, best_gpu.cls.auc, best_gpu.features
     );
 
     // With same seed, features should be identical
@@ -798,12 +807,12 @@ fn test_ga_gpu_with_inner_cv() {
     );
 
     // AUC should be very close (within floating point tolerance)
-    let auc_diff = (best_cpu.auc - best_gpu.auc).abs();
+    let auc_diff = (best_cpu.cls.auc - best_gpu.cls.auc).abs();
     assert!(
         auc_diff < 1e-4,
         "AUC difference too large: CPU={:.6}, GPU={:.6}, diff={:.6}",
-        best_cpu.auc,
-        best_gpu.auc,
+        best_cpu.cls.auc,
+        best_gpu.cls.auc,
         auc_diff
     );
 
@@ -853,16 +862,19 @@ fn test_ga_consistency_inner_cv_vs_no_inner_cv() {
         .unwrap()
         .individuals[0];
 
-    println!("No Inner CV: AUC={:.4}, k={}", best_no_cv.auc, best_no_cv.k);
+    println!(
+        "No Inner CV: AUC={:.4}, k={}",
+        best_no_cv.cls.auc, best_no_cv.k
+    );
     println!(
         "With Inner CV: AUC={:.4}, k={}",
-        best_with_cv.auc, best_with_cv.k
+        best_with_cv.cls.auc, best_with_cv.k
     );
 
     // Results will differ due to different fitness evaluation (with vs without CV)
     // But both should be valid
-    assert!(best_no_cv.auc >= 0.0 && best_no_cv.auc <= 1.0);
-    assert!(best_with_cv.auc >= 0.0 && best_with_cv.auc <= 1.0);
+    assert!(best_no_cv.cls.auc >= 0.0 && best_no_cv.cls.auc <= 1.0);
+    assert!(best_with_cv.cls.auc >= 0.0 && best_with_cv.cls.auc <= 1.0);
     assert!(best_no_cv.k > 0);
     assert!(best_with_cv.k > 0);
 
@@ -912,10 +924,13 @@ fn test_ga_consistency_outer_cv_vs_no_outer_cv() {
         .unwrap()
         .individuals[0];
 
-    println!("No Outer CV: AUC={:.4}, k={}", best_no_cv.auc, best_no_cv.k);
+    println!(
+        "No Outer CV: AUC={:.4}, k={}",
+        best_no_cv.cls.auc, best_no_cv.k
+    );
     println!(
         "With Outer CV: AUC={:.4}, k={}",
-        best_with_cv.auc, best_with_cv.k
+        best_with_cv.cls.auc, best_with_cv.k
     );
 
     // Verify CV structure
@@ -930,8 +945,8 @@ fn test_ga_consistency_outer_cv_vs_no_outer_cv() {
     );
 
     // Both should be valid
-    assert!(best_no_cv.auc >= 0.0 && best_no_cv.auc <= 1.0);
-    assert!(best_with_cv.auc >= 0.0 && best_with_cv.auc <= 1.0);
+    assert!(best_no_cv.cls.auc >= 0.0 && best_no_cv.cls.auc <= 1.0);
+    assert!(best_with_cv.cls.auc >= 0.0 && best_with_cv.cls.auc <= 1.0);
     assert!(best_no_cv.k > 0);
     assert!(best_with_cv.k > 0);
 
@@ -974,11 +989,11 @@ fn test_ga_consistency_gpu_vs_cpu_basic() {
 
     println!(
         "CPU: AUC={:.6}, k={}, features={:?}",
-        best_cpu.auc, best_cpu.k, best_cpu.features
+        best_cpu.cls.auc, best_cpu.k, best_cpu.features
     );
     println!(
         "GPU: AUC={:.6}, k={}, features={:?}",
-        best_gpu.auc, best_gpu.k, best_gpu.features
+        best_gpu.cls.auc, best_gpu.k, best_gpu.features
     );
 
     // With same seed, results should be identical
@@ -987,12 +1002,12 @@ fn test_ga_consistency_gpu_vs_cpu_basic() {
         "Same seed should give identical features"
     );
 
-    let auc_diff = (best_cpu.auc - best_gpu.auc).abs();
+    let auc_diff = (best_cpu.cls.auc - best_gpu.cls.auc).abs();
     assert!(
         auc_diff < 1e-6,
         "AUC should be identical: CPU={:.6}, GPU={:.6}, diff={:.6}",
-        best_cpu.auc,
-        best_gpu.auc,
+        best_cpu.cls.auc,
+        best_gpu.cls.auc,
         auc_diff
     );
 
@@ -1039,11 +1054,11 @@ fn test_ga_consistency_gpu_vs_cpu_inner_cv() {
 
     println!(
         "CPU Inner CV: AUC={:.6}, k={}, features={:?}",
-        best_cpu.auc, best_cpu.k, best_cpu.features
+        best_cpu.cls.auc, best_cpu.k, best_cpu.features
     );
     println!(
         "GPU Inner CV: AUC={:.6}, k={}, features={:?}",
-        best_gpu.auc, best_gpu.k, best_gpu.features
+        best_gpu.cls.auc, best_gpu.k, best_gpu.features
     );
 
     // With same seed, results should be identical
@@ -1052,12 +1067,12 @@ fn test_ga_consistency_gpu_vs_cpu_inner_cv() {
         "GPU and CPU inner CV should give identical features with same seed"
     );
 
-    let auc_diff = (best_cpu.auc - best_gpu.auc).abs();
+    let auc_diff = (best_cpu.cls.auc - best_gpu.cls.auc).abs();
     assert!(
         auc_diff < 1e-6,
         "AUC should be identical: CPU={:.6}, GPU={:.6}, diff={:.6}",
-        best_cpu.auc,
-        best_gpu.auc,
+        best_cpu.cls.auc,
+        best_gpu.cls.auc,
         auc_diff
     );
 
@@ -1101,11 +1116,11 @@ fn test_ga_consistency_keep_trace() {
 
     println!(
         "No trace: AUC={:.6}, k={}, features={:?}",
-        best_no_trace.auc, best_no_trace.k, best_no_trace.features
+        best_no_trace.cls.auc, best_no_trace.k, best_no_trace.features
     );
     println!(
         "With trace: AUC={:.6}, k={}, features={:?}",
-        best_with_trace.auc, best_with_trace.k, best_with_trace.features
+        best_with_trace.cls.auc, best_with_trace.k, best_with_trace.features
     );
 
     // Final results should be identical (keep_trace only affects what's stored, not computation)
@@ -1114,7 +1129,7 @@ fn test_ga_consistency_keep_trace() {
         "keep_trace should not affect final results"
     );
     assert_eq!(
-        best_no_trace.auc, best_with_trace.auc,
+        best_no_trace.cls.auc, best_with_trace.cls.auc,
         "keep_trace should not affect AUC"
     );
 
@@ -1175,8 +1190,8 @@ fn test_ga_gpu_multiple_lang_dtype() {
     let best_cpu = &exp_cpu.final_population.as_ref().unwrap().individuals[0];
     let best_gpu = &exp_gpu.final_population.as_ref().unwrap().individuals[0];
 
-    println!("\nCPU: k={}, AUC={:.6}", best_cpu.k, best_cpu.auc);
-    println!("GPU: k={}, AUC={:.6}", best_gpu.k, best_gpu.auc);
+    println!("\nCPU: k={}, AUC={:.6}", best_cpu.k, best_cpu.cls.auc);
+    println!("GPU: k={}, AUC={:.6}", best_gpu.k, best_gpu.cls.auc);
 
     // Same seed should give same results
     assert_eq!(
@@ -1310,9 +1325,9 @@ fn test_ga_comprehensive_all_combinations() {
 
                 // Verify reasonable AUC
                 assert!(
-                    best.auc >= 0.5 && best.auc <= 1.0,
+                    best.cls.auc >= 0.5 && best.cls.auc <= 1.0,
                     "Invalid AUC {:.3} for {} {} {} {}",
-                    best.auc,
+                    best.cls.auc,
                     lang_name,
                     dtype_name,
                     backend_name,
@@ -1321,7 +1336,7 @@ fn test_ga_comprehensive_all_combinations() {
 
                 println!(
                     "AUC={:.4}, k={}, pop_size={}",
-                    best.auc,
+                    best.cls.auc,
                     best.k,
                     final_pop.individuals.len()
                 );
@@ -1329,7 +1344,7 @@ fn test_ga_comprehensive_all_combinations() {
                 combination_results.push((
                     backend_name,
                     cv_name,
-                    best.auc,
+                    best.cls.auc,
                     best.k,
                     best.features.len(),
                 ));
@@ -1545,23 +1560,23 @@ fn test_ga_qin2014_with_threshold_ci() {
     // Verify threshold CI is set
     let best_model = &final_pop.individuals[0];
     assert!(
-        best_model.threshold_ci.is_some(),
+        best_model.cls.threshold_ci.is_some(),
         "Best model should have threshold CI"
     );
 
-    let threshold_ci = best_model.threshold_ci.as_ref().unwrap();
-    println!("  - Threshold: {:.4}", best_model.threshold);
+    let threshold_ci = best_model.cls.threshold_ci.as_ref().unwrap();
+    println!("  - Threshold: {:.4}", best_model.cls.threshold);
     println!("  - CI Lower: {:.4}", threshold_ci.lower);
     println!("  - CI Upper: {:.4}", threshold_ci.upper);
     println!("  - Rejection rate: {:.4}", threshold_ci.rejection_rate);
 
     // Verify CI bounds are valid
     assert!(
-        threshold_ci.lower <= best_model.threshold,
+        threshold_ci.lower <= best_model.cls.threshold,
         "CI lower should be <= threshold"
     );
     assert!(
-        threshold_ci.upper >= best_model.threshold,
+        threshold_ci.upper >= best_model.cls.threshold,
         "CI upper should be >= threshold"
     );
     assert!(
@@ -1600,12 +1615,12 @@ fn test_ga_qin2014_threshold_ci_alpha_variations() {
 
         let best_model = &experiment.final_population.as_ref().unwrap().individuals[0];
         assert!(
-            best_model.threshold_ci.is_some(),
+            best_model.cls.threshold_ci.is_some(),
             "Should have threshold CI for alpha={}",
             alpha
         );
 
-        let ci = best_model.threshold_ci.as_ref().unwrap();
+        let ci = best_model.cls.threshold_ci.as_ref().unwrap();
         let ci_width = ci.upper - ci.lower;
 
         println!(
@@ -1620,11 +1635,11 @@ fn test_ga_qin2014_threshold_ci_alpha_variations() {
             alpha
         );
         assert!(
-            ci.lower <= best_model.threshold,
+            ci.lower <= best_model.cls.threshold,
             "CI lower should be <= threshold"
         );
         assert!(
-            ci.upper >= best_model.threshold,
+            ci.upper >= best_model.cls.threshold,
             "CI upper should be >= threshold"
         );
     }
@@ -1672,7 +1687,7 @@ fn test_ga_qin2014_voting_with_threshold_ci() {
             .experts
             .individuals
             .iter()
-            .filter(|ind| ind.threshold_ci.is_some())
+            .filter(|ind| ind.cls.threshold_ci.is_some())
             .count();
 
         println!(
@@ -1694,7 +1709,7 @@ fn test_ga_qin2014_voting_with_threshold_ci() {
     let models_with_ci = final_pop
         .individuals
         .iter()
-        .filter(|ind| ind.threshold_ci.is_some())
+        .filter(|ind| ind.cls.threshold_ci.is_some())
         .count();
 
     println!(
@@ -1750,7 +1765,7 @@ fn test_ga_qin2014_voting_with_pruning() {
         for expert in &jury.experts.individuals {
             assert!(expert.k > 0, "Expert should have at least one feature");
             assert!(
-                expert.auc >= 0.0 && expert.auc <= 1.0,
+                expert.cls.auc >= 0.0 && expert.cls.auc <= 1.0,
                 "Expert should have valid AUC"
             );
         }

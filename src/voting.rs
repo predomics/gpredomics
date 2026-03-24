@@ -120,7 +120,7 @@ impl Jury {
         if *min_perf > 0.0 {
             let n = experts.individuals.len();
             experts.individuals.retain(|expert| {
-                expert.sensitivity >= *min_perf && expert.specificity >= *min_perf
+                expert.cls.sensitivity >= *min_perf && expert.cls.specificity >= *min_perf
             });
             let removed = n - experts.individuals.len();
             if removed > 0 {
@@ -323,7 +323,7 @@ impl Jury {
     /// Panics if evaluate is called before fitting experts on training data
     pub fn evaluate(&mut self, data: &Data) {
         for expert in &mut self.experts.individuals {
-            if expert.accuracy == 0.0 {
+            if expert.cls.accuracy == 0.0 {
                 expert.compute_roc_and_metrics(data, &FitFunction::auc, None);
             }
         }
@@ -416,23 +416,23 @@ impl Jury {
                 self.experts
                     .individuals
                     .iter()
-                    .any(|e| e.metrics.mcc.is_some()),
+                    .any(|e| e.cls.additional.mcc.is_some()),
                 self.experts
                     .individuals
                     .iter()
-                    .any(|e| e.metrics.f1_score.is_some()),
+                    .any(|e| e.cls.additional.f1_score.is_some()),
                 self.experts
                     .individuals
                     .iter()
-                    .any(|e| e.metrics.npv.is_some()),
+                    .any(|e| e.cls.additional.npv.is_some()),
                 self.experts
                     .individuals
                     .iter()
-                    .any(|e| e.metrics.ppv.is_some()),
+                    .any(|e| e.cls.additional.ppv.is_some()),
                 self.experts
                     .individuals
                     .iter()
-                    .any(|e| e.metrics.g_mean.is_some()),
+                    .any(|e| e.cls.additional.g_mean.is_some()),
             ];
 
             let (accuracy, sensitivity, specificity, additional_metrics) =
@@ -893,13 +893,13 @@ impl Jury {
         sensitivity_threshold: f64,
         specificity_threshold: f64,
     ) -> JudgeSpecialization {
-        if expert.sensitivity >= sensitivity_threshold
-            && expert.specificity >= specificity_threshold
+        if expert.cls.sensitivity >= sensitivity_threshold
+            && expert.cls.specificity >= specificity_threshold
         {
             JudgeSpecialization::Balanced
-        } else if expert.sensitivity >= sensitivity_threshold {
+        } else if expert.cls.sensitivity >= sensitivity_threshold {
             JudgeSpecialization::PositiveSpecialist
-        } else if expert.specificity >= specificity_threshold {
+        } else if expert.cls.specificity >= specificity_threshold {
             JudgeSpecialization::NegativeSpecialist
         } else {
             JudgeSpecialization::Ineffective
@@ -1623,9 +1623,9 @@ impl Jury {
                         "{}\n#{:<6} | {:<8.3} | {:<11.3} | {:<11.3} | {}",
                         text,
                         idx + 1,
-                        expert.accuracy,
-                        expert.sensitivity,
-                        expert.specificity,
+                        expert.cls.accuracy,
+                        expert.cls.sensitivity,
+                        expert.cls.specificity,
                         spec_str
                     )
                 }
@@ -1731,10 +1731,10 @@ mod tests {
         let mut population = Population::test();
 
         if population.individuals.len() >= 2 {
-            population.individuals[0].sensitivity = 0.9;
-            population.individuals[0].specificity = 0.8;
-            population.individuals[1].sensitivity = 0.3;
-            population.individuals[1].specificity = 0.2;
+            population.individuals[0].cls.sensitivity = 0.9;
+            population.individuals[0].cls.specificity = 0.8;
+            population.individuals[1].cls.sensitivity = 0.3;
+            population.individuals[1].cls.specificity = 0.2;
         }
 
         let jury = Jury::new(
@@ -1749,8 +1749,8 @@ mod tests {
 
         // Only the first expert should be retained (0.9 >= 0.7 && 0.8 >= 0.7)
         assert_eq!(jury.experts.individuals.len(), 1);
-        assert!(jury.experts.individuals[0].sensitivity >= 0.7);
-        assert!(jury.experts.individuals[0].specificity >= 0.7);
+        assert!(jury.experts.individuals[0].cls.sensitivity >= 0.7);
+        assert!(jury.experts.individuals[0].cls.specificity >= 0.7);
     }
 
     #[test]
@@ -1888,7 +1888,7 @@ mod tests {
     fn test_evaluate_computes_metrics_for_experts_and_stores_weights() {
         let mut population = Population::test();
         for individual in &mut population.individuals {
-            individual.accuracy = 0.0;
+            individual.cls.accuracy = 0.0;
         }
 
         let mut jury = Jury::new(
@@ -2208,12 +2208,12 @@ mod tests {
         let mut population = Population::test();
         if population.individuals.len() >= 3 {
             // Set up experts with different levels of efficiency
-            population.individuals[0].sensitivity = 0.9;
-            population.individuals[0].specificity = 0.8;
-            population.individuals[1].sensitivity = 0.5;
-            population.individuals[1].specificity = 0.9;
-            population.individuals[2].sensitivity = 0.3;
-            population.individuals[2].specificity = 0.2;
+            population.individuals[0].cls.sensitivity = 0.9;
+            population.individuals[0].cls.specificity = 0.8;
+            population.individuals[1].cls.sensitivity = 0.5;
+            population.individuals[1].cls.specificity = 0.9;
+            population.individuals[2].cls.sensitivity = 0.3;
+            population.individuals[2].cls.specificity = 0.2;
         }
 
         let jury = Jury::new(
@@ -2244,14 +2244,14 @@ mod tests {
 
         // Set up experts with different specialisations
         if population.individuals.len() >= 4 {
-            population.individuals[0].sensitivity = 0.9;
-            population.individuals[0].specificity = 0.5; // Positive specialist
-            population.individuals[1].sensitivity = 0.5;
-            population.individuals[1].specificity = 0.9; // Negative specialist
-            population.individuals[2].sensitivity = 0.8;
-            population.individuals[2].specificity = 0.8; // Balanced
-            population.individuals[3].sensitivity = 0.3;
-            population.individuals[3].specificity = 0.3; // Ineffective
+            population.individuals[0].cls.sensitivity = 0.9;
+            population.individuals[0].cls.specificity = 0.5; // Positive specialist
+            population.individuals[1].cls.sensitivity = 0.5;
+            population.individuals[1].cls.specificity = 0.9; // Negative specialist
+            population.individuals[2].cls.sensitivity = 0.8;
+            population.individuals[2].cls.specificity = 0.8; // Balanced
+            population.individuals[3].cls.sensitivity = 0.3;
+            population.individuals[3].cls.specificity = 0.3; // Ineffective
         }
 
         let jury = Jury::new(
@@ -2289,8 +2289,8 @@ mod tests {
 
         // Ensure that all experts perform poorly
         for individual in &mut population.individuals {
-            individual.sensitivity = 0.1;
-            individual.specificity = 0.1;
+            individual.cls.sensitivity = 0.1;
+            individual.cls.specificity = 0.1;
         }
 
         let jury = Jury::new(
@@ -2475,11 +2475,11 @@ mod tests {
     fn create_mock_expert(vote: u8) -> Individual {
         let mut expert = Individual::new();
         expert.features.insert(0, if vote == 1 { 1 } else { -1 });
-        expert.accuracy = 0.8;
-        expert.sensitivity = 0.75;
-        expert.specificity = 0.85;
-        expert.auc = 0.8;
-        expert.threshold = 0.5;
+        expert.cls.accuracy = 0.8;
+        expert.cls.sensitivity = 0.75;
+        expert.cls.specificity = 0.85;
+        expert.cls.auc = 0.8;
+        expert.cls.threshold = 0.5;
         expert.language = BINARY_LANG;
         expert.data_type = RAW_TYPE;
         expert.k = 1;
@@ -2970,11 +2970,11 @@ mod tests {
     ) -> Individual {
         let mut expert = Individual::new();
         expert.features.insert(0, if vote == 1 { 1 } else { -1 });
-        expert.accuracy = accuracy;
-        expert.sensitivity = sensitivity;
-        expert.specificity = specificity;
-        expert.auc = (accuracy + sensitivity + specificity) / 3.0;
-        expert.threshold = 0.5;
+        expert.cls.accuracy = accuracy;
+        expert.cls.sensitivity = sensitivity;
+        expert.cls.specificity = specificity;
+        expert.cls.auc = (accuracy + sensitivity + specificity) / 3.0;
+        expert.cls.threshold = 0.5;
         expert.language = BINARY_LANG;
         expert.data_type = RAW_TYPE;
         expert.k = 1;
@@ -3512,14 +3512,14 @@ mod tests {
         let mut pop = create_controlled_population(vec![1, 1, 0, 0]);
 
         if pop.individuals.len() >= 4 {
-            pop.individuals[0].sensitivity = 0.9; // Positive specialist
-            pop.individuals[0].specificity = 0.6;
-            pop.individuals[1].sensitivity = 0.9; // Positive specialist
-            pop.individuals[1].specificity = 0.6;
-            pop.individuals[2].sensitivity = 0.6; // Negative specialist
-            pop.individuals[2].specificity = 0.9;
-            pop.individuals[3].sensitivity = 0.6; // Negative specialist
-            pop.individuals[3].specificity = 0.9;
+            pop.individuals[0].cls.sensitivity = 0.9; // Positive specialist
+            pop.individuals[0].cls.specificity = 0.6;
+            pop.individuals[1].cls.sensitivity = 0.9; // Positive specialist
+            pop.individuals[1].cls.specificity = 0.6;
+            pop.individuals[2].cls.sensitivity = 0.6; // Negative specialist
+            pop.individuals[2].cls.specificity = 0.9;
+            pop.individuals[3].cls.sensitivity = 0.6; // Negative specialist
+            pop.individuals[3].cls.specificity = 0.9;
         }
 
         let data = create_multi_sample_data(vec![1]);
@@ -3620,11 +3620,11 @@ mod tests {
 
         // Add metrics to all experts
         for expert in &mut pop.individuals {
-            expert.metrics.mcc = Some(0.7);
-            expert.metrics.f1_score = Some(0.8);
-            expert.metrics.npv = Some(0.75);
-            expert.metrics.ppv = Some(0.85);
-            expert.metrics.g_mean = Some(0.79);
+            expert.cls.additional.mcc = Some(0.7);
+            expert.cls.additional.f1_score = Some(0.8);
+            expert.cls.additional.npv = Some(0.75);
+            expert.cls.additional.ppv = Some(0.85);
+            expert.cls.additional.g_mean = Some(0.79);
         }
 
         let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
@@ -3669,7 +3669,8 @@ mod tests {
             "MCC should be in [-1, 1]"
         );
         assert!(
-            jury.metrics.f1_score.unwrap() >= 0.0 && jury.metrics.f1_score.unwrap() <= 1.0,
+            jury.metrics.f1_score.unwrap() >= 0.0
+                && jury.metrics.f1_score.unwrap() <= 1.0,
             "F1-score should be in [0, 1]"
         );
         assert!(
@@ -3681,7 +3682,8 @@ mod tests {
             "PPV should be in [0, 1]"
         );
         assert!(
-            jury.metrics.g_mean.unwrap() >= 0.0 && jury.metrics.g_mean.unwrap() <= 1.0,
+            jury.metrics.g_mean.unwrap() >= 0.0
+                && jury.metrics.g_mean.unwrap() <= 1.0,
             "G-mean should be in [0, 1]"
         );
     }
@@ -3692,11 +3694,11 @@ mod tests {
         let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
 
         // Only first expert has MCC
-        pop.individuals[0].metrics.mcc = Some(0.6);
+        pop.individuals[0].cls.additional.mcc = Some(0.6);
 
         // Only first two experts have F1-score
-        pop.individuals[0].metrics.f1_score = Some(0.7);
-        pop.individuals[1].metrics.f1_score = Some(0.75);
+        pop.individuals[0].cls.additional.f1_score = Some(0.7);
+        pop.individuals[1].cls.additional.f1_score = Some(0.75);
 
         let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
 
@@ -3743,8 +3745,8 @@ mod tests {
         let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
 
         for expert in &mut pop.individuals {
-            expert.metrics.mcc = Some(0.7);
-            expert.metrics.f1_score = Some(0.8);
+            expert.cls.additional.mcc = Some(0.7);
+            expert.cls.additional.f1_score = Some(0.8);
         }
 
         let train_data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
@@ -3763,7 +3765,10 @@ mod tests {
         jury.evaluate(&train_data);
 
         // Check train metrics are stored
-        assert!(jury.metrics.mcc.is_some(), "Train MCC should be computed");
+        assert!(
+            jury.metrics.mcc.is_some(),
+            "Train MCC should be computed"
+        );
         assert!(
             jury.metrics.f1_score.is_some(),
             "Train F1-score should be computed"
@@ -3806,8 +3811,8 @@ mod tests {
         let mut pop = create_controlled_population(vec![1, 1, 0, 0]); // Perfect tie
 
         for expert in &mut pop.individuals {
-            expert.metrics.mcc = Some(0.5);
-            expert.metrics.f1_score = Some(0.6);
+            expert.cls.additional.mcc = Some(0.5);
+            expert.cls.additional.f1_score = Some(0.6);
         }
 
         let data = create_multi_sample_data(vec![1, 0, 1, 0]);
@@ -3847,9 +3852,9 @@ mod tests {
         let mut pop = create_controlled_population(vec![1, 1, 1, 1, 0]);
 
         for expert in &mut pop.individuals {
-            expert.metrics.mcc = Some(0.65);
-            expert.metrics.ppv = Some(0.82);
-            expert.metrics.npv = Some(0.78);
+            expert.cls.additional.mcc = Some(0.65);
+            expert.cls.additional.ppv = Some(0.82);
+            expert.cls.additional.npv = Some(0.78);
         }
 
         let data = create_multi_sample_data(vec![1, 1, 0, 1]);
@@ -3880,7 +3885,9 @@ mod tests {
         );
 
         // Should still be in valid ranges
-        assert!(jury.metrics.mcc.unwrap() >= -1.0 && jury.metrics.mcc.unwrap() <= 1.0);
+        assert!(
+            jury.metrics.mcc.unwrap() >= -1.0 && jury.metrics.mcc.unwrap() <= 1.0
+        );
         assert!(jury.metrics.ppv.unwrap() >= 0.0 && jury.metrics.ppv.unwrap() <= 1.0);
         assert!(jury.metrics.npv.unwrap() >= 0.0 && jury.metrics.npv.unwrap() <= 1.0);
     }
@@ -3891,9 +3898,9 @@ mod tests {
         let mut pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
 
         for expert in &mut pop.individuals {
-            expert.metrics.mcc = Some(0.7);
-            expert.metrics.f1_score = Some(0.75);
-            expert.metrics.g_mean = Some(0.73);
+            expert.cls.additional.mcc = Some(0.7);
+            expert.cls.additional.f1_score = Some(0.75);
+            expert.cls.additional.g_mean = Some(0.73);
         }
 
         let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
@@ -3910,7 +3917,7 @@ mod tests {
 
         jury.evaluate(&data);
 
-        // Metrics in jury.metrics should match those from compute_new_metrics
+        // Metrics in jury.cls.metrics should match those from compute_new_metrics
         let (_, _, _, _, _, returned_metrics) = jury.compute_new_metrics(&data);
 
         assert_eq!(
@@ -3933,7 +3940,7 @@ mod tests {
         let mut pop = create_controlled_population(vec![1, 1, 0, 0]);
 
         for expert in &mut pop.individuals {
-            expert.metrics.mcc = Some(0.5);
+            expert.cls.additional.mcc = Some(0.5);
         }
 
         let data = create_multi_sample_data(vec![1, 0]);
@@ -3987,7 +3994,7 @@ mod tests {
         // Logic: if v > upper => 1, if v < lower => 0, else => 2
         // Scores range from -1 to 1, so upper=2, lower=-2 captures all in rejection zone
         for i in 5..7 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 2.0,
                 lower: -2.0,
                 rejection_rate: 1.0,
@@ -4028,7 +4035,7 @@ mod tests {
 
         // Make ALL experts abstain
         for i in 0..5 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 100.0,
                 lower: -100.0,
                 rejection_rate: 1.0,
@@ -4069,7 +4076,7 @@ mod tests {
 
         // Make 4 experts abstain
         for i in 1..5 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 2.0,
                 lower: -2.0,
                 rejection_rate: 1.0,
@@ -4111,7 +4118,7 @@ mod tests {
 
         // Make last 2 experts abstain
         for i in 5..7 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 2.0,
                 lower: -2.0,
                 rejection_rate: 1.0,
@@ -4152,7 +4159,7 @@ mod tests {
 
         // Make ALL experts abstain
         for i in 0..5 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 2.0,
                 lower: -2.0,
                 rejection_rate: 1.0,
@@ -4195,7 +4202,7 @@ mod tests {
 
         // Make 4 experts abstain
         for i in 3..7 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 2.0,
                 lower: -2.0,
                 rejection_rate: 1.0,
@@ -4239,7 +4246,7 @@ mod tests {
 
         // Make last 2 abstain
         for i in 3..5 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 2.0,
                 lower: -2.0,
                 rejection_rate: 1.0,
@@ -4304,7 +4311,7 @@ mod tests {
 
         // Make all experts abstain for sample 0 only (by setting extreme thresholds)
         for i in 0..4 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 0.5, // Will abstain for low scores
                 lower: 0.4,
                 rejection_rate: 0.5,
@@ -4402,7 +4409,7 @@ mod tests {
 
         // Force high abstention rate on most samples
         for i in 0..5 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 0.55, // Narrow rejection zone
                 lower: 0.45,
                 rejection_rate: 0.0, // Will be computed
@@ -4509,7 +4516,7 @@ mod tests {
 
         // Make experts 3-4 (who would vote 0) mostly abstain
         for i in 3..5 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 2.0, // Will abstain on most samples
                 lower: -2.0,
                 rejection_rate: 0.8, // High abstention rate
@@ -4588,7 +4595,7 @@ mod tests {
 
         // Give additional metrics to only first 3 experts
         for i in 0..3 {
-            pop.individuals[i].metrics = crate::individual::AdditionalMetrics {
+            pop.individuals[i].cls.metrics = crate::individual::AdditionalMetrics {
                 mcc: Some(0.6 + 0.1 * i as f64),
                 f1_score: Some(0.7 + 0.05 * i as f64),
                 npv: Some(0.8),
@@ -4602,7 +4609,7 @@ mod tests {
 
         // Add abstention via ThresholdCI
         for i in 2..5 {
-            pop.individuals[i].threshold_ci = Some(crate::individual::ThresholdCI {
+            pop.individuals[i].cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 upper: 0.6,
                 lower: 0.4,
                 rejection_rate: 0.3,
@@ -4632,7 +4639,7 @@ mod tests {
         // 2. The computed metric is based on Jury's predictions vs ground truth
         // 3. Values are within valid bounds
 
-        let metrics = &jury.metrics;
+        let metrics = &jury.cls.metrics;
 
         // MCC: Should be present if at least one expert exposes it
         // Computed from Jury's confusion matrix, not averaged from experts
@@ -4724,12 +4731,12 @@ mod tests {
 
         // Add threshold_ci to experts with narrow interval
         for expert in &mut pop.individuals {
-            expert.threshold_ci = Some(crate::individual::ThresholdCI {
+            expert.cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 lower: 0.45,
                 upper: 0.55,
                 rejection_rate: 0.0,
             });
-            expert.threshold = 0.5;
+            expert.cls.threshold = 0.5;
         }
 
         let data = create_multi_sample_data(vec![1, 1, 0, 0, 1, 0]);
@@ -4749,7 +4756,7 @@ mod tests {
 
         // Now widen the interval
         for expert in &mut pop.individuals {
-            expert.threshold_ci = Some(crate::individual::ThresholdCI {
+            expert.cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 lower: 0.3,
                 upper: 0.7,
                 rejection_rate: 0.0,
@@ -4795,12 +4802,12 @@ mod tests {
 
             // Set interval for all experts
             for expert in &mut pop.individuals {
-                expert.threshold_ci = Some(crate::individual::ThresholdCI {
+                expert.cls.threshold_ci = Some(crate::individual::ThresholdCI {
                     lower,
                     upper,
                     rejection_rate: 0.0,
                 });
-                expert.threshold = 0.5;
+                expert.cls.threshold = 0.5;
             }
 
             let mut jury = Jury::new(
@@ -4832,8 +4839,8 @@ mod tests {
 
         // No threshold_ci
         for expert in &mut pop_no_ci.individuals {
-            expert.threshold = 0.5;
-            expert.threshold_ci = None;
+            expert.cls.threshold = 0.5;
+            expert.cls.threshold_ci = None;
         }
 
         let data = create_multi_sample_data(vec![1, 1, 0, 0]);
@@ -4854,8 +4861,8 @@ mod tests {
         // With zero-width interval
         let mut pop_zero = create_controlled_population(vec![1, 1, 0, 0, 0]);
         for expert in &mut pop_zero.individuals {
-            expert.threshold = 0.5;
-            expert.threshold_ci = Some(crate::individual::ThresholdCI {
+            expert.cls.threshold = 0.5;
+            expert.cls.threshold_ci = Some(crate::individual::ThresholdCI {
                 lower: 0.5,
                 upper: 0.5,
                 rejection_rate: 0.0,

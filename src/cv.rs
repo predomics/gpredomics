@@ -233,7 +233,7 @@ impl CV {
 
                             if final_population.individuals.len() > 0 {
                                 let best_model = final_population.individuals.clone().into_iter().take(1).next().unwrap();
-                                let train_auc = best_model.auc;
+                                let train_auc = best_model.cls.auc;
                                 let valid_auc = best_model.compute_new_auc(valid);
 
                                 cinfo!(
@@ -664,7 +664,7 @@ mod tests {
                 // Use different fit values to avoid them being filtered out by CI
                 for (j, ind) in pop.individuals.iter_mut().enumerate() {
                     ind.fit = 0.95 - (j as f64 * 0.01); // Descending fit values
-                    ind.auc = 0.95 - (j as f64 * 0.01);
+                    ind.cls.auc = 0.95 - (j as f64 * 0.01);
                 }
 
                 // Sort by fitness

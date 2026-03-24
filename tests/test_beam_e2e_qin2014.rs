@@ -241,15 +241,15 @@ fn test_beam_qin2014_basic_run() {
     // Verify best model
     let best_model = &final_pop.individuals[0];
     assert!(
-        best_model.auc >= 0.0 && best_model.auc <= 1.0,
+        best_model.cls.auc >= 0.0 && best_model.cls.auc <= 1.0,
         "AUC should be between 0 and 1"
     );
     assert!(
-        best_model.sensitivity >= 0.0 && best_model.sensitivity <= 1.0,
+        best_model.cls.sensitivity >= 0.0 && best_model.cls.sensitivity <= 1.0,
         "Sensitivity should be between 0 and 1"
     );
     assert!(
-        best_model.specificity >= 0.0 && best_model.specificity <= 1.0,
+        best_model.cls.specificity >= 0.0 && best_model.cls.specificity <= 1.0,
         "Specificity should be between 0 and 1"
     );
     assert!(
@@ -279,7 +279,7 @@ fn test_beam_qin2014_basic_run() {
         experiment.train_data.feature_selection.len()
     );
     println!("  - Test samples: {}", test_data.sample_len);
-    println!("  - Best model AUC: {:.4}", best_model.auc);
+    println!("  - Best model AUC: {:.4}", best_model.cls.auc);
     println!("  - Best model features (k): {}", best_model.k);
     println!(
         "  - K range explored: [{}, {}]",
@@ -342,7 +342,10 @@ fn test_beam_qin2014_parallel_forward() {
 
     println!("  - Final population size: {}", final_pop.individuals.len());
     println!("  - Best model k: {}", final_pop.individuals[0].k);
-    println!("  - Best model AUC: {:.4}", final_pop.individuals[0].auc);
+    println!(
+        "  - Best model AUC: {:.4}",
+        final_pop.individuals[0].cls.auc
+    );
 
     println!("✓ ParallelForward method test passed");
 }
@@ -399,9 +402,9 @@ fn test_beam_qin2014_serialization() {
     // Verify best model metrics
     let orig_best = &original_exp.final_population.as_ref().unwrap().individuals[0];
     let loaded_best = &loaded_exp.final_population.as_ref().unwrap().individuals[0];
-    assert_eq!(orig_best.auc, loaded_best.auc);
-    assert_eq!(orig_best.sensitivity, loaded_best.sensitivity);
-    assert_eq!(orig_best.specificity, loaded_best.specificity);
+    assert_eq!(orig_best.cls.auc, loaded_best.cls.auc);
+    assert_eq!(orig_best.cls.sensitivity, loaded_best.cls.sensitivity);
+    assert_eq!(orig_best.cls.specificity, loaded_best.cls.specificity);
     assert_eq!(orig_best.k, loaded_best.k);
     assert_eq!(orig_best.features, loaded_best.features);
 
@@ -642,11 +645,11 @@ fn test_beam_qin2014_reproducibility() {
         best1.features, best2.features,
         "Features should be identical"
     );
-    assert_eq!(best1.auc, best2.auc, "AUC should be identical");
+    assert_eq!(best1.cls.auc, best2.cls.auc, "AUC should be identical");
     assert_eq!(best1.k, best2.k, "Feature count should be identical");
 
-    println!("  - Run 1 AUC: {:.4}", best1.auc);
-    println!("  - Run 2 AUC: {:.4}", best2.auc);
+    println!("  - Run 1 AUC: {:.4}", best1.cls.auc);
+    println!("  - Run 2 AUC: {:.4}", best2.cls.auc);
     println!("  - Run 1 k: {}", best1.k);
     println!("  - Run 2 k: {}", best2.k);
 
@@ -713,9 +716,9 @@ fn test_beam_qin2014_different_fit_functions() {
         );
         let best_model = &experiment.final_population.as_ref().unwrap().individuals[0];
 
-        println!("    - Best AUC: {:.4}", best_model.auc);
-        println!("    - Best Sensitivity: {:.4}", best_model.sensitivity);
-        println!("    - Best Specificity: {:.4}", best_model.specificity);
+        println!("    - Best AUC: {:.4}", best_model.cls.auc);
+        println!("    - Best Sensitivity: {:.4}", best_model.cls.sensitivity);
+        println!("    - Best Specificity: {:.4}", best_model.cls.specificity);
         println!("    - Best k: {}", best_model.k);
     }
 
@@ -892,8 +895,14 @@ fn test_beam_qin2014_gpu_vs_cpu() {
     let best_cpu = &exp_cpu.final_population.as_ref().unwrap().individuals[0];
     let best_gpu = &exp_gpu.final_population.as_ref().unwrap().individuals[0];
 
-    println!("CPU best model: AUC={:.4}, k={}", best_cpu.auc, best_cpu.k);
-    println!("GPU best model: AUC={:.4}, k={}", best_gpu.auc, best_gpu.k);
+    println!(
+        "CPU best model: AUC={:.4}, k={}",
+        best_cpu.cls.auc, best_cpu.k
+    );
+    println!(
+        "GPU best model: AUC={:.4}, k={}",
+        best_gpu.cls.auc, best_gpu.k
+    );
 
     // Beam is deterministic, so results should be identical with same seed
     assert_eq!(
@@ -901,7 +910,7 @@ fn test_beam_qin2014_gpu_vs_cpu() {
         "Beam with same seed should give identical features"
     );
     assert_eq!(
-        best_cpu.auc, best_gpu.auc,
+        best_cpu.cls.auc, best_gpu.cls.auc,
         "Beam with same seed should give identical AUC"
     );
 
@@ -994,7 +1003,7 @@ fn test_beam_qin2014_all_language_datatype_combinations() {
                 language,
                 datatype
             );
-            println!("    Best: AUC={:.4}, k={}", best.auc, best.k);
+            println!("    Best: AUC={:.4}, k={}", best.cls.auc, best.k);
         }
     }
 
@@ -1064,11 +1073,11 @@ fn test_beam_gpu_with_inner_cv() {
 
     println!(
         "\nTop CPU model: k={}, AUC={:.6}, features={:?}",
-        best_cpu.k, best_cpu.auc, best_cpu.features
+        best_cpu.k, best_cpu.cls.auc, best_cpu.features
     );
     println!(
         "Top GPU model: k={}, AUC={:.6}, features={:?}",
-        best_gpu.k, best_gpu.auc, best_gpu.features
+        best_gpu.k, best_gpu.cls.auc, best_gpu.features
     );
 
     // Beam is deterministic - features should be identical
@@ -1078,12 +1087,12 @@ fn test_beam_gpu_with_inner_cv() {
     );
 
     // AUC should be very close
-    let auc_diff = (best_cpu.auc - best_gpu.auc).abs();
+    let auc_diff = (best_cpu.cls.auc - best_gpu.cls.auc).abs();
     assert!(
         auc_diff < 1e-4,
         "AUC difference too large: CPU={:.6}, GPU={:.6}, diff={:.6}",
-        best_cpu.auc,
-        best_gpu.auc,
+        best_cpu.cls.auc,
+        best_gpu.cls.auc,
         auc_diff
     );
 
@@ -1133,16 +1142,19 @@ fn test_beam_consistency_inner_cv_vs_no_inner_cv() {
         .unwrap()
         .individuals[0];
 
-    println!("No Inner CV: AUC={:.4}, k={}", best_no_cv.auc, best_no_cv.k);
+    println!(
+        "No Inner CV: AUC={:.4}, k={}",
+        best_no_cv.cls.auc, best_no_cv.k
+    );
     println!(
         "With Inner CV: AUC={:.4}, k={}",
-        best_with_cv.auc, best_with_cv.k
+        best_with_cv.cls.auc, best_with_cv.k
     );
 
     // Results will differ due to different fitness evaluation
     // But both should be valid
-    assert!(best_no_cv.auc >= 0.0 && best_no_cv.auc <= 1.0);
-    assert!(best_with_cv.auc >= 0.0 && best_with_cv.auc <= 1.0);
+    assert!(best_no_cv.cls.auc >= 0.0 && best_no_cv.cls.auc <= 1.0);
+    assert!(best_with_cv.cls.auc >= 0.0 && best_with_cv.cls.auc <= 1.0);
     assert!(best_no_cv.k >= param.beam.k_start && best_no_cv.k <= param.beam.k_stop);
     assert!(best_with_cv.k >= param.beam.k_start && best_with_cv.k <= param.beam.k_stop);
 
@@ -1193,10 +1205,13 @@ fn test_beam_consistency_outer_cv_vs_no_outer_cv() {
         .unwrap()
         .individuals[0];
 
-    println!("No Outer CV: AUC={:.4}, k={}", best_no_cv.auc, best_no_cv.k);
+    println!(
+        "No Outer CV: AUC={:.4}, k={}",
+        best_no_cv.cls.auc, best_no_cv.k
+    );
     println!(
         "With Outer CV: AUC={:.4}, k={}",
-        best_with_cv.auc, best_with_cv.k
+        best_with_cv.cls.auc, best_with_cv.k
     );
 
     // Verify CV structure
@@ -1211,8 +1226,8 @@ fn test_beam_consistency_outer_cv_vs_no_outer_cv() {
     );
 
     // Both should be valid
-    assert!(best_no_cv.auc >= 0.0 && best_no_cv.auc <= 1.0);
-    assert!(best_with_cv.auc >= 0.0 && best_with_cv.auc <= 1.0);
+    assert!(best_no_cv.cls.auc >= 0.0 && best_no_cv.cls.auc <= 1.0);
+    assert!(best_with_cv.cls.auc >= 0.0 && best_with_cv.cls.auc <= 1.0);
     assert!(best_no_cv.k >= param.beam.k_start && best_no_cv.k <= param.beam.k_stop);
     assert!(best_with_cv.k >= param.beam.k_start && best_with_cv.k <= param.beam.k_stop);
 
@@ -1256,11 +1271,11 @@ fn test_beam_consistency_gpu_vs_cpu_basic() {
 
     println!(
         "CPU: AUC={:.6}, k={}, features={:?}",
-        best_cpu.auc, best_cpu.k, best_cpu.features
+        best_cpu.cls.auc, best_cpu.k, best_cpu.features
     );
     println!(
         "GPU: AUC={:.6}, k={}, features={:?}",
-        best_gpu.auc, best_gpu.k, best_gpu.features
+        best_gpu.cls.auc, best_gpu.k, best_gpu.features
     );
 
     // Beam is deterministic - results should be identical
@@ -1269,7 +1284,7 @@ fn test_beam_consistency_gpu_vs_cpu_basic() {
         "Beam with same seed should give identical features"
     );
     assert_eq!(
-        best_cpu.auc, best_gpu.auc,
+        best_cpu.cls.auc, best_gpu.cls.auc,
         "Beam with same seed should give identical AUC"
     );
 
@@ -1316,11 +1331,11 @@ fn test_beam_consistency_gpu_vs_cpu_inner_cv() {
 
     println!(
         "CPU Inner CV: AUC={:.6}, k={}, features={:?}",
-        best_cpu.auc, best_cpu.k, best_cpu.features
+        best_cpu.cls.auc, best_cpu.k, best_cpu.features
     );
     println!(
         "GPU Inner CV: AUC={:.6}, k={}, features={:?}",
-        best_gpu.auc, best_gpu.k, best_gpu.features
+        best_gpu.cls.auc, best_gpu.k, best_gpu.features
     );
 
     // Beam is deterministic - results should be identical
@@ -1329,12 +1344,12 @@ fn test_beam_consistency_gpu_vs_cpu_inner_cv() {
         "Beam GPU and CPU inner CV should give identical features"
     );
 
-    let auc_diff = (best_cpu.auc - best_gpu.auc).abs();
+    let auc_diff = (best_cpu.cls.auc - best_gpu.cls.auc).abs();
     assert!(
         auc_diff < 1e-6,
         "AUC should be identical: CPU={:.6}, GPU={:.6}, diff={:.6}",
-        best_cpu.auc,
-        best_gpu.auc,
+        best_cpu.cls.auc,
+        best_gpu.cls.auc,
         auc_diff
     );
 
@@ -1385,8 +1400,14 @@ fn test_beam_consistency_gpu_vs_cpu_outer_cv() {
     let best_cpu = &exp_cpu.final_population.as_ref().unwrap().individuals[0];
     let best_gpu = &exp_gpu.final_population.as_ref().unwrap().individuals[0];
 
-    println!("CPU Outer CV: AUC={:.6}, k={}", best_cpu.auc, best_cpu.k);
-    println!("GPU Outer CV: AUC={:.6}, k={}", best_gpu.auc, best_gpu.k);
+    println!(
+        "CPU Outer CV: AUC={:.6}, k={}",
+        best_cpu.cls.auc, best_cpu.k
+    );
+    println!(
+        "GPU Outer CV: AUC={:.6}, k={}",
+        best_gpu.cls.auc, best_gpu.k
+    );
 
     // Beam is deterministic - results should be identical (both use CPU for outer CV)
     assert_eq!(
@@ -1435,11 +1456,11 @@ fn test_beam_consistency_keep_trace() {
 
     println!(
         "No trace: AUC={:.6}, k={}, features={:?}",
-        best_no_trace.auc, best_no_trace.k, best_no_trace.features
+        best_no_trace.cls.auc, best_no_trace.k, best_no_trace.features
     );
     println!(
         "With trace: AUC={:.6}, k={}, features={:?}",
-        best_with_trace.auc, best_with_trace.k, best_with_trace.features
+        best_with_trace.cls.auc, best_with_trace.k, best_with_trace.features
     );
 
     // Beam is deterministic - final results should be identical
@@ -1448,7 +1469,7 @@ fn test_beam_consistency_keep_trace() {
         "keep_trace should not affect final results"
     );
     assert_eq!(
-        best_no_trace.auc, best_with_trace.auc,
+        best_no_trace.cls.auc, best_with_trace.cls.auc,
         "keep_trace should not affect AUC"
     );
 
@@ -1636,23 +1657,23 @@ fn test_beam_qin2014_with_threshold_ci() {
     // Verify threshold CI is set
     let best_model = &final_pop.individuals[0];
     assert!(
-        best_model.threshold_ci.is_some(),
+        best_model.cls.threshold_ci.is_some(),
         "Best model should have threshold CI"
     );
 
-    let threshold_ci = best_model.threshold_ci.as_ref().unwrap();
-    println!("  - Threshold: {:.4}", best_model.threshold);
+    let threshold_ci = best_model.cls.threshold_ci.as_ref().unwrap();
+    println!("  - Threshold: {:.4}", best_model.cls.threshold);
     println!("  - CI Lower: {:.4}", threshold_ci.lower);
     println!("  - CI Upper: {:.4}", threshold_ci.upper);
     println!("  - Rejection rate: {:.4}", threshold_ci.rejection_rate);
 
     // Verify CI bounds are valid
     assert!(
-        threshold_ci.lower <= best_model.threshold,
+        threshold_ci.lower <= best_model.cls.threshold,
         "CI lower should be <= threshold"
     );
     assert!(
-        threshold_ci.upper >= best_model.threshold,
+        threshold_ci.upper >= best_model.cls.threshold,
         "CI upper should be >= threshold"
     );
     assert!(
@@ -1692,12 +1713,12 @@ fn test_beam_qin2014_threshold_ci_alpha_variations() {
 
         let best_model = &experiment.final_population.as_ref().unwrap().individuals[0];
         assert!(
-            best_model.threshold_ci.is_some(),
+            best_model.cls.threshold_ci.is_some(),
             "Should have threshold CI for alpha={}",
             alpha
         );
 
-        let ci = best_model.threshold_ci.as_ref().unwrap();
+        let ci = best_model.cls.threshold_ci.as_ref().unwrap();
         let ci_width = ci.upper - ci.lower;
 
         println!(
@@ -1712,11 +1733,11 @@ fn test_beam_qin2014_threshold_ci_alpha_variations() {
             alpha
         );
         assert!(
-            ci.lower <= best_model.threshold,
+            ci.lower <= best_model.cls.threshold,
             "CI lower should be <= threshold"
         );
         assert!(
-            ci.upper >= best_model.threshold,
+            ci.upper >= best_model.cls.threshold,
             "CI upper should be >= threshold"
         );
     }
@@ -1765,7 +1786,7 @@ fn test_beam_qin2014_voting_with_threshold_ci() {
             .experts
             .individuals
             .iter()
-            .filter(|ind| ind.threshold_ci.is_some())
+            .filter(|ind| ind.cls.threshold_ci.is_some())
             .count();
 
         println!(
@@ -1787,7 +1808,7 @@ fn test_beam_qin2014_voting_with_threshold_ci() {
     let models_with_ci = final_pop
         .individuals
         .iter()
-        .filter(|ind| ind.threshold_ci.is_some())
+        .filter(|ind| ind.cls.threshold_ci.is_some())
         .count();
 
     println!(
@@ -1844,7 +1865,7 @@ fn test_beam_qin2014_voting_with_pruning() {
         for expert in &jury.experts.individuals {
             assert!(expert.k > 0, "Expert should have at least one feature");
             assert!(
-                expert.auc >= 0.0 && expert.auc <= 1.0,
+                expert.cls.auc >= 0.0 && expert.cls.auc <= 1.0,
                 "Expert should have valid AUC"
             );
         }
@@ -2167,14 +2188,14 @@ fn test_beam_qin2014_k_start_1_all_combinations() {
                 "    - Models with k=1: {} (may be 0 if filtered by best_models_criterion)",
                 models_with_k1
             );
-            println!("    - Best model: AUC={:.4}, k={}", best.auc, best.k);
+            println!("    - Best model: AUC={:.4}, k={}", best.cls.auc, best.k);
 
             results.push((
                 language.to_string(),
                 datatype.to_string(),
                 final_pop.individuals.len(),
                 models_with_k1,
-                best.auc,
+                best.cls.auc,
             ));
         }
     }

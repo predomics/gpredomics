@@ -334,7 +334,7 @@ fn test_mcmc_different_data_types() {
             "Data type '{}': {} samples, first AUC = {:.4}",
             data_type,
             population.individuals.len(),
-            population.individuals[0].auc
+            population.individuals[0].cls.auc
         );
 
         assert!(population.individuals.len() > 0);
@@ -529,7 +529,7 @@ fn test_mcmc_feature_selection() {
 
         println!(
             "Max features {}: using {} features, AUC = {:.4}",
-            max_features, n_features, population.individuals[0].auc
+            max_features, n_features, population.individuals[0].cls.auc
         );
 
         assert!(
@@ -573,7 +573,10 @@ fn test_mcmc_serialization() {
     let orig_pop = &experiment.collections[0][0];
     let loaded_pop = &loaded_exp.collections[0][0];
 
-    assert_eq!(orig_pop.individuals[0].auc, loaded_pop.individuals[0].auc);
+    assert_eq!(
+        orig_pop.individuals[0].cls.auc,
+        loaded_pop.individuals[0].cls.auc
+    );
     assert_eq!(
         orig_pop.individuals[0].features,
         loaded_pop.individuals[0].features
@@ -621,7 +624,7 @@ fn test_mcmc_test_predictions() {
             "Sample {} - features: {}, AUC: {:.4}",
             idx,
             individual.features.len(),
-            individual.auc
+            individual.cls.auc
         );
         assert!(individual.features.len() > 0, "Should have features");
     }
@@ -684,7 +687,7 @@ fn test_mcmc_prevalence_epsilon() {
             "Epsilon {}: {} samples, first AUC = {:.4}",
             epsilon,
             population.individuals.len(),
-            population.individuals[0].auc
+            population.individuals[0].cls.auc
         );
 
         assert!(population.individuals.len() > 0);
@@ -750,7 +753,11 @@ fn test_mcmc_performance_metrics() {
     let population = &experiment.collections[0][0];
 
     // Calculate statistics across posterior
-    let aucs: Vec<f64> = population.individuals.iter().map(|ind| ind.auc).collect();
+    let aucs: Vec<f64> = population
+        .individuals
+        .iter()
+        .map(|ind| ind.cls.auc)
+        .collect();
 
     // Check we have samples
     assert!(aucs.len() > 0, "Should have posterior samples");

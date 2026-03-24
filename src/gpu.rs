@@ -907,7 +907,7 @@ mod tests {
         ind.language = BINARY_LANG;
         ind.data_type = RAW_TYPE;
         ind.epsilon = 1e-5;
-        ind.threshold = 0.5;
+        ind.cls.threshold = 0.5;
         ind
     }
 
@@ -2359,7 +2359,7 @@ mod tests {
                 model.language = *lang;
                 model.data_type = *dtype;
                 model.epsilon = if *dtype == LOG_TYPE { 0.1 } else { 0.5 };
-                model.threshold = 0.5;
+                model.cls.threshold = 0.5;
 
                 // GPU computation
                 let config = test_gpu_config();

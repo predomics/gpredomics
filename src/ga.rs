@@ -811,7 +811,7 @@ pub fn remove_out_of_bounds(children: &mut Population, k_min: usize, k_max: usiz
 //     let mut valid_individuals: Vec<Individual> = Vec::new();
 //     let individuals = mem::take(&mut parents.individuals);
 //     for individual in individuals.into_iter() {
-//         if individual.specificity > 0.4 && individual.sensitivity > 0.4 {
+//         if individual.cls.specificity > 0.4 && individual.cls.sensitivity > 0.4 {
 //             valid_individuals.push(individual);
 //         } else {
 //             inefficient_parents += 1;
@@ -1059,7 +1059,7 @@ mod tests {
             individual.language = language;
             individual.data_type = data_type;
             individual.fit = (size - i) as f64; // Higher fit for earlier individuals
-            individual.auc = 0.5 + (size - i) as f64 / (size as f64 * 2.0);
+            individual.cls.auc = 0.5 + (size - i) as f64 / (size as f64 * 2.0);
             individual.k = 3;
 
             // Add some features
@@ -2382,7 +2382,7 @@ mod tests {
             ind.language = TERNARY_LANG;
             ind.data_type = PREVALENCE_TYPE;
             ind.fit = 0.75; // Same fit for all!
-            ind.auc = 0.75;
+            ind.cls.auc = 0.75;
             ind.features.insert(i, 1);
             ind.k = 1;
             ind.hash = i as u64;
@@ -3109,7 +3109,7 @@ mod tests {
             ind.language = TERNARY_LANG;
             ind.data_type = PREVALENCE_TYPE;
             ind.fit = 0.85; // All identical
-            ind.auc = 0.85;
+            ind.cls.auc = 0.85;
             ind.features.insert(i, 1);
             ind.k = 1;
             ind.hash = i as u64;
@@ -3122,7 +3122,7 @@ mod tests {
             ind.language = TERNARY_LANG;
             ind.data_type = PREVALENCE_TYPE;
             ind.fit = 0.75;
-            ind.auc = 0.75;
+            ind.cls.auc = 0.75;
             ind.features.insert(i, 1);
             ind.k = 1;
             ind.hash = i as u64;
@@ -3173,7 +3173,7 @@ mod tests {
             ind.language = TERNARY_LANG;
             ind.data_type = PREVALENCE_TYPE;
             ind.fit = 0.888; // Identical for all
-            ind.auc = 0.888;
+            ind.cls.auc = 0.888;
             ind.features.insert(i % 5, if i % 2 == 0 { 1 } else { -1 });
             ind.k = 1;
             ind.hash = i as u64; // Different hashes
@@ -3871,7 +3871,7 @@ mod tests {
         // Verify best model is valid
         let best = &final_pop.individuals[0];
         assert!(
-            best.auc >= 0.0 && best.auc <= 1.0,
+            best.cls.auc >= 0.0 && best.cls.auc <= 1.0,
             "Best model should have valid AUC"
         );
         assert!(best.k > 0, "Best model should have features");
@@ -3898,7 +3898,7 @@ mod tests {
         // Verify best model is valid
         let best = &final_pop.individuals[0];
         assert!(
-            best.auc >= 0.0 && best.auc <= 1.0,
+            best.cls.auc >= 0.0 && best.cls.auc <= 1.0,
             "Best model should have valid AUC"
         );
     }
@@ -4156,7 +4156,7 @@ mod tests {
 
         let best = &final_pop.individuals[0];
         assert!(
-            best.auc >= 0.0 && best.auc <= 1.0,
+            best.cls.auc >= 0.0 && best.cls.auc <= 1.0,
             "Best model should be valid"
         );
     }
@@ -4179,7 +4179,13 @@ mod tests {
 
             let final_pop = &populations[populations.len() - 1];
             let best = &final_pop.individuals[0];
-            (best.fit, best.auc, best.k, best.hash, best.features.clone())
+            (
+                best.fit,
+                best.cls.auc,
+                best.k,
+                best.hash,
+                best.features.clone(),
+            )
         };
 
         let (fit1, auc1, k1, hash1, features1) = run_ga_once();

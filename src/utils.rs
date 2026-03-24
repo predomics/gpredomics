@@ -1706,15 +1706,15 @@ pub fn display_epoch(pop: &Population, param: &Param, epoch: usize) -> String {
         let mean_k = pop.individuals.iter().map(|i| i.k).sum::<usize>() as f64
             / param.ga.population_size as f64;
         let debug_msg = format!("Best model so far AUC:{:.3} ({}:{} fit:{:.3}, k={}, gen#{}, specificity:{:.3}, sensitivity:{:.3}), average AUC {:.3}, fit {:.3}, k:{:.1}", 
-                best_model.auc,
+                best_model.cls.auc,
                 best_model.get_language(),
                 best_model.get_data_type(),
                 best_model.fit,
                 best_model.k,
                 best_model.epoch,
-                best_model.specificity,
-                best_model.sensitivity,
-                &pop.individuals.iter().map(|i| {i.auc}).sum::<f64>()/param.ga.population_size as f64,
+                best_model.cls.specificity,
+                best_model.cls.sensitivity,
+                &pop.individuals.iter().map(|i| {i.cls.auc}).sum::<f64>()/param.ga.population_size as f64,
                 &pop.individuals.iter().map(|i| {i.fit}).sum::<f64>()/param.ga.population_size as f64,
                 mean_k
                 );
@@ -1722,9 +1722,9 @@ pub fn display_epoch(pop: &Population, param: &Param, epoch: usize) -> String {
 
         let scale = 50;
         let best_model_pos = match param.general.fit {
-            FitFunction::sensitivity => (best_model.sensitivity * scale as f64) as usize,
-            FitFunction::specificity => (best_model.specificity * scale as f64) as usize,
-            _ => (best_model.auc * scale as f64) as usize,
+            FitFunction::sensitivity => (best_model.cls.sensitivity * scale as f64) as usize,
+            FitFunction::specificity => (best_model.cls.specificity * scale as f64) as usize,
+            _ => (best_model.cls.auc * scale as f64) as usize,
         };
 
         let best_fit_pos = (best_model.fit * scale as f64) as usize;

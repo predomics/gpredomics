@@ -174,13 +174,13 @@ impl Population {
             let fbm = self.select_best_population(0.05);
 
             if !fbm.individuals.is_empty() {
-                let train_aucs: Vec<f64> = fbm.individuals.iter().map(|i| i.auc).collect();
+                let train_aucs: Vec<f64> = fbm.individuals.iter().map(|i| i.cls.auc).collect();
                 let train_accuracies: Vec<f64> =
-                    fbm.individuals.iter().map(|i| i.accuracy).collect();
+                    fbm.individuals.iter().map(|i| i.cls.accuracy).collect();
                 let train_sensitivities: Vec<f64> =
-                    fbm.individuals.iter().map(|i| i.sensitivity).collect();
+                    fbm.individuals.iter().map(|i| i.cls.sensitivity).collect();
                 let train_specificities: Vec<f64> =
-                    fbm.individuals.iter().map(|i| i.specificity).collect();
+                    fbm.individuals.iter().map(|i| i.cls.specificity).collect();
 
                 let (train_auc_mean, _) = mean_and_std(&train_aucs);
                 let (train_acc_mean, _) = mean_and_std(&train_accuracies);
@@ -365,16 +365,16 @@ impl Population {
             // k
             i.fit = i.fit - i.k as f64 * param.general.k_penalty;
             // Rejection rate
-            if let Some(ref mut threshold_ci) = i.threshold_ci {
+            if let Some(ref mut threshold_ci) = i.cls.threshold_ci {
                 i.fit = i.fit - (param.general.threshold_ci_penalty * threshold_ci.rejection_rate);
             };
             // Bias penalty
             if param.general.bias_penalty != 0.0 {
-                if i.sensitivity < 0.5 {
-                    i.fit = i.fit - (1.0 - i.sensitivity) * param.general.bias_penalty
+                if i.cls.sensitivity < 0.5 {
+                    i.fit = i.fit - (1.0 - i.cls.sensitivity) * param.general.bias_penalty
                 };
-                if i.specificity < 0.5 {
-                    i.fit = i.fit - (1.0 - i.specificity) * param.general.bias_penalty
+                if i.cls.specificity < 0.5 {
+                    i.fit = i.fit - (1.0 - i.cls.specificity) * param.general.bias_penalty
                 };
             };
             // User penalties
@@ -437,19 +437,22 @@ impl Population {
         param: &Param,
     ) {
         // Precompute bootstrap indices if any individual needs threshold CI
-        let precomputed_bootstrap: Option<PrecomputedBootstrap> =
-            if self.individuals.iter().any(|i| i.threshold_ci.is_some()) {
-                let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
-                Some(precompute_bootstrap_indices(
-                    &data.y,
-                    param.general.threshold_ci_n_bootstrap,
-                    param.general.threshold_ci_alpha,
-                    param.general.threshold_ci_frac_bootstrap,
-                    &mut rng,
-                ))
-            } else {
-                None
-            };
+        let precomputed_bootstrap: Option<PrecomputedBootstrap> = if self
+            .individuals
+            .iter()
+            .any(|i| i.cls.threshold_ci.is_some())
+        {
+            let mut rng = ChaCha8Rng::seed_from_u64(param.general.seed);
+            Some(precompute_bootstrap_indices(
+                &data.y,
+                param.general.threshold_ci_n_bootstrap,
+                param.general.threshold_ci_alpha,
+                param.general.threshold_ci_frac_bootstrap,
+                &mut rng,
+            ))
+        } else {
+            None
+        };
         let mut all_scores: Vec<f64> = vec![];
         if let Some(assay) = gpu_assay {
             all_scores = assay
@@ -476,13 +479,13 @@ impl Population {
                 match param.general.fit {
                     FitFunction::auc => {
                         if param.general.keep_trace || param.general.bias_penalty != 0.0 {
-                            if let Some(ref mut threshold_ci) = i.threshold_ci {
+                            if let Some(ref mut threshold_ci) = i.cls.threshold_ci {
                                 (
-                                    i.auc,
-                                    [threshold_ci.lower, i.threshold, threshold_ci.upper],
-                                    i.accuracy,
-                                    i.sensitivity,
-                                    i.specificity,
+                                    i.cls.auc,
+                                    [threshold_ci.lower, i.cls.threshold, threshold_ci.upper],
+                                    i.cls.accuracy,
+                                    i.cls.sensitivity,
+                                    i.cls.specificity,
                                     _,
                                     threshold_ci.rejection_rate,
                                 ) = compute_threshold_and_metrics_with_precomputed_bootstrap(
@@ -494,11 +497,11 @@ impl Population {
                                 );
                             } else {
                                 (
-                                    i.auc,
-                                    i.threshold,
-                                    i.accuracy,
-                                    i.sensitivity,
-                                    i.specificity,
+                                    i.cls.auc,
+                                    i.cls.threshold,
+                                    i.cls.accuracy,
+                                    i.cls.sensitivity,
+                                    i.cls.specificity,
                                     _,
                                 ) = compute_roc_and_metrics_from_value(
                                     &scores,
@@ -509,10 +512,10 @@ impl Population {
                             }
                         } else {
                             // The AUC calculation can be optimised if the user does not wish to calculate the other metrics at the same time.
-                            if let Some(ref mut threshold_ci) = i.threshold_ci {
+                            if let Some(ref mut threshold_ci) = i.cls.threshold_ci {
                                 (
-                                    i.auc,
-                                    [threshold_ci.lower, i.threshold, threshold_ci.upper],
+                                    i.cls.auc,
+                                    [threshold_ci.lower, i.cls.threshold, threshold_ci.upper],
                                     _,
                                     _,
                                     _,
@@ -526,19 +529,19 @@ impl Population {
                                     &precomputed_bootstrap.as_ref().unwrap(),
                                 );
                             } else {
-                                i.auc = compute_auc_from_value(&scores, &data.y);
+                                i.cls.auc = compute_auc_from_value(&scores, &data.y);
                             }
                         }
-                        i.fit = i.auc;
+                        i.fit = i.cls.auc;
                     }
                     _ => {
-                        if let Some(ref mut threshold_ci) = i.threshold_ci {
+                        if let Some(ref mut threshold_ci) = i.cls.threshold_ci {
                             (
-                                i.auc,
-                                [threshold_ci.lower, i.threshold, threshold_ci.upper],
-                                i.accuracy,
-                                i.sensitivity,
-                                i.specificity,
+                                i.cls.auc,
+                                [threshold_ci.lower, i.cls.threshold, threshold_ci.upper],
+                                i.cls.accuracy,
+                                i.cls.sensitivity,
+                                i.cls.specificity,
                                 i.fit,
                                 threshold_ci.rejection_rate,
                             ) = compute_threshold_and_metrics_with_precomputed_bootstrap(
@@ -550,11 +553,11 @@ impl Population {
                             );
                         } else {
                             (
-                                i.auc,
-                                i.threshold,
-                                i.accuracy,
-                                i.sensitivity,
-                                i.specificity,
+                                i.cls.auc,
+                                i.cls.threshold,
+                                i.cls.accuracy,
+                                i.cls.sensitivity,
+                                i.cls.specificity,
                                 i.fit,
                             ) = compute_roc_and_metrics_from_value(
                                 &scores,
@@ -564,11 +567,11 @@ impl Population {
                             );
                         }
                         match param.general.fit {
-                            FitFunction::mcc => i.metrics.mcc = Some(i.fit),
-                            FitFunction::f1_score => i.metrics.f1_score = Some(i.fit),
-                            FitFunction::g_mean => i.metrics.g_mean = Some(i.fit),
-                            FitFunction::npv => i.metrics.npv = Some(i.fit),
-                            FitFunction::ppv => i.metrics.ppv = Some(i.fit),
+                            FitFunction::mcc => i.cls.additional.mcc = Some(i.fit),
+                            FitFunction::f1_score => i.cls.additional.f1_score = Some(i.fit),
+                            FitFunction::g_mean => i.cls.additional.g_mean = Some(i.fit),
+                            FitFunction::npv => i.cls.additional.npv = Some(i.fit),
+                            FitFunction::ppv => i.cls.additional.ppv = Some(i.fit),
                             _ => {}
                         }
                     }
@@ -734,7 +737,7 @@ impl Population {
             warn!("Evaluation metric should be in the [0, 1] interval to compute Family of Best Models! Using AUC instead of fitness...");
             eval = vec![];
             for ind in &self.individuals {
-                eval.push(ind.auc)
+                eval.push(ind.cls.auc)
             }
         }
 
@@ -771,7 +774,7 @@ impl Population {
 
         if eval[0] > 1.0 || eval[0] < 0.0 {
             warn!("Evaluation metric should be in [0, 1] for FBM! Using AUC instead of fitness...");
-            eval = self.individuals.iter().map(|i| i.auc).collect();
+            eval = self.individuals.iter().map(|i| i.cls.auc).collect();
         }
 
         let (lower_bound, _, _) =
@@ -941,27 +944,30 @@ impl Population {
     /// ```
     pub fn compute_all_metrics(&mut self, data: &Data, method: &FitFunction) {
         // Precompute bootstrap indices if any individual needs threshold CI
-        let precomputed_bootstrap: Option<PrecomputedBootstrap> =
-            if self.individuals.iter().any(|i| i.threshold_ci.is_some()) {
-                // Use a fixed seed for reproducibility in metrics computation
-                let mut rng = ChaCha8Rng::seed_from_u64(42);
-                Some(precompute_bootstrap_indices(
-                    &data.y, 1000, 0.05, 0.8, &mut rng,
-                ))
-            } else {
-                None
-            };
+        let precomputed_bootstrap: Option<PrecomputedBootstrap> = if self
+            .individuals
+            .iter()
+            .any(|i| i.cls.threshold_ci.is_some())
+        {
+            // Use a fixed seed for reproducibility in metrics computation
+            let mut rng = ChaCha8Rng::seed_from_u64(42);
+            Some(precompute_bootstrap_indices(
+                &data.y, 1000, 0.05, 0.8, &mut rng,
+            ))
+        } else {
+            None
+        };
 
         self.individuals.par_iter_mut().for_each(|ind| {
-            if ind.threshold_ci.is_some() {
+            if ind.cls.threshold_ci.is_some() {
                 let scores = ind.evaluate(data);
-                let threshold_ci = ind.threshold_ci.as_mut().unwrap();
+                let threshold_ci = ind.cls.threshold_ci.as_mut().unwrap();
                 (
-                    ind.auc,
-                    [threshold_ci.lower, ind.threshold, threshold_ci.upper],
-                    ind.accuracy,
-                    ind.sensitivity,
-                    ind.specificity,
+                    ind.cls.auc,
+                    [threshold_ci.lower, ind.cls.threshold, threshold_ci.upper],
+                    ind.cls.accuracy,
+                    ind.cls.sensitivity,
+                    ind.cls.specificity,
                     _,
                     threshold_ci.rejection_rate,
                 ) = compute_threshold_and_metrics_with_precomputed_bootstrap(
@@ -973,11 +979,11 @@ impl Population {
                 );
             } else {
                 (
-                    ind.auc,
-                    ind.threshold,
-                    ind.accuracy,
-                    ind.sensitivity,
-                    ind.specificity,
+                    ind.cls.auc,
+                    ind.cls.threshold,
+                    ind.cls.accuracy,
+                    ind.cls.sensitivity,
+                    ind.cls.specificity,
                     _,
                 ) = ind.compute_roc_and_metrics(data, method, None);
             }
@@ -1811,12 +1817,7 @@ mod tests {
                     features: vec![(0, i), (1, -i), (2, i * 2), (3, i % 3)]
                         .into_iter()
                         .collect(),
-                    auc: 0.4 + (i as f64 * 0.05),
                     fit: 0.8 - (i as f64 * 0.02),
-                    specificity: 0.15 + (i as f64 * 0.01),
-                    sensitivity: 0.16 + (i as f64 * 0.01),
-                    accuracy: 0.23 + (i as f64 * 0.03),
-                    threshold: 42.0 + (i as f64),
                     k: (42 + i) as usize,
                     epoch: (42 + i) as usize,
                     language: (i % 4) as u8,
@@ -1825,13 +1826,20 @@ mod tests {
                     epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
                     parents: None,
                     betas: None,
-                    threshold_ci: None,
-                    metrics: AdditionalMetrics {
-                        mcc: None,
-                        f1_score: None,
-                        npv: None,
-                        ppv: None,
-                        g_mean: None,
+                    cls: ClassificationMetrics {
+                        auc: 0.4 + (i as f64 * 0.05),
+                        specificity: 0.15 + (i as f64 * 0.01),
+                        sensitivity: 0.16 + (i as f64 * 0.01),
+                        accuracy: 0.23 + (i as f64 * 0.03),
+                        threshold: 42.0 + (i as f64),
+                        threshold_ci: None,
+                        additional: AdditionalMetrics {
+                            mcc: None,
+                            f1_score: None,
+                            npv: None,
+                            ppv: None,
+                            g_mean: None,
+                        },
                     },
                 };
                 pop.individuals.push(ind);
@@ -1864,12 +1872,7 @@ mod tests {
                 }
                 individuals.push(Individual {
                     features: features_map,
-                    auc: 0.8,
                     fit: 0.7,
-                    specificity: 0.75,
-                    sensitivity: 0.85,
-                    accuracy: 0.80,
-                    threshold: 0.5,
                     k: features_per_individual,
                     epoch: 0,
                     language: BINARY_LANG,
@@ -1878,13 +1881,20 @@ mod tests {
                     epsilon: DEFAULT_MINIMUM,
                     parents: None,
                     betas: None,
-                    threshold_ci: None,
-                    metrics: AdditionalMetrics {
-                        mcc: None,
-                        f1_score: None,
-                        npv: None,
-                        ppv: None,
-                        g_mean: None,
+                    cls: ClassificationMetrics {
+                        auc: 0.8,
+                        specificity: 0.75,
+                        sensitivity: 0.85,
+                        accuracy: 0.80,
+                        threshold: 0.5,
+                        threshold_ci: None,
+                        additional: AdditionalMetrics {
+                            mcc: None,
+                            f1_score: None,
+                            npv: None,
+                            ppv: None,
+                            g_mean: None,
+                        },
                     },
                 });
             }
@@ -2280,12 +2290,7 @@ mod tests {
         let mut pop_to_add = Population::new();
         let ind1 = Individual {
             features: vec![(0, 1), (1, -1), (2, 1), (3, 0)].into_iter().collect(),
-            auc: 0.4,
             fit: 0.8,
-            specificity: 0.15,
-            sensitivity: 0.16,
-            accuracy: 0.23,
-            threshold: 42.0,
             k: 42,
             epoch: 42,
             language: 0,
@@ -2294,23 +2299,25 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
-            threshold_ci: None,
-            metrics: AdditionalMetrics {
-                mcc: None,
-                f1_score: None,
-                npv: None,
-                ppv: None,
-                g_mean: None,
+            cls: ClassificationMetrics {
+                auc: 0.4,
+                specificity: 0.15,
+                sensitivity: 0.16,
+                accuracy: 0.23,
+                threshold: 42.0,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                    mcc: None,
+                    f1_score: None,
+                    npv: None,
+                    ppv: None,
+                    g_mean: None,
+                },
             },
         };
         let ind2 = Individual {
             features: vec![(0, -1), (1, 1), (2, 1), (3, 1)].into_iter().collect(),
-            auc: 0.2,
             fit: 0.4,
-            specificity: 0.6,
-            sensitivity: 0.8,
-            accuracy: 0.12,
-            threshold: 24.0,
             k: 48,
             epoch: 96,
             language: 0,
@@ -2319,13 +2326,20 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
-            threshold_ci: None,
-            metrics: AdditionalMetrics {
-                mcc: None,
-                f1_score: None,
-                npv: None,
-                ppv: None,
-                g_mean: None,
+            cls: ClassificationMetrics {
+                auc: 0.2,
+                specificity: 0.6,
+                sensitivity: 0.8,
+                accuracy: 0.12,
+                threshold: 24.0,
+                threshold_ci: None,
+                additional: AdditionalMetrics {
+                    mcc: None,
+                    f1_score: None,
+                    npv: None,
+                    ppv: None,
+                    g_mean: None,
+                },
             },
         };
         let ind_vec = vec![ind1, ind2];
@@ -2341,8 +2355,8 @@ mod tests {
                 "adding an Individual should not change its features"
             );
             assert_eq!(
-                pop.individuals[11 + i].auc,
-                ind_vec[i].auc,
+                pop.individuals[11 + i].cls.auc,
+                ind_vec[i].cls.auc,
                 "adding an Individual should not change its auc"
             );
             assert_eq!(
@@ -2351,23 +2365,23 @@ mod tests {
                 "adding an Individual should not change its fit"
             );
             assert_eq!(
-                pop.individuals[11 + i].specificity,
-                ind_vec[i].specificity,
+                pop.individuals[11 + i].cls.specificity,
+                ind_vec[i].cls.specificity,
                 "adding an Individual should not change its specificity"
             );
             assert_eq!(
-                pop.individuals[11 + i].sensitivity,
-                ind_vec[i].sensitivity,
+                pop.individuals[11 + i].cls.sensitivity,
+                ind_vec[i].cls.sensitivity,
                 "adding an Individual should not change its sensitivity"
             );
             assert_eq!(
-                pop.individuals[11 + i].accuracy,
-                ind_vec[i].accuracy,
+                pop.individuals[11 + i].cls.accuracy,
+                ind_vec[i].cls.accuracy,
                 "adding an Individual should not change its accuracy"
             );
             assert_eq!(
-                pop.individuals[11 + i].threshold,
-                ind_vec[i].threshold,
+                pop.individuals[11 + i].cls.threshold,
+                ind_vec[i].cls.threshold,
                 "adding an Individual should not change its threshold"
             );
             assert_eq!(
@@ -2421,7 +2435,7 @@ mod tests {
 
         let (selected_pop5, n5) = pop.select_first_pct(10.0);
         assert_eq!(n5, 1);
-        assert_eq!(selected_pop5.individuals[0].accuracy, 0.23,
+        assert_eq!(selected_pop5.individuals[0].cls.accuracy, 0.23,
         "select_first_pct() should be deterministic : selecting 1 Individual (10% of 10 Individuals) should lead to keep only the first Individual of the Population");
 
         // to change : return n=10 instead of n=100 (currently pop.individuals.len() != n in this case) when pct>100 or panic
@@ -2453,7 +2467,7 @@ mod tests {
 
         let selected_pop5 = pop.select_random_above_n(10.0, 0, &mut rng);
         assert_eq!(selected_pop5.individuals.len(), 1);
-        assert_eq!(selected_pop5.individuals[0].accuracy, 0.32,
+        assert_eq!(selected_pop5.individuals[0].cls.accuracy, 0.32,
         "the selected Individual is not the same as selected in the past, indicating a reproductibility problem probably linked to the seed interpretation");
 
         let selected_pop6 = pop.select_random_above_n(100.0, 8, &mut rng);
@@ -2473,7 +2487,7 @@ mod tests {
             "Wrong individual selected"
         );
         assert_eq!(
-            pop.get_ind_from_hash(3).unwrap().auc,
+            pop.get_ind_from_hash(3).unwrap().cls.auc,
             0.55,
             "Selected individual has wrong auc"
         );
@@ -3312,12 +3326,12 @@ mod tests {
             ind.features.insert(0, 1);
             ind.features.insert(1, if i % 2 == 0 { 1 } else { -1 });
             ind.k = 2;
-            ind.auc = 0.5 + (i as f64) * 0.05;
+            ind.cls.auc = 0.5 + (i as f64) * 0.05;
             ind.fit = 0.4 + (i as f64) * 0.05;
-            ind.accuracy = 0.6;
-            ind.sensitivity = 0.7;
-            ind.specificity = 0.8;
-            ind.threshold = 0.5;
+            ind.cls.accuracy = 0.6;
+            ind.cls.sensitivity = 0.7;
+            ind.cls.specificity = 0.8;
+            ind.cls.threshold = 0.5;
             ind.epoch = 0;
             ind.language = TERNARY_LANG;
             ind.data_type = RAW_TYPE;
@@ -3551,7 +3565,7 @@ mod tests {
         let mut ind = Individual::new();
         ind.features.insert(0, 1);
         ind.k = 2;
-        ind.auc = 0.7;
+        ind.cls.auc = 0.7;
         ind.fit = 0.7;
         pop.individuals.push(ind);
 
@@ -3606,7 +3620,7 @@ mod tests {
                 ind.features.insert(i, 1);
             }
             ind.k = k;
-            ind.auc = 0.8;
+            ind.cls.auc = 0.8;
             ind.fit = 0.8;
             pop.individuals.push(ind);
 
@@ -3915,8 +3929,8 @@ mod tests {
         ind.features.insert(1, 1);
         ind.k = ind.features.len();
         ind.fit = 0.0;
-        ind.sensitivity = 0.5;
-        ind.specificity = 0.5;
+        ind.cls.sensitivity = 0.5;
+        ind.cls.specificity = 0.5;
         pop.individuals.push(ind);
 
         // Act
@@ -3952,8 +3966,8 @@ mod tests {
         ind.features.insert(2, 1);
         ind.k = ind.features.len();
         ind.fit = 0.0;
-        ind.sensitivity = 0.5;
-        ind.specificity = 0.5;
+        ind.cls.sensitivity = 0.5;
+        ind.cls.specificity = 0.5;
         pop.individuals.push(ind);
 
         // Act
@@ -3987,8 +4001,8 @@ mod tests {
         ind.features.insert(0, 1);
         ind.k = ind.features.len();
         ind.fit = 0.42;
-        ind.sensitivity = 0.5;
-        ind.specificity = 0.5;
+        ind.cls.sensitivity = 0.5;
+        ind.cls.specificity = 0.5;
         pop.individuals.push(ind);
 
         let initial_fit = pop.individuals[0].fit;
