@@ -991,7 +991,7 @@ pub fn run_mcmc_sbs(
     );
 
     let mut n = nmax;
-    while n >= param.mcmc.nmin as u32 && n > 0 {
+    while n > param.mcmc.nmin as u32 {
         let n_current = data_train.feature_selection.len();
 
         // Adaptive n_iter: use fewer iterations when many features remain
