@@ -1255,6 +1255,173 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
     res_mcmc
 }
 
+/// Gibbs variable selection: joint optimization over feature space and coefficients.
+/// Instead of SBS (which runs nested MCMC at each elimination step), this samples
+/// feature inclusion/exclusion AS PART of the MCMC iterations.
+///
+/// At each iteration:
+/// 1. Optimize betas (a, b, c) via golden section + truncated normal
+/// 2. For each candidate feature, propose add/remove/change coefficient
+/// 3. Accept/reject based on posterior + sparsity prior P(k)
+///
+/// The sparsity prior penalizes complex models: log P(k) = k * log(p0) + (n-k) * log(1-p0)
+/// where p0 is the prior inclusion probability (default 0.1).
+pub fn compute_mcmc_gibbs(
+    bp: &BayesPred,
+    param: &Param,
+    rng: &mut ChaCha8Rng,
+) -> MCMCAnalysisTrace {
+    if param.mcmc.n_burn >= param.mcmc.n_iter {
+        error!("n_iter should be greater than n_burn!");
+        panic!("n_iter should be greater than n_burn!");
+    }
+
+    let p0 = param.mcmc.p0.clamp(0.001, 0.999);
+    let log_p0 = p0.ln();
+    let log_1_p0 = (1.0 - p0).ln();
+    let n_total_features = bp.data.feature_selection.len();
+
+    // Initialize with empty model (all coefficients = 0)
+    let mut ind = Individual::new();
+    ind.language = MCMC_GENERIC_LANG;
+    ind.data_type = data_type(param.general.data_type.split(',').next().unwrap_or("raw"));
+    ind.epsilon = param.general.data_type_epsilon;
+    ind.betas = Some(Betas::new(1.0, -1.0, 1.0));
+
+    // Start with a few random features included
+    let initial_k = (n_total_features as f64 * p0).max(3.0).min(20.0) as usize;
+    let mut initial_features: Vec<usize> = bp.data.feature_selection.clone();
+    initial_features.shuffle(rng);
+    for &idx in initial_features.iter().take(initial_k) {
+        let coef = if rng.gen_bool(0.5) { 1i8 } else { -1i8 };
+        ind.features.insert(idx, coef);
+    }
+    ind.k = ind.features.len();
+
+    let nbeta: usize = 3;
+    let mut z = bp.compute_feature_groups(&ind);
+
+    // Compute initial log posterior with sparsity prior
+    let log_post_base = bp.log_posterior(&ind, &z);
+    let k = ind.features.len();
+    let sparsity_prior = k as f64 * log_p0 + (n_total_features - k) as f64 * log_1_p0;
+    let mut log_post = log_post_base + sparsity_prior;
+
+    let mut res_mcmc = MCMCAnalysisTrace::new(&bp.data.feature_selection, param.clone());
+
+    info!(
+        "Gibbs variable selection: {} candidate features, p0={}, initial k={}, n_iter={}",
+        n_total_features, p0, initial_k, param.mcmc.n_iter
+    );
+
+    let mut n_accepted = 0u64;
+    let mut n_proposed = 0u64;
+
+    for n in 0..param.mcmc.n_iter {
+        // Phase 1: Optimize betas (same as standard MCMC)
+        for i in 0..nbeta {
+            let optimal = golden_section_minimize(bp, &ind, &z, i, -1e4, 1e4, 1e-6, 50);
+            ind.set_beta(i, optimal);
+
+            let scale_i = bp.compute_sigma_i(&ind, &z, i);
+            let mut b_i = ind.get_betas()[i];
+            b_i = if (b_i / scale_i).abs() > 10.0 {
+                random_normal(b_i, scale_i, rng)
+            } else {
+                match i {
+                    0 => truncnorm_pos(b_i, scale_i, rng),
+                    1 => truncnorm_neg(b_i, scale_i, rng),
+                    _ => random_normal(b_i, scale_i, rng),
+                }
+            };
+            ind.set_beta(i, b_i);
+
+            let new_base = bp.log_posterior(&ind, &z);
+            let k = ind.features.len();
+            log_post = new_base + k as f64 * log_p0 + (n_total_features - k) as f64 * log_1_p0;
+
+            if n > param.mcmc.n_burn {
+                res_mcmc.update(&ind, log_post);
+            }
+        }
+
+        // Phase 2: Feature proposals — iterate over ALL candidate features
+        for &feature_idx in &bp.data.feature_selection {
+            let current_coef = ind.get_coef(feature_idx);
+            let new_coef = (current_coef + [2, 3].choose(rng).unwrap()) % 3 - 1;
+
+            if current_coef == new_coef {
+                continue;
+            }
+
+            n_proposed += 1;
+
+            // Compute new k for sparsity prior
+            let current_active = current_coef != 0;
+            let new_active = new_coef != 0;
+            let k_current = ind.features.len();
+            let k_new = if current_active && !new_active {
+                k_current - 1 // removing
+            } else if !current_active && new_active {
+                k_current + 1 // adding
+            } else {
+                k_current // changing sign
+            };
+
+            let z_new = bp.update_feature_groups(&z, &mut ind, feature_idx, new_coef);
+            let log_post_new_base = bp.log_posterior(&ind, &z_new);
+            let sparsity_new = k_new as f64 * log_p0 + (n_total_features - k_new) as f64 * log_1_p0;
+            let log_post_new = log_post_new_base + sparsity_new;
+
+            let diff_log_post = log_post_new - log_post;
+            let u: f64 = rng.gen();
+
+            if diff_log_post > 0.0 || u < diff_log_post.exp() {
+                ind.set_coef(feature_idx, new_coef);
+                log_post = log_post_new;
+                z = z_new;
+                n_accepted += 1;
+            }
+
+            if n > param.mcmc.n_burn {
+                res_mcmc.update(&ind, log_post);
+            }
+        }
+
+        // Progress logging
+        if param.mcmc.n_iter >= 100 && n % (param.mcmc.n_iter / 10) == 0 && n > 0 {
+            let accept_rate = if n_proposed > 0 {
+                n_accepted as f64 / n_proposed as f64
+            } else {
+                0.0
+            };
+            debug!(
+                "Gibbs iter {}/{}: k={}, accept_rate={:.3}, log_post={:.2}",
+                n,
+                param.mcmc.n_iter,
+                ind.features.len(),
+                accept_rate,
+                log_post
+            );
+        }
+    }
+
+    let accept_rate = if n_proposed > 0 {
+        n_accepted as f64 / n_proposed as f64
+    } else {
+        0.0
+    };
+    info!(
+        "Gibbs complete: final k={}, accept_rate={:.3}, log_post={:.2}",
+        ind.features.len(),
+        accept_rate,
+        log_post
+    );
+
+    res_mcmc.finalize(param.mcmc.n_iter, param.mcmc.n_burn);
+    res_mcmc
+}
+
 /// Main function to run MCMC analysis on the dataset.
 /// Handles feature selection, sequential backward selection (SBS),
 /// and computes the final MCMC results.
@@ -1293,9 +1460,91 @@ pub fn mcmc(
                 data.feature_selection.len(), param.mcmc.nmin as usize)
     }
 
+    let data_types: Vec<&str> = param.general.data_type.split(",").collect();
+    let dt = data_types[0];
+    if data_types.len() > 1 {
+        warn!(
+            "MCMC allows only one datatype per launch currently. Keeping: {}",
+            dt
+        )
+    }
+
     let mut mcmc_result;
-    if param.mcmc.nmin != 0 && data.feature_selection.len() > param.mcmc.nmin as usize {
-        // Executing SBS
+    if param.mcmc.method == "gibbs" {
+        // Gibbs variable selection: joint optimization over feature space
+        // LASSO pre-screen still applies to reduce candidates
+        let prescreen_target = 50usize;
+        if data.feature_selection.len() > prescreen_target {
+            info!(
+                "LASSO pre-screen: {} → {} features...",
+                data.feature_selection.len(),
+                prescreen_target
+            );
+            let n_samples = data.sample_len;
+            let p = data.feature_selection.len();
+            let mut x_cols: Vec<Vec<f64>> = Vec::with_capacity(p);
+            for &feat_idx in &data.feature_selection {
+                let col: Vec<f64> = (0..n_samples)
+                    .map(|s| *data.X.get(&(s, feat_idx)).unwrap_or(&0.0))
+                    .collect();
+                x_cols.push(col);
+            }
+            for col in &mut x_cols {
+                let mean = col.iter().sum::<f64>() / n_samples as f64;
+                let var = col.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n_samples as f64;
+                let std = var.sqrt().max(1e-10);
+                for v in col.iter_mut() {
+                    *v = (*v - mean) / std;
+                }
+            }
+            let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
+            let y_mean = y_f64.iter().sum::<f64>() / n_samples as f64;
+            let y_centered: Vec<f64> = y_f64.iter().map(|v| v - y_mean).collect();
+            let w = crate::lasso::coordinate_descent_pub(
+                &x_cols,
+                &y_centered,
+                0.01,
+                1.0,
+                500,
+                1e-4,
+                None,
+            );
+            let mut ranked: Vec<(usize, f64)> = data
+                .feature_selection
+                .iter()
+                .enumerate()
+                .map(|(j, &feat_idx)| (feat_idx, w.get(j).copied().unwrap_or(0.0).abs()))
+                .collect();
+            ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            data.feature_selection = ranked
+                .iter()
+                .take(prescreen_target)
+                .map(|(idx, _)| *idx)
+                .collect();
+            info!(
+                "LASSO pre-screen complete: kept {} features",
+                data.feature_selection.len()
+            );
+        }
+
+        cinfo!(
+            param.general.display_colorful,
+            "Launching MCMC with Gibbs variable selection (λ={}, p0={}, {} features, n_iter={})",
+            param.mcmc.lambda,
+            param.mcmc.p0,
+            data.feature_selection.len(),
+            param.mcmc.n_iter
+        );
+
+        let bp = BayesPred::new(
+            &data,
+            param.mcmc.lambda,
+            individual::data_type(dt),
+            param.general.data_type_epsilon,
+        );
+        mcmc_result = compute_mcmc_gibbs(&bp, param, &mut rng);
+    } else if param.mcmc.nmin != 0 && data.feature_selection.len() > param.mcmc.nmin as usize {
+        // SBS mode (original)
         cinfo!(
             param.general.display_colorful,
             "Launching MCMC with SBS (λ={}, {}<->{} features...)",
@@ -1305,7 +1554,6 @@ pub fn mcmc(
         );
         let results = run_mcmc_sbs(&data, param, &mut rng, running);
 
-        // Displaying summary of SBS traces
         for (nfeat, post_mean, _, log_evidence, feature_idx, _) in &results {
             cinfo!(
                 param.general.display_colorful,
@@ -1317,13 +1565,13 @@ pub fn mcmc(
             );
         }
 
-        // Extract best MCMC trace
         cinfo!(
             param.general.display_colorful,
             "Computing full posterior for optimal feature subset..."
         );
         mcmc_result = get_best_mcmc_sbs(&data, &results, &param);
     } else {
+        // Plain MCMC without SBS
         cinfo!(
             param.general.display_colorful,
             "Launching MCMC without SBS (λ={}, using all {} features...)",
@@ -1331,26 +1579,17 @@ pub fn mcmc(
             data.feature_selection.len()
         );
 
-        let data_types: Vec<&str> = param.general.data_type.split(",").collect();
-        let data_type = data_types[0];
-        if data_types.len() > 1 {
-            warn!(
-                "MCMC allows only one datatype per launch currently. Keeping: {}",
-                data_type
-            )
-        }
-
-        let bp: BayesPred = BayesPred::new(
+        let bp = BayesPred::new(
             &data,
             param.mcmc.lambda,
-            individual::data_type(data_type),
+            individual::data_type(dt),
             param.general.data_type_epsilon,
         );
         mcmc_result = compute_mcmc(&bp, param, &mut rng);
     }
 
     // Build BTR model from posterior probabilities
-    // feature_prob: (P(+1), P(0), P(-1)) → select features with P(active) > 0.5
+    // feature_prob: (P(+1), P(0), P(-1)) → select features by inclusion probability
     info!("Converting MCMC posterior to BTR model...");
     let data_type_u8 =
         individual::data_type(param.general.data_type.split(',').next().unwrap_or("prev"));
@@ -1359,21 +1598,49 @@ pub fn mcmc(
     btr_model.data_type = data_type_u8;
     btr_model.epsilon = param.general.data_type_epsilon;
 
-    let mut selected_features = Vec::new();
-    for (&feat_idx, &(p_pos, p_neutral, p_neg)) in &mcmc_result.feature_prob {
-        let p_active = 1.0 - p_neutral;
-        if p_active > 0.5 {
+    // Rank all features by P(active) = 1 - P(neutral)
+    let mut all_features: Vec<(usize, f64, i8)> = mcmc_result
+        .feature_prob
+        .iter()
+        .map(|(&feat_idx, &(p_pos, _p_neutral, p_neg))| {
+            let p_active = p_pos + p_neg; // = 1 - p_neutral
             let sign: i8 = if p_pos >= p_neg { 1 } else { -1 };
-            btr_model.features.insert(feat_idx, sign);
-            selected_features.push((feat_idx, p_active, sign));
-        }
+            (feat_idx, p_active, sign)
+        })
+        .collect();
+    all_features.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    // Select features: use P(active) > 0.5 threshold, but if too few,
+    // take the top features (at least nmin or top 10)
+    let mut selected_features: Vec<(usize, f64, i8)> = all_features
+        .iter()
+        .filter(|(_, p, _)| *p > 0.5)
+        .cloned()
+        .collect();
+
+    if selected_features.len() < 3 {
+        let min_k = (param.mcmc.nmin as usize).max(3).min(all_features.len());
+        info!(
+            "Only {} features with P(active) > 0.5, using top {} by posterior",
+            selected_features.len(),
+            min_k
+        );
+        selected_features = all_features.iter().take(min_k).cloned().collect();
+    }
+
+    for &(feat_idx, _, sign) in &selected_features {
+        btr_model.features.insert(feat_idx, sign);
     }
     btr_model.k = btr_model.features.len();
 
-    selected_features.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     info!(
-        "BTR model from posterior: {} features selected (P(active) > 0.5)",
-        btr_model.k
+        "BTR model from posterior: {} features selected (threshold: {})",
+        btr_model.k,
+        if selected_features.iter().all(|(_, p, _)| *p > 0.5) {
+            "P(active) > 0.5".to_string()
+        } else {
+            format!("top {} by P(active)", btr_model.k)
+        }
     );
     for (idx, p_active, sign) in &selected_features {
         let name = if *idx < data.features.len() {
