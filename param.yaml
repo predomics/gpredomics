@@ -1,7 +1,9 @@
+# gpredomics v0.9.0 — Complete parameter reference
+# All fields have sensible defaults. Only override what you need.
 # Unless specifically indicated, all fields accept a single value.
 general:
-  seed: 42                                    # Used in parent selection, child conception (crossover) and mutation. All of these are single-threaded.
-  algo: ga                                    # GA for genetic algorithm, beam for the beam algorithm, and MCMC for a MCMC-based algorithm.
+  seed: 42                                    # Random seed for reproducibility. Same seed = same results.
+  algo: ga                                    # Algorithm: ga, beam, aco, sa, ils, lasso, mcmc
   cv: false                                   # Should cross-validation be enabled?
   thread_number: 8                            # The number of threads used in feature selection and fit computation.
   gpu: false                                  # Should Gpredomics use the GPU? (GA and beam only)
@@ -100,10 +102,58 @@ beam:
   max_nb_of_models: 20000                     # Limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to significance).
 
 mcmc:
-  n_iter: 10000                               # Number of MCMC (Markov Chain Monte Carlo) iterations.
-  n_burn: 5000                                # Number of MCMC iterations ignored (typically the first half).
-  lambda: 0.001                               # Bayesian prior parameter for coefficients a, b, c.
-  nmin: 10                                    # Minimum number of features in a model after feature elimination | 0: keep all features (disable SBS search).
+  method: gibbs                               # "gibbs" (joint variable selection, default) or "sbs" (sequential backward selection).
+  n_iter: 1000                                # Number of MCMC iterations. Gibbs: more = better posterior. SBS: per elimination step.
+  n_burn: 500                                 # Burn-in period: first n_burn iterations discarded (chain hasn't converged yet).
+  lambda: 0.001                               # L2 regularization on beta coefficients (prior strength). Higher = stronger shrinkage.
+  nmin: 10                                    # SBS only: minimum features to keep after elimination. 0 = disable SBS.
+  p0: 0.1                                     # Gibbs only: prior inclusion probability per feature. Lower = sparser models. E[k] ≈ p0 × n_features.
+  n_chains: 1                                 # Number of parallel MCMC chains. >1 requires large n_iter for each chain to converge.
+  #save_trace_outdir:                         # Uncomment to export MCMC trace to this directory.
+
+# ── Ant Colony Optimization ────────────────────────────────────────
+aco:
+  n_ants: 100                                 # Number of ants per iteration. Each constructs one model. More ants = broader search.
+  max_iterations: 200                         # Maximum iterations before stopping.
+  min_iterations: 10                          # Minimum iterations before early stopping can trigger.
+  alpha: 1.0                                  # Pheromone importance in probability formula: P ∝ τ^α × η^β.
+  beta: 2.0                                   # Heuristic (feature significance) importance: higher = more greedy toward significant features.
+  rho: 0.1                                    # Evaporation rate [0,1]. Higher = faster forgetting, more exploration.
+  tau_min: 0.01                               # Minimum pheromone (MMAS). Prevents convergence lock.
+  tau_max: 1.0                                # Maximum pheromone (MMAS).
+  elite_weight: 2.0                           # Extra pheromone deposit for the global best ant.
+  k_min: 1                                    # Minimum features per model.
+  k_max: 200                                  # Maximum features per model.
+  max_age_best_model: 10                      # Early stop if best model hasn't improved for this many iterations.
+
+# ── Simulated Annealing ───────────────────────────────────────────
+sa:
+  initial_temperature: 1.0                    # Starting temperature. Higher = more random exploration initially.
+  cooling_rate: 0.995                         # Temperature multiplier per iteration: T(n+1) = T(n) × cooling_rate. Slower (0.999) = more thorough.
+  min_temperature: 0.001                      # Stop when temperature drops below this (effectively greedy).
+  max_iterations: 10000                       # Maximum iterations.
+  snapshot_interval: 100                      # Save population snapshot every N iterations (for generation_tracking).
+  k_min: 1                                    # Minimum features per model.
+  k_max: 200                                  # Maximum features per model.
+
+# ── Iterated Local Search ─────────────────────────────────────────
+ils:
+  max_iterations: 100                         # Number of perturb-then-local-search cycles.
+  perturbation_size: 3                        # Number of random feature changes per perturbation (larger = bigger jumps).
+  local_search_steps: 50                      # Max single-feature moves per local search phase.
+  max_no_improve: 20                          # Stop if no improvement for this many iterations.
+  snapshot_interval: 100                      # Save snapshot every N iterations.
+  k_min: 1                                    # Minimum features per model.
+  k_max: 200                                  # Maximum features per model.
+
+# ── LASSO / Elastic Net ───────────────────────────────────────────
+lasso:
+  alpha_min: 0.001                            # Minimum regularization (many features). The path goes from alpha_max to alpha_min.
+  alpha_max: 1.0                              # Maximum regularization (few/no features).
+  n_alphas: 100                               # Number of alpha values along the regularization path.
+  max_iter: 1000                              # Max coordinate descent iterations per alpha.
+  tolerance: 0.0001                           # Convergence tolerance for coordinate descent.
+  l1_ratio: 1.0                               # 1.0 = pure LASSO (L1), 0.5 = Elastic Net (L1+L2), 0.0 = pure Ridge (L2).
 
 gpu:
   fallback_to_cpu: true                       # Execute the code on the CPU (integrated graphics) if there is no GPU available (recommended).
