@@ -398,6 +398,10 @@ pub struct MCMC {
     /// Lower = sparser models. Default 0.1.
     #[serde(default = "mcmc_p0_default")]
     pub p0: f64,
+    /// Number of parallel MCMC chains. Default 1 (single chain, recommended by Vadim).
+    /// Only increase when n_iter is large enough (>2000) for each chain to converge.
+    #[serde(default = "mcmc_n_chains_default")]
+    pub n_chains: usize,
 }
 
 /// Ant Colony Optimization parameters
@@ -1558,4 +1562,7 @@ fn mcmc_method_default() -> String {
 }
 fn mcmc_p0_default() -> f64 {
     0.1
+}
+fn mcmc_n_chains_default() -> usize {
+    1
 }

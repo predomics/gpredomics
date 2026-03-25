@@ -983,7 +983,7 @@ pub fn run_mcmc_sbs(
     let nmax = data_train.feature_selection.len() as u32;
     let total_steps = (nmax as usize).saturating_sub(param.mcmc.nmin as usize);
     let mut step = 0usize;
-    let n_chains = param.general.thread_number.max(1) as usize;
+    let n_chains = param.mcmc.n_chains.max(1);
 
     info!(
         "SBS: {} → {} features ({} steps), {} parallel chain(s), n_iter={}",
