@@ -6,7 +6,7 @@
 
 <img src="docs/logo_predomics.png" alt="Predomics" width="180">
 
-[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/predomics/gpredomics/releases)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/predomics/gpredomics/releases)
 [![Rust](https://img.shields.io/badge/Rust-1.89+-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 [![GPU](https://img.shields.io/badge/GPU-Metal%20%7C%20Vulkan-green.svg)]()
