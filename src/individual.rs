@@ -293,40 +293,40 @@ impl Individual {
                     m = format!(
                         "{} | MCC {:.3}/{:.3} ",
                         m,
-                        self.cls.additional.mcc.unwrap(),
-                        additional.mcc.unwrap()
+                        self.cls.additional.mcc.unwrap_or(f64::NAN),
+                        additional.mcc.unwrap_or(f64::NAN)
                     );
                 }
                 if self.cls.additional.f1_score.is_some() {
                     m = format!(
                         "{} | F1-score {:.3}/{:.3} ",
                         m,
-                        self.cls.additional.f1_score.unwrap(),
-                        additional.f1_score.unwrap()
+                        self.cls.additional.f1_score.unwrap_or(f64::NAN),
+                        additional.f1_score.unwrap_or(f64::NAN)
                     );
                 }
                 if self.cls.additional.npv.is_some() {
                     m = format!(
                         "{} | NPV {:.3}/{:.3} ",
                         m,
-                        self.cls.additional.npv.unwrap(),
-                        additional.npv.unwrap()
+                        self.cls.additional.npv.unwrap_or(f64::NAN),
+                        additional.npv.unwrap_or(f64::NAN)
                     );
                 }
                 if self.cls.additional.ppv.is_some() {
                     m = format!(
                         "{} | PPV {:.3}/{:.3} ",
                         m,
-                        self.cls.additional.ppv.unwrap(),
-                        additional.ppv.unwrap()
+                        self.cls.additional.ppv.unwrap_or(f64::NAN),
+                        additional.ppv.unwrap_or(f64::NAN)
                     );
                 }
                 if self.cls.additional.g_mean.is_some() {
                     m = format!(
                         "{} | G-mean {:.3}/{:.3} ",
                         m,
-                        self.cls.additional.g_mean.unwrap(),
-                        additional.g_mean.unwrap()
+                        self.cls.additional.g_mean.unwrap_or(f64::NAN),
+                        additional.g_mean.unwrap_or(f64::NAN)
                     );
                 }
                 m

@@ -996,8 +996,16 @@ impl Data {
             return (2_u8, 2.0);
         }
 
-        let mean_0 = class_0_values.iter().sum::<f64>() / class_0_values.len() as f64;
-        let mean_1 = class_1_values.iter().sum::<f64>() / class_1_values.len() as f64;
+        let mean_0 = if class_0_values.is_empty() {
+            0.0
+        } else {
+            class_0_values.iter().sum::<f64>() / class_0_values.len() as f64
+        };
+        let mean_1 = if class_1_values.is_empty() {
+            0.0
+        } else {
+            class_1_values.iter().sum::<f64>() / class_1_values.len() as f64
+        };
 
         if mean_0 < min_mean_value && mean_1 < min_mean_value {
             return (2_u8, 0.0);
@@ -1010,7 +1018,12 @@ impl Data {
             class_1_absent,
         ])
         .unwrap();
-        let bayes_factor = fisher_test.greater_pvalue / fisher_test.less_pvalue;
+        let less_pvalue = if fisher_test.less_pvalue == 0.0 {
+            f64::MIN_POSITIVE
+        } else {
+            fisher_test.less_pvalue
+        };
+        let bayes_factor = fisher_test.greater_pvalue / less_pvalue;
 
         if bayes_factor.log10().abs() >= min_absolute_log_factor {
             if bayes_factor < 1.0 {

@@ -76,7 +76,9 @@ fn generate_combinations(features: &Vec<usize>, k: usize) -> Vec<Vec<usize>> {
         }
     }
 
-    combinations.into_iter().collect()
+    let mut result: Vec<Vec<usize>> = combinations.into_iter().collect();
+    result.sort();
+    result
 }
 
 /// Combines best feature combinations with single features to generate new unique combinations.
@@ -124,7 +126,9 @@ fn combine_with_best(best_combinations: Vec<Vec<usize>>, features: &Vec<usize>) 
         .collect();
 
     let unique_combinations: HashSet<Vec<usize>> = all_combinations.into_iter().collect();
-    unique_combinations.into_iter().collect()
+    let mut result: Vec<Vec<usize>> = unique_combinations.into_iter().collect();
+    result.sort();
+    result
 }
 
 /// Computes the binomial coefficient C(n, k) = n! / (k! * (n - k)!).

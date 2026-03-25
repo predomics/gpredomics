@@ -17,7 +17,6 @@ use log::{debug, info, warn};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use std::cmp::min;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -124,10 +123,14 @@ pub fn ils(
     }
 
     // Generate initial solution
-    let k_init = min(
-        rng.gen_range(param.ils.k_min..=min(10, param.ils.k_max.max(param.ils.k_min))),
-        data.feature_selection.len(),
-    );
+    let feature_count = data.feature_selection.len();
+    let k_upper = if param.ils.k_max == 0 {
+        10.min(feature_count)
+    } else {
+        param.ils.k_max.min(feature_count)
+    };
+    let k_lower = param.ils.k_min.min(k_upper);
+    let k_init = rng.gen_range(k_lower..=k_upper);
     let mut current = Individual::random_select_k(
         k_init,
         k_init,

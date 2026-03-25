@@ -83,7 +83,7 @@ fn log_logistic(x: f64) -> f64 {
 fn truncnorm_pos(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 {
     // truncated normal positive random number
     let erf0 = erf(-mu / (2_f64.sqrt() * scale));
-    let u: f64 = rng.gen_range(0.0..1.0);
+    let u: f64 = rng.gen_range(1e-15..1.0_f64 - 1e-15);
     mu + 2_f64.sqrt() * scale * erf_inv(u * (1.0 - erf0) + erf0)
 }
 
@@ -112,7 +112,7 @@ fn truncnorm_pos(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 
 fn truncnorm_neg(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 {
     // truncated normal negative random number
     let erf0 = erf(-mu / (2_f64.sqrt() * scale));
-    let u: f64 = rng.gen_range(0.0..1.0);
+    let u: f64 = rng.gen_range(1e-15..1.0_f64 - 1e-15);
     mu + 2_f64.sqrt() * scale * erf_inv(u * (1.0 + erf0) - 1.0)
 }
 
@@ -139,7 +139,7 @@ fn truncnorm_neg(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 
 /// ```
 fn random_normal(mu: f64, scale: f64, rng: &mut rand_chacha::ChaCha8Rng) -> f64 {
     // normal random number
-    let u: f64 = rng.gen_range(0.0..1.0);
+    let u: f64 = rng.gen_range(1e-15..1.0_f64 - 1e-15);
     mu + 2_f64.sqrt() * scale * erf_inv(2.0 * u - 1.0)
 }
 
@@ -633,8 +633,9 @@ impl MCMCAnalysisTrace {
 
         self.log_post_mean += log_post;
         self.log_post_var += log_post.powi(2);
-        self.post_mean += log_post.exp();
-        self.post_var += (2.0 * log_post).exp();
+        let safe_log = log_post.max(-500.0).min(500.0);
+        self.post_mean += safe_log.exp();
+        self.post_var += (2.0 * safe_log).exp();
 
         let mut clone = ind.clone();
         clone.epoch = self.population.individuals.len();

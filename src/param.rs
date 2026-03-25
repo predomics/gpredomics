@@ -838,6 +838,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "save_trace_outdir",
         "method",
         "p0",
+        "n_chains",
     ]
     .iter()
     .cloned()

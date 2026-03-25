@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>gpredomics v0.9.0 — Technical Documentation</title>
+<style>
+  @page {
+    size: A4;
+    margin: 2.5cm 2cm 2.5cm 2cm;
+    @bottom-center {
+      content: "gpredomics v0.9.0 — Technical Documentation";
+      font-size: 8pt;
+      color: #888;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 8pt;
+      color: #888;
+    }
+  }
+  @page :first {
+    margin-top: 0;
+    @bottom-center { content: none; }
+    @bottom-right { content: none; }
+  }
+
+  :root {
+    --primary: #1a365d;
+    --accent: #2563eb;
+    --accent-light: #eff6ff;
+    --text: #1e293b;
+    --text-light: #64748b;
+    --border: #e2e8f0;
+    --code-bg: #f8fafc;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 10pt;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  /* Cover page */
+  .cover {
+    page-break-after: always;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    text-align: center;
+    padding: 4cm 2cm;
+  }
+  .cover img { width: 200px; margin-bottom: 2cm; }
+  .cover h1 {
+    font-size: 28pt;
+    color: var(--primary);
+    margin-bottom: 0.5cm;
+    letter-spacing: -0.5px;
+  }
+  .cover .subtitle {
+    font-size: 14pt;
+    color: var(--text-light);
+    margin-bottom: 1.5cm;
+  }
+  .cover .version {
+    font-size: 11pt;
+    color: var(--accent);
+    background: var(--accent-light);
+    padding: 6px 20px;
+    border-radius: 20px;
+    display: inline-block;
+    margin-bottom: 1cm;
+  }
+  .cover .meta {
+    font-size: 9pt;
+    color: var(--text-light);
+    line-height: 1.8;
+  }
+
+  /* TOC */
+  .toc { page-break-after: always; }
+  .toc h2 { font-size: 18pt; color: var(--primary); margin-bottom: 1cm; border: none; }
+  .toc ul { list-style: none; }
+  .toc li { padding: 4px 0; border-bottom: 1px dotted var(--border); }
+  .toc li a { text-decoration: none; color: var(--text); }
+  .toc li a:hover { color: var(--accent); }
+  .toc .section-num { color: var(--accent); font-weight: 600; margin-right: 8px; }
+
+  /* Headings */
+  h1 { font-size: 20pt; color: var(--primary); margin: 1.5cm 0 0.5cm; page-break-after: avoid; }
+  h2 {
+    font-size: 14pt;
+    color: var(--primary);
+    margin: 1cm 0 0.4cm;
+    padding-bottom: 4px;
+    border-bottom: 2px solid var(--accent);
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 11pt;
+    color: var(--primary);
+    margin: 0.6cm 0 0.3cm;
+    page-break-after: avoid;
+  }
+  h4 { font-size: 10pt; color: var(--text-light); margin: 0.4cm 0 0.2cm; }
+
+  p { margin-bottom: 8px; }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.4cm 0 0.6cm;
+    font-size: 9pt;
+    page-break-inside: avoid;
+  }
+  th {
+    background: var(--primary);
+    color: white;
+    padding: 6px 8px;
+    text-align: left;
+    font-weight: 600;
+  }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  tr:nth-child(even) { background: #f8fafc; }
+
+  /* Code */
+  code {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 8.5pt;
+    background: var(--code-bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-size: 8pt;
+    line-height: 1.5;
+    overflow-x: auto;
+    margin: 0.3cm 0 0.5cm;
+    page-break-inside: avoid;
+  }
+  pre code { background: none; border: none; padding: 0; }
+
+  /* Links */
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* Callouts */
+  .note {
+    background: var(--accent-light);
+    border-left: 4px solid var(--accent);
+    padding: 10px 14px;
+    margin: 0.4cm 0;
+    font-size: 9pt;
+    border-radius: 0 4px 4px 0;
+  }
+  .note strong { color: var(--accent); }
+
+  /* Architecture diagram */
+  .arch {
+    background: #f1f5f9;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    font-family: 'SF Mono', monospace;
+    font-size: 7.5pt;
+    line-height: 1.4;
+    white-space: pre;
+    margin: 0.4cm 0;
+    text-align: center;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 8pt;
+    font-weight: 600;
+    margin-right: 4px;
+  }
+  .badge-algo { background: #dbeafe; color: #1d4ed8; }
+  .badge-struct { background: #dcfce7; color: #166534; }
+  .badge-file { background: #fef3c7; color: #92400e; }
+
+  .two-col { display: flex; gap: 1cm; }
+  .two-col > div { flex: 1; }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 0.5cm 0; }
+
+  .fig-caption { font-size: 8pt; color: var(--text-light); text-align: center; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- ==================== COVER PAGE ==================== -->
+<div class="cover">
+  <img src="logo_predomics.png" alt="Predomics Logo">
+  <h1>gpredomics</h1>
+  <div class="subtitle">Interpretable Machine Learning for Omics Data</div>
+  <div class="version">v0.9.0</div>
+  <div class="meta">
+    <strong>Technical Documentation</strong><br>
+    March 25, 2026<br><br>
+    Edi Prifti, Louison Music, Vadim Puller, Jean-Daniel Zucker<br>
+    IRD — UMMISCO<br><br>
+    <a href="https://github.com/predomics/gpredomics">github.com/predomics/gpredomics</a>
+  </div>
+</div>
+
+<!-- ==================== TABLE OF CONTENTS ==================== -->
+<div class="toc">
+  <h2>Table of Contents</h2>
+  <ul>
+    <li><a href="#overview"><span class="section-num">1</span> Overview</a></li>
+    <li><a href="#architecture"><span class="section-num">2</span> Architecture</a></li>
+    <li><a href="#data"><span class="section-num">3</span> Data Pipeline</a></li>
+    <li><a href="#individual"><span class="section-num">4</span> Individual &amp; Model Languages</a></li>
+    <li><a href="#algorithms"><span class="section-num">5</span> Optimization Algorithms</a></li>
+    <li style="padding-left: 20px;"><a href="#ga">5.1 Genetic Algorithm (GA)</a></li>
+    <li style="padding-left: 20px;"><a href="#beam">5.2 Beam Search</a></li>
+    <li style="padding-left: 20px;"><a href="#mcmc">5.3 MCMC / Bayesian</a></li>
+    <li style="padding-left: 20px;"><a href="#aco">5.4 Ant Colony Optimization (ACO)</a></li>
+    <li style="padding-left: 20px;"><a href="#sa">5.5 Simulated Annealing (SA)</a></li>
+    <li style="padding-left: 20px;"><a href="#ils">5.6 Iterated Local Search (ILS)</a></li>
+    <li style="padding-left: 20px;"><a href="#lasso">5.7 LASSO / Elastic Net</a></li>
+    <li><a href="#population"><span class="section-num">6</span> Population &amp; FBM Selection</a></li>
+    <li><a href="#cv"><span class="section-num">7</span> Cross-Validation</a></li>
+    <li><a href="#voting"><span class="section-num">8</span> Voting Ensemble</a></li>
+    <li><a href="#importance"><span class="section-num">9</span> Feature Importance</a></li>
+    <li><a href="#gpu"><span class="section-num">10</span> GPU Acceleration</a></li>
+    <li><a href="#metrics"><span class="section-num">11</span> Metrics &amp; Statistics</a></li>
+    <li><a href="#config"><span class="section-num">12</span> Configuration Reference</a></li>
+    <li><a href="#tests"><span class="section-num">13</span> Testing &amp; CI</a></li>
+    <li><a href="#ecosystem"><span class="section-num">14</span> Ecosystem</a></li>
+    <li><a href="#benchmark"><span class="section-num">15</span> Benchmark Results</a></li>
+    <li><a href="#references"><span class="section-num">16</span> References</a></li>
+  </ul>
+</div>
+
+<!-- ==================== 1. OVERVIEW ==================== -->
+<h1 id="overview">1. Overview</h1>
+
+<p><strong>gpredomics</strong> is a high-performance Rust engine for discovering sparse, interpretable classification models from high-dimensional omics data (metagenomics, transcriptomics, metabolomics). It implements the <strong>BTR (Binary-Ternary-Ratio)</strong> framework where models use discrete coefficients {-1, 0, +1} that clinicians can directly interpret.</p>
+
+<h3>The Problem</h3>
+<p>Standard machine learning on omics data produces black-box models (Random Forest, XGBoost) that achieve high accuracy but cannot be interpreted by domain experts. Feature selection is computationally expensive, models overfit easily on small clinical cohorts, and results vary across random seeds.</p>
+
+<h3>The Solution</h3>
+<p>gpredomics constrains models to use discrete coefficients, producing rules like:</p>
+<pre><code>Class 1: (Bacteroides + Prevotella) - (Faecalibacterium) ≥ 1</code></pre>
+<p>This is directly interpretable: if the sum of Bacteroides and Prevotella prevalence minus Faecalibacterium prevalence exceeds 1, predict disease. Seven different optimization algorithms search for these sparse models, and a voting ensemble combines the best ones.</p>
+
+<h3>Key Numbers</h3>
+<table>
+  <tr><th>Metric</th><th>Value</th></tr>
+  <tr><td>Source code</td><td>~47,000 lines of Rust</td></tr>
+  <tr><td>Tests</td><td>776 unit + integration tests</td></tr>
+  <tr><td>Algorithms</td><td>7 (GA, Beam, MCMC, ACO, SA, ILS, LASSO)</td></tr>
+  <tr><td>Languages</td><td>5 (Binary, Ternary, Pow2, Ratio, MCMC Generic)</td></tr>
+  <tr><td>Fitness functions</td><td>8 (AUC, sensitivity, specificity, MCC, F1, NPV, PPV, G-mean)</td></tr>
+  <tr><td>GPU support</td><td>Metal (macOS), Vulkan (Linux)</td></tr>
+</table>
+
+<!-- ==================== 2. ARCHITECTURE ==================== -->
+<h1 id="architecture">2. Architecture</h1>
+
+<div class="arch">
+┌─────────────────────────────────────────────────────────────┐
+│                    predomicsapp (Web UI)                     │
+│                   Vue.js + FastAPI + PostgreSQL              │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ HTTP/WebSocket
+┌─────────────────────────▼───────────────────────────────────┐
+│                    gpredomicspy (Python)                     │
+│                   PyO3 bindings + clinical                   │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ FFI
+┌─────────────────────────▼───────────────────────────────────┐
+│                                                             │
+│                    gpredomics (Rust Core)                    │
+│                                                             │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐  │
+│  │   Data    │  │  Param   │  │Individual│  │ Population│  │
+│  │ loading   │  │  config  │  │  (BTR    │  │  (sorted  │  │
+│  │ selection │  │  13 sect │  │   model) │  │   models) │  │
+│  └─────┬─────┘  └────┬─────┘  └────┬─────┘  └─────┬─────┘  │
+│        └──────────────┴─────────────┴──────────────┘        │
+│                         │                                   │
+│  ┌──────┬──────┬──────┬─┴───┬──────┬──────┬──────┐         │
+│  │  GA  │ Beam │ MCMC │ ACO │  SA  │ ILS  │LASSO │         │
+│  └──────┴──────┴──────┴─────┴──────┴──────┴──────┘         │
+│                         │                                   │
+│  ┌──────────┐  ┌────────┴──┐  ┌───────────┐  ┌─────────┐  │
+│  │    CV    │  │ Importance│  │  Voting   │  │   GPU   │  │
+│  │ K-fold   │  │   MDA     │  │  Jury     │  │  wgpu   │  │
+│  └──────────┘  └───────────┘  └───────────┘  └─────────┘  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+</div>
+<p class="fig-caption">Figure 1: gpredomics ecosystem architecture</p>
+
+<h2>Source Code Structure</h2>
+<table>
+  <tr><th>Module</th><th>File</th><th>Lines</th><th>Purpose</th></tr>
+  <tr><td>Core</td><td><code>lib.rs</code></td><td>755</td><td>Public API, entry points (<code>run()</code>, <code>run_training()</code>)</td></tr>
+  <tr><td>CLI</td><td><code>main.rs</code></td><td>232</td><td>Binary, signal handling, parameter parsing</td></tr>
+  <tr><td>Config</td><td><code>param.rs</code></td><td>1,568</td><td>13 configuration sections with validation</td></tr>
+  <tr><td>Data</td><td><code>data.rs</code></td><td>4,020</td><td>Loading, feature selection, preprocessing</td></tr>
+  <tr><td>Model</td><td><code>individual.rs</code></td><td>7,569</td><td>BTR model structure, evaluation, metrics</td></tr>
+  <tr><td>Collection</td><td><code>population.rs</code></td><td>4,059</td><td>Population management, FBM selection</td></tr>
+  <tr><td>Algorithms</td><td><code>ga/beam/mcmc/aco/sa/ils/lasso.rs</code></td><td>10,369</td><td>7 optimization algorithms</td></tr>
+  <tr><td>Ensemble</td><td><code>voting.rs</code></td><td>4,882</td><td>Jury selection, voting methods</td></tr>
+  <tr><td>Validation</td><td><code>cv.rs</code></td><td>2,682</td><td>Stratified K-fold cross-validation</td></tr>
+  <tr><td>GPU</td><td><code>gpu.rs</code></td><td>2,420</td><td>wgpu sparse matrix acceleration</td></tr>
+  <tr><td>Utilities</td><td><code>utils.rs</code></td><td>6,266</td><td>Metrics, CI methods, statistics</td></tr>
+  <tr><td>Export</td><td><code>csv_report.rs</code></td><td>735</td><td>CSV performance report</td></tr>
+  <tr><td>Experiment</td><td><code>experiment.rs</code></td><td>1,434</td><td>Result structure, serialization</td></tr>
+</table>
+
+<!-- ==================== 3. DATA PIPELINE ==================== -->
+<h1 id="data">3. Data Pipeline</h1>
+
+<h2>3.1 Input Format</h2>
+<p>gpredomics expects tab-separated files with features in rows (transposed omics convention):</p>
+
+<pre><code># X.tsv (features × samples)
+feature_name    sample1    sample2    sample3    ...
+msp_0001        0.023      0.001      0.045      ...
+msp_0002        0.0        0.012      0.003      ...
+
+# y.tsv (class labels)
+sample_name    class
+sample1        0
+sample2        1
+sample3        0</code></pre>
+
+<h2>3.2 Feature Selection</h2>
+<p>Before optimization, features are filtered by statistical significance:</p>
+<table>
+  <tr><th>Method</th><th>Test</th><th>Use Case</th></tr>
+  <tr><td><code>wilcoxon</code></td><td>Wilcoxon rank-sum</td><td>Non-parametric, default for metagenomics</td></tr>
+  <tr><td><code>studentt</code></td><td>Student's t-test</td><td>Parametric, normal distributions</td></tr>
+  <tr><td><code>bayesian_fisher</code></td><td>Bayesian + Fisher's exact</td><td>Bayes factor filtering</td></tr>
+</table>
+
+<p>Filtering criteria (configurable):</p>
+<ul>
+  <li><code>feature_minimal_prevalence_pct</code>: minimum % of samples with non-zero values (default: 10%)</li>
+  <li><code>feature_maximal_adj_pvalue</code>: maximum adjusted p-value (default: 0.05)</li>
+  <li><code>feature_minimal_feature_value</code>: minimum absolute feature value (default: 0.0)</li>
+</ul>
+
+<h2>3.3 Data Types</h2>
+<table>
+  <tr><th>Type</th><th>Code</th><th>Transform</th><th>Use Case</th></tr>
+  <tr><td>Raw</td><td><code>raw</code></td><td>No transform</td><td>Abundance data</td></tr>
+  <tr><td>Prevalence</td><td><code>prev</code></td><td>x &gt; 0 → 1, else 0</td><td>Presence/absence patterns</td></tr>
+  <tr><td>Log</td><td><code>log</code></td><td>log₁₀(x + ε)</td><td>Log-scale abundance</td></tr>
+</table>
+
+<p>Multiple data types can be combined: <code>data_type: "raw,prev"</code> generates separate populations for each.</p>
+
+<!-- ==================== 4. INDIVIDUAL ==================== -->
+<h1 id="individual">4. Individual &amp; Model Languages</h1>
+
+<p>An <strong>Individual</strong> represents a single sparse classification model. Its key components:</p>
+
+<pre><code>pub struct Individual {
+    pub features: BTreeMap&lt;usize, i8&gt;,  // feature_idx → coefficient
+    pub k: usize,                        // number of active features
+    pub fit: f64,                        // penalized fitness (universal)
+    pub cls: ClassificationMetrics,      // AUC, sensitivity, specificity, ...
+    pub language: u8,                    // model language
+    pub data_type: u8,                   // data transformation
+    pub hash: u64,                       // deterministic hash for deduplication
+}</code></pre>
+
+<div class="note">
+  <strong>BTreeMap for determinism:</strong> Features are stored in a <code>BTreeMap</code> (not <code>HashMap</code>) to ensure deterministic iteration order. This guarantees identical results across runs with the same seed, regardless of Rust's random HashMap seeding.
+</div>
+
+<h2>4.1 Model Languages</h2>
+
+<table>
+  <tr><th>Language</th><th>Coefficients</th><th>Scoring Formula</th><th>Example</th></tr>
+  <tr><td><strong>Binary</strong></td><td>{0, +1}</td><td>score = Σ(xᵢ) ≥ t</td><td>A + B + C ≥ 2</td></tr>
+  <tr><td><strong>Ternary</strong></td><td>{-1, 0, +1}</td><td>score = Σ(cᵢ × xᵢ) ≥ t</td><td>A + B - C ≥ 1</td></tr>
+  <tr><td><strong>Pow2</strong></td><td>{...-4,-2,-1,0,+1,+2,+4...}</td><td>score = Σ(2ⁿ × xᵢ) ≥ t</td><td>4A + 2B - 8C ≥ 3</td></tr>
+  <tr><td><strong>Ratio</strong></td><td>{-1, 0, +1}</td><td>score = Σ(pos) / Σ(neg) ≥ t</td><td>(A+B) / (C+D) ≥ 1.5</td></tr>
+  <tr><td><strong>MCMC Generic</strong></td><td>continuous β</td><td>P(y=1) = σ(a·pos + b·neg + c)</td><td>Bayesian posterior</td></tr>
+</table>
+
+<h2>4.2 Classification Metrics</h2>
+<pre><code>pub struct ClassificationMetrics {
+    pub auc: f64,                        // Area Under ROC Curve
+    pub threshold: f64,                  // Optimal classification threshold
+    pub threshold_ci: Option&lt;ThresholdCI&gt;, // Bootstrap confidence interval
+    pub sensitivity: f64,                // True Positive Rate
+    pub specificity: f64,                // True Negative Rate
+    pub accuracy: f64,                   // Overall accuracy
+    pub additional: AdditionalMetrics,   // MCC, F1, NPV, PPV, G-mean
+}</code></pre>
+
+<!-- ==================== 5. ALGORITHMS ==================== -->
+<h1 id="algorithms">5. Optimization Algorithms</h1>
+
+<p>All algorithms share a common interface: they receive preprocessed <code>Data</code> and <code>Param</code>, and return a <code>Vec&lt;Population&gt;</code> of candidate models ranked by fitness.</p>
+
+<!-- GA -->
+<h2 id="ga">5.1 Genetic Algorithm (GA)</h2>
+<p><span class="badge badge-algo">Population-based</span> <span class="badge badge-algo">Recombinative</span></p>
+
+<p>The GA evolves a population of models through selection, crossover, and mutation over multiple generations. It is the original and most mature algorithm in gpredomics.</p>
+
+<h3>Evolutionary Operators</h3>
+<table>
+  <tr><th>Operator</th><th>Description</th><th>Parameter</th></tr>
+  <tr><td><strong>Elite selection</strong></td><td>Top models preserved unchanged</td><td><code>select_elite_pct: 2.0</code></td></tr>
+  <tr><td><strong>Niche selection</strong></td><td>Best per ecological niche (language × data_type)</td><td><code>select_niche_pct: 0.0</code></td></tr>
+  <tr><td><strong>Random selection</strong></td><td>Random survival for diversity</td><td><code>select_random_pct: 2.0</code></td></tr>
+  <tr><td><strong>Crossover</strong></td><td>Uniform crossover of feature sets</td><td><code>mutated_children_pct: 80.0</code></td></tr>
+  <tr><td><strong>Mutation</strong></td><td>Random feature add/remove/flip</td><td><code>mutated_features_pct: 20.0</code></td></tr>
+</table>
+
+<p><strong>Reference:</strong> Holland, J.H. (1975). <em>Adaptation in Natural and Artificial Systems</em>. University of Michigan Press.</p>
+
+<!-- Beam -->
+<h2 id="beam">5.2 Beam Search</h2>
+<p><span class="badge badge-algo">Systematic</span> <span class="badge badge-algo">Exhaustive</span></p>
+
+<p>Beam Search systematically explores model space level by level, from k=1 features to k=k_stop. At each level, it evaluates all combinations (or the best subset) and selects the Family of Best Models (FBM) to extend.</p>
+
+<h3>Methods</h3>
+<ul>
+  <li><strong>LimitedExhaustive</strong> (default): Evaluate all C(n,k) combinations, pruning when too many</li>
+  <li><strong>ParallelForward</strong>: Extend existing models by one feature at a time</li>
+</ul>
+
+<p><strong>Reference:</strong> Lowerre, B.T. (1976). <em>The HARPY speech recognition system</em>. Carnegie Mellon University.</p>
+
+<!-- MCMC -->
+<h2 id="mcmc">5.3 MCMC / Bayesian Inference</h2>
+<p><span class="badge badge-algo">Bayesian</span> <span class="badge badge-algo">Posterior sampling</span></p>
+
+<p>Bayesian logistic regression with Metropolis-Hastings sampling. Two modes:</p>
+
+<ul>
+  <li><strong>Gibbs variable selection</strong> (default, <code>method: gibbs</code>): Joint sampling of feature inclusion and coefficients in a single MCMC run, with a sparsity prior P(k) controlling model complexity.</li>
+  <li><strong>Sequential Backward Selection</strong> (<code>method: sbs</code>): Nested MCMC at each feature elimination step (original method).</li>
+</ul>
+
+<p>The Gibbs mode includes LASSO pre-screening (top 50 features) and an adaptive BTR model conversion from posterior inclusion probabilities.</p>
+
+<p><strong>References:</strong> Metropolis, N. et al. (1953). <em>Equations of state calculations by fast computing machines</em>. J. Chem. Phys.; George, E.I. &amp; McCulloch, R.E. (1993). <em>Variable selection via Gibbs sampling</em>. JASA.</p>
+
+<!-- ACO -->
+<h2 id="aco">5.4 Ant Colony Optimization (ACO)</h2>
+<p><span class="badge badge-algo">Population-based</span> <span class="badge badge-algo">Constructive</span></p>
+
+<p>Ants construct models feature-by-feature using pheromone trails. Higher pheromone on a feature means it was found useful by previous ants. Uses the Max-Min Ant System (MMAS) variant with pheromone bounds to prevent premature convergence.</p>
+
+<p>Key innovation: pheromone is tracked per (feature, coefficient_sign) pair, encoding not just feature importance but also directional association.</p>
+
+<p><strong>Reference:</strong> Dorigo, M. &amp; Stützle, T. (2004). <em>Ant Colony Optimization</em>. MIT Press.</p>
+
+<!-- SA -->
+<h2 id="sa">5.5 Simulated Annealing (SA)</h2>
+<p><span class="badge badge-algo">Single-solution</span> <span class="badge badge-algo">Perturbative</span></p>
+
+<p>Starts with a random model and iteratively proposes small changes (add/remove/flip one feature). Improvements are always accepted; worse solutions are accepted with probability e<sup>-ΔE/T</sup> where T decreases over time (cooling schedule).</p>
+
+<p><strong>Reference:</strong> Kirkpatrick, S. et al. (1983). <em>Optimization by simulated annealing</em>. Science, 220(4598).</p>
+
+<!-- ILS -->
+<h2 id="ils">5.6 Iterated Local Search (ILS)</h2>
+<p><span class="badge badge-algo">Single-solution</span> <span class="badge badge-algo">Perturbative</span></p>
+
+<p>Alternates between local search (greedy hill climbing) and perturbation (random multi-feature changes). The local search finds the nearest local optimum; perturbation escapes it to explore new regions.</p>
+
+<p><strong>Reference:</strong> Lourenço, H.R. et al. (2003). <em>Iterated Local Search</em>. In Handbook of Metaheuristics, Springer.</p>
+
+<!-- LASSO -->
+<h2 id="lasso">5.7 LASSO / Elastic Net</h2>
+<p><span class="badge badge-algo">Direct optimization</span> <span class="badge badge-algo">Convex</span></p>
+
+<p>L1-regularized regression via coordinate descent along a regularization path (α<sub>max</sub> → α<sub>min</sub>). Produces the mathematically optimal sparse linear model. Continuous LASSO coefficients are converted to discrete BTR coefficients by taking the sign.</p>
+
+<p>Serves as a <strong>mathematical baseline</strong>: how well can an optimal sparse linear model do compared to heuristic BTR models?</p>
+
+<p><strong>References:</strong> Tibshirani, R. (1996). <em>Regression shrinkage and selection via the lasso</em>. JRSS-B; Friedman, J. et al. (2010). <em>Regularization paths for generalized linear models via coordinate descent</em>. JSS.</p>
+
+<!-- ==================== 6. POPULATION & FBM ==================== -->
+<h1 id="population">6. Population &amp; FBM Selection</h1>
+
+<p>A <code>Population</code> is a sorted collection of <code>Individual</code> models. The <strong>Family of Best Models (FBM)</strong> is selected using confidence interval overlap on the fitness metric.</p>
+
+<h3>FBM Selection Algorithm</h3>
+<ol>
+  <li>Compute Wilson score confidence interval for the best model's AUC</li>
+  <li>Include all models whose AUC overlaps with this interval</li>
+  <li>Remove clones (identical feature sets, using deterministic hashing)</li>
+  <li>Enforce diversity (minimum Jaccard dissimilarity between models)</li>
+</ol>
+
+<h3>Diversity Metric</h3>
+<p>Signed Jaccard dissimilarity between two models A and B:</p>
+<pre><code>J(A,B) = 1 - |A ∩ B| / |A ∪ B|</code></pre>
+<p>where intersection considers both feature index AND coefficient sign.</p>
+
+<!-- ==================== 7. CROSS-VALIDATION ==================== -->
+<h1 id="cv">7. Cross-Validation</h1>
+
+<p>Stratified K-fold cross-validation with optional double stratification by class and sample annotation (e.g., study site, batch).</p>
+
+<h3>Modes</h3>
+<table>
+  <tr><th>Mode</th><th>Parameters</th><th>Description</th></tr>
+  <tr><td>Inner CV</td><td><code>inner_folds: 5</code></td><td>Within-fold model selection</td></tr>
+  <tr><td>Outer CV</td><td><code>outer_folds: 5</code></td><td>Performance estimation across folds</td></tr>
+  <tr><td>Overfit penalty</td><td><code>overfit_penalty: 0.0</code></td><td>Penalize train-test performance gap</td></tr>
+</table>
+
+<p>The FBM is computed across folds: models that appear consistently across multiple folds are ranked higher.</p>
+
+<!-- ==================== 8. VOTING ==================== -->
+<h1 id="voting">8. Voting Ensemble</h1>
+
+<p>The <strong>Jury</strong> selects diverse, high-performing models from the FBM and combines their predictions through voting.</p>
+
+<h3>Expert Selection Pipeline</h3>
+<ol>
+  <li><strong>FBM CI filter</strong>: Models within AUC confidence interval of the best</li>
+  <li><strong>min_perf filter</strong>: Minimum individual AUC (default: 0.5)</li>
+  <li><strong>min_diversity filter</strong>: Minimum Jaccard distance between experts (default: 5%)</li>
+</ol>
+
+<h3>Voting Methods</h3>
+<table>
+  <tr><th>Method</th><th>Rule</th></tr>
+  <tr><td><strong>Majority</strong></td><td>Class = mode of expert predictions</td></tr>
+  <tr><td><strong>Consensus</strong></td><td>Class = unanimous agreement, else reject</td></tr>
+</table>
+
+<h3>Expert Specialization</h3>
+<p>Experts can be classified based on their per-class performance:</p>
+<ul>
+  <li><strong>PositiveSpecialist</strong>: High sensitivity, moderate specificity → votes only on positive predictions</li>
+  <li><strong>NegativeSpecialist</strong>: High specificity, moderate sensitivity → votes only on negative predictions</li>
+  <li><strong>Balanced</strong>: Both metrics above threshold → votes on all predictions</li>
+</ul>
+
+<!-- ==================== 9. IMPORTANCE ==================== -->
+<h1 id="importance">9. Feature Importance</h1>
+
+<p>Five types of feature importance, computed at population or cross-validation level:</p>
+
+<table>
+  <tr><th>Type</th><th>Description</th><th>Scope</th></tr>
+  <tr><td><strong>MDA</strong></td><td>Mean Decrease in Accuracy (permutation importance)</td><td>Population</td></tr>
+  <tr><td><strong>Prevalence (Pop)</strong></td><td>% of FBM models containing the feature</td><td>Population</td></tr>
+  <tr><td><strong>Prevalence (CV)</strong></td><td>% of CV folds where feature appears in FBM</td><td>Collection</td></tr>
+  <tr><td><strong>Coefficient</strong></td><td>Mean |coefficient| across FBM models</td><td>Population</td></tr>
+  <tr><td><strong>Posterior Prob.</strong></td><td>P(feature active) from MCMC posterior</td><td>MCMC only</td></tr>
+</table>
+
+<!-- ==================== 10. GPU ==================== -->
+<h1 id="gpu">10. GPU Acceleration</h1>
+
+<p>Optional GPU acceleration via <strong>wgpu</strong> for fitness evaluation. Supports Metal (macOS), Vulkan (Linux), and DirectX 12 (Windows).</p>
+
+<h3>Implementation</h3>
+<p>The feature matrix X is converted to Compressed Sparse Row (CSR) format. Individual models are encoded as Compressed Sparse Column (CSC) vectors. GPU computes sparse matrix-vector products for all individuals in parallel.</p>
+
+<h3>Memory Policies</h3>
+<table>
+  <tr><th>Policy</th><th>Behavior</th></tr>
+  <tr><td><code>Strict</code></td><td>Respect memory limits strictly, fail if exceeded</td></tr>
+  <tr><td><code>Adaptive</code></td><td>Balance memory usage and performance (default)</td></tr>
+  <tr><td><code>Performance</code></td><td>Maximize GPU utilization, may use more memory</td></tr>
+</table>
+
+<!-- ==================== 11. METRICS ==================== -->
+<h1 id="metrics">11. Metrics &amp; Statistics</h1>
+
+<h2>11.1 Classification Metrics</h2>
+<table>
+  <tr><th>Metric</th><th>Formula</th></tr>
+  <tr><td>AUC</td><td>Area under ROC curve (trapezoidal integration)</td></tr>
+  <tr><td>Sensitivity</td><td>TP / (TP + FN)</td></tr>
+  <tr><td>Specificity</td><td>TN / (TN + FP)</td></tr>
+  <tr><td>Accuracy</td><td>(TP + TN) / (TP + TN + FP + FN)</td></tr>
+  <tr><td>MCC</td><td>Matthews Correlation Coefficient</td></tr>
+  <tr><td>F1</td><td>2 × PPV × Sensitivity / (PPV + Sensitivity)</td></tr>
+  <tr><td>PPV</td><td>TP / (TP + FP)</td></tr>
+  <tr><td>NPV</td><td>TN / (TN + FN)</td></tr>
+  <tr><td>G-mean</td><td>√(Sensitivity × Specificity)</td></tr>
+</table>
+
+<h2>11.2 Confidence Interval Methods</h2>
+<table>
+  <tr><th>Method</th><th>Use Case</th></tr>
+  <tr><td><strong>Wilson score</strong> (default)</td><td>Best for small samples, bounded [0,1]</td></tr>
+  <tr><td>Wald</td><td>Normal approximation, simple but can exceed [0,1]</td></tr>
+  <tr><td>Agresti-Coull</td><td>Adjusted Wald with pseudo-counts</td></tr>
+  <tr><td>Clopper-Pearson</td><td>Exact, conservative (widest intervals)</td></tr>
+</table>
+
+<!-- ==================== 12. CONFIG ==================== -->
+<h1 id="config">12. Configuration Reference</h1>
+
+<p>Complete parameter file (<code>param.yaml</code>) with 13 sections:</p>
+
+<pre><code>general:
+  seed: 42              # Random seed for reproducibility
+  algo: ga              # ga|beam|mcmc|aco|sa|ils|lasso
+  language: ter         # bin|ter|pow2|ratio (comma-separated for multi)
+  data_type: prev       # raw|prev|log (comma-separated for multi)
+  fit: auc              # auc|sensitivity|specificity|mcc|f1|npv|ppv|g_mean
+  k_penalty: 0.0001     # Penalty per feature (controls sparsity)
+  thread_number: 4      # Parallel threads
+  gpu: false            # Enable GPU acceleration
+  cv: false             # Enable cross-validation
+
+data:
+  X: data/Xtrain.tsv
+  y: data/Ytrain.tsv
+  Xtest: data/Xtest.tsv
+  ytest: data/Ytest.tsv
+  features_in_rows: true
+  holdout_ratio: 0.2
+  feature_selection_method: wilcoxon
+  feature_minimal_prevalence_pct: 10
+  feature_maximal_adj_pvalue: 0.05
+
+ga:
+  population_size: 5000
+  max_epochs: 200
+  kmin: 1
+  kmax: 200
+
+voting:
+  vote: true
+  method: Majority
+  min_perf: 0.5
+  min_diversity: 5.0</code></pre>
+
+<!-- ==================== 13. TESTS ==================== -->
+<h1 id="tests">13. Testing &amp; CI</h1>
+
+<h2>13.1 Test Suite</h2>
+<table>
+  <tr><th>Category</th><th>Count</th><th>Coverage</th></tr>
+  <tr><td>Unit tests (lib)</td><td>776</td><td>Individual, Population, Data, Utils, CV, Voting, all algorithms</td></tr>
+  <tr><td>Integration (GA e2e)</td><td>24</td><td>Full pipeline on Qin2014 dataset</td></tr>
+  <tr><td>Integration (Beam e2e)</td><td>28</td><td>Beam search on Qin2014</td></tr>
+  <tr><td>Integration (MCMC e2e)</td><td>15</td><td>MCMC posterior + SBS on Qin2014</td></tr>
+  <tr><td>Consistency</td><td>9</td><td>Serialization, cross-version compatibility</td></tr>
+  <tr><td>CSV Report</td><td>5</td><td>Export format validation</td></tr>
+</table>
+
+<h2>13.2 CI Pipeline</h2>
+<p>GitHub Actions (<code>.github/workflows/rust.yml</code>):</p>
+<ol>
+  <li><strong>Lint</strong>: <code>cargo fmt --all --check</code> + <code>cargo clippy --all-targets -D warnings</code></li>
+  <li><strong>Build &amp; Test</strong>: <code>cargo build</code> + <code>cargo test</code> (30-minute timeout)</li>
+</ol>
+
+<!-- ==================== 14. ECOSYSTEM ==================== -->
+<h1 id="ecosystem">14. Ecosystem</h1>
+
+<table>
+  <tr><th>Component</th><th>Language</th><th>Repository</th><th>Purpose</th></tr>
+  <tr><td><strong>gpredomics</strong></td><td>Rust</td><td><a href="https://github.com/predomics/gpredomics">predomics/gpredomics</a></td><td>Core engine (this document)</td></tr>
+  <tr><td><strong>gpredomicspy</strong></td><td>Rust + Python</td><td><a href="https://github.com/predomics/gpredomicspy">predomics/gpredomicspy</a></td><td>Python bindings via PyO3</td></tr>
+  <tr><td><strong>predomicsapp</strong></td><td>Vue.js + FastAPI</td><td><a href="https://github.com/predomics/predomicsapp">predomics/predomicsapp</a></td><td>Web application</td></tr>
+  <tr><td><strong>GpredomicsR</strong></td><td>R</td><td>(coming soon)</td><td>R package wrapper</td></tr>
+</table>
+
+<!-- ==================== 15. BENCHMARK ==================== -->
+<h1 id="benchmark">15. Benchmark Results</h1>
+
+<p>Dataset: <strong>Qin et al. (2014)</strong> — Liver cirrhosis metagenomics. 1,980 features (MSPs), 180 training samples, 30 test samples.</p>
+
+<table>
+  <tr><th></th><th>Algorithm</th><th>Test AUC</th><th>Model Size (k)</th><th>Time</th><th>Type</th></tr>
+  <tr><td>🥇</td><td><strong>Beam Search</strong></td><td><strong>0.947</strong></td><td>8</td><td>0.5s</td><td>Systematic</td></tr>
+  <tr><td>🥈</td><td><strong>LASSO / Elastic Net</strong></td><td>0.882</td><td>70</td><td>0.1s</td><td>Direct optimization</td></tr>
+  <tr><td>🥉</td><td><strong>Simulated Annealing</strong></td><td>0.856</td><td>40</td><td>1s</td><td>Single-solution</td></tr>
+  <tr><td></td><td>Genetic Algorithm</td><td>0.855</td><td>28</td><td>20s</td><td>Population, multi-language</td></tr>
+  <tr><td></td><td>Ant Colony Optimization</td><td>0.853</td><td>55</td><td>15s</td><td>Population, constructive</td></tr>
+  <tr><td></td><td>Iterated Local Search</td><td>0.813</td><td><strong>22</strong></td><td><strong>0.1s</strong></td><td>Single-solution</td></tr>
+  <tr><td></td><td>MCMC / Bayesian</td><td>0.738</td><td>35</td><td>5s</td><td>Bayesian (posterior)</td></tr>
+</table>
+
+<div class="note">
+  <strong>Interpretation:</strong> Beam Search achieves the best test AUC (0.947) with the smallest models (k=8) because it systematically explores all small model combinations. Population-based methods (GA, ACO) find diverse model sets. Single-solution methods (SA, ILS) are the fastest. LASSO provides the mathematical baseline.
+</div>
+
+<!-- ==================== 16. REFERENCES ==================== -->
+<h1 id="references">16. References</h1>
+
+<h3>Methodology</h3>
+<ol>
+  <li>Prifti, E. et al. (2020). Interpretable and accurate prediction models for metagenomics data. <em>GigaScience</em>, 9(3). <a href="https://doi.org/10.1093/gigascience/giaa010">doi:10.1093/gigascience/giaa010</a></li>
+  <li>Qin, N. et al. (2014). Alterations of the human gut microbiome in liver cirrhosis. <em>Nature</em>, 513(7516). <a href="https://doi.org/10.1038/nature13568">doi:10.1038/nature13568</a></li>
+</ol>
+
+<h3>Algorithms</h3>
+<ol start="3">
+  <li>Holland, J.H. (1975). <em>Adaptation in Natural and Artificial Systems</em>. University of Michigan Press.</li>
+  <li>Lowerre, B.T. (1976). <em>The HARPY speech recognition system</em>. CMU.</li>
+  <li>Metropolis, N. et al. (1953). Equations of state calculations by fast computing machines. <em>J. Chem. Phys.</em>, 21(6).</li>
+  <li>George, E.I. &amp; McCulloch, R.E. (1993). Variable selection via Gibbs sampling. <em>JASA</em>, 88(423).</li>
+  <li>Dorigo, M. &amp; Stützle, T. (2004). <em>Ant Colony Optimization</em>. MIT Press.</li>
+  <li>Kirkpatrick, S. et al. (1983). Optimization by simulated annealing. <em>Science</em>, 220(4598).</li>
+  <li>Lourenço, H.R. et al. (2003). Iterated Local Search. In <em>Handbook of Metaheuristics</em>, Springer.</li>
+  <li>Tibshirani, R. (1996). Regression shrinkage and selection via the lasso. <em>JRSS-B</em>, 58(1).</li>
+  <li>Friedman, J. et al. (2010). Regularization paths for generalized linear models via coordinate descent. <em>JSS</em>, 33(1).</li>
+</ol>
+
+<h3>Statistics</h3>
+<ol start="12">
+  <li>Wilson, E.B. (1927). Probable inference, the law of succession, and statistical inference. <em>JASA</em>, 22(158).</li>
+  <li>Agresti, A. &amp; Coull, B.A. (1998). Approximate is better than "exact" for interval estimation of binomial proportions. <em>The American Statistician</em>, 52(2).</li>
+</ol>
+
+<hr style="margin-top: 2cm;">
+<p style="text-align: center; font-size: 8pt; color: var(--text-light);">
+  gpredomics v0.9.0 — Generated March 25, 2026 — <a href="https://github.com/predomics/gpredomics">github.com/predomics/gpredomics</a>
+</p>
+
+</body>
+</html>

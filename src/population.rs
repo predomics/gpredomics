@@ -1003,6 +1003,9 @@ impl Population {
     /// }
     /// ```
     pub fn get_ind_from_hash(&self, hash: u64) -> Option<&Individual> {
+        if self.individuals.is_empty() {
+            return None;
+        }
         assert!(
             self.individuals[0].hash != 0,
             "Hash should be computed to allow Individual selection"
@@ -1351,6 +1354,9 @@ impl Population {
     /// let predictions = population.bayesian_predict(&data);
     /// ```
     pub fn bayesian_predict(&self, data: &Data) -> Vec<f64> {
+        if self.individuals.is_empty() {
+            return vec![2.0; data.sample_len];
+        }
         let mut bayesian_prob: Vec<f64> = vec![0.0; data.sample_len];
         for ind in &self.individuals {
             let sample_prob = ind.evaluate(&data);

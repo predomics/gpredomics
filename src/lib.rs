@@ -128,11 +128,14 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
 
     // Load train data
     let mut data = Data::new();
-    let _ = data.load_data(
+    if let Err(e) = data.load_data(
         &param.data.X.to_string(),
         &param.data.y.to_string(),
         param.data.features_in_rows,
-    );
+    ) {
+        error!("Failed to load data: {}", e);
+        panic!("Failed to load data: {}", e);
+    }
     data.set_classes(param.data.classes.clone());
     if param.data.inverse_classes {
         data.inverse_classes();

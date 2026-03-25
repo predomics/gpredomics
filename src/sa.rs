@@ -19,7 +19,6 @@ use log::{debug, info, warn};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use std::cmp::min;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -151,10 +150,14 @@ pub fn sa(
     }
 
     // Generate initial solution
-    let k_init = min(
-        rng.gen_range(param.sa.k_min..=min(10, param.sa.k_max.max(param.sa.k_min))),
-        data.feature_selection.len(),
-    );
+    let feature_count = data.feature_selection.len();
+    let k_upper = if param.sa.k_max == 0 {
+        10.min(feature_count)
+    } else {
+        param.sa.k_max.min(feature_count)
+    };
+    let k_lower = param.sa.k_min.min(k_upper);
+    let k_init = rng.gen_range(k_lower..=k_upper);
     let mut current = Individual::random_select_k(
         k_init,
         k_init,

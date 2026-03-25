@@ -630,6 +630,9 @@ impl GpuAssay {
     ///
     /// A vector of computed scores as `f32`.
     pub fn compute_scores(&self, models: &Vec<Individual>, threshold: f32) -> Vec<f32> {
+        if models.is_empty() {
+            return vec![];
+        }
         let num_models = models.len();
         let (col_ptrMM, row_idxMM, valMM) = vechash_to_csc(
             &models.iter().map(|i| i.features.clone()).collect(),
@@ -764,7 +767,8 @@ impl GpuAssay {
         }
 
         // 6) Copy from sm_buf to staging
-        encoder.copy_buffer_to_buffer(&self.sm_buf, 0, &self.sm_staging_buf, 0, self.sm_size_bytes);
+        let actual_bytes = (self.samples * num_models * std::mem::size_of::<f32>()) as u64;
+        encoder.copy_buffer_to_buffer(&self.sm_buf, 0, &self.sm_staging_buf, 0, actual_bytes);
 
         self.queue.submit(Some(encoder.finish()));
 

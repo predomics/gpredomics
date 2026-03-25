@@ -33,6 +33,9 @@ fn soft_threshold(z: f64, gamma: f64) -> f64 {
 
 /// Standardize features: subtract mean, divide by std. Returns (means, stds).
 fn standardize(x: &mut Vec<Vec<f64>>) -> (Vec<f64>, Vec<f64>) {
+    if x.is_empty() {
+        return (vec![], vec![]);
+    }
     let n = x[0].len() as f64;
     let p = x.len();
     let mut means = vec![0.0; p];
@@ -64,6 +67,9 @@ fn coordinate_descent(
     tolerance: f64,
     warm_start: Option<&[f64]>,
 ) -> Vec<f64> {
+    if x.is_empty() || y.is_empty() {
+        return vec![];
+    }
     let n = y.len() as f64;
     let p = x.len();
 
@@ -217,6 +223,9 @@ pub fn lasso(
 
     // Generate alpha path (log-spaced from alpha_max to alpha_min)
     let n_alphas = param.lasso.n_alphas;
+    if n_alphas == 0 {
+        return vec![];
+    }
     let log_min = param.lasso.alpha_min.ln();
     let log_max = param.lasso.alpha_max.ln();
     let alphas: Vec<f64> = (0..n_alphas)
