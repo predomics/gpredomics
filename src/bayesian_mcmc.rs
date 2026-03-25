@@ -1349,21 +1349,64 @@ pub fn mcmc(
         mcmc_result = compute_mcmc(&bp, param, &mut rng);
     }
 
-    // Building complete posterior distribution
+    // Build BTR model from posterior probabilities
+    // feature_prob: (P(+1), P(0), P(-1)) → select features with P(active) > 0.5
+    info!("Converting MCMC posterior to BTR model...");
+    let data_type_u8 =
+        individual::data_type(param.general.data_type.split(',').next().unwrap_or("prev"));
+    let mut btr_model = Individual::new();
+    btr_model.language = individual::TERNARY_LANG;
+    btr_model.data_type = data_type_u8;
+    btr_model.epsilon = param.general.data_type_epsilon;
+
+    let mut selected_features = Vec::new();
+    for (&feat_idx, &(p_pos, p_neutral, p_neg)) in &mcmc_result.feature_prob {
+        let p_active = 1.0 - p_neutral;
+        if p_active > 0.5 {
+            let sign: i8 = if p_pos >= p_neg { 1 } else { -1 };
+            btr_model.features.insert(feat_idx, sign);
+            selected_features.push((feat_idx, p_active, sign));
+        }
+    }
+    btr_model.k = btr_model.features.len();
+
+    selected_features.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    info!(
+        "BTR model from posterior: {} features selected (P(active) > 0.5)",
+        btr_model.k
+    );
+    for (idx, p_active, sign) in &selected_features {
+        let name = if *idx < data.features.len() {
+            &data.features[*idx]
+        } else {
+            "?"
+        };
+        debug!(
+            "  {} ({}): P(active)={:.3}, sign={}",
+            name,
+            idx,
+            p_active,
+            if *sign > 0 { "+" } else { "-" }
+        );
+    }
+
+    // Build population with both the BTR model and MCMC models
     let mut pop: Population = mcmc_result.population;
     mcmc_result.population = Population::new();
+    pop.individuals.insert(0, btr_model); // BTR model first
 
-    // Evaluate classification metrics (AUC, sensitivity, specificity, accuracy)
+    // Evaluate classification metrics for all models
     if !pop.individuals.is_empty() {
-        info!("Evaluating MCMC models as classifiers...");
+        info!("Evaluating models as classifiers...");
         pop.fit(&mut data, &mut None, &None, &None, param);
         pop = pop.sort();
         pop.compute_hash();
 
         if let Some(best) = pop.individuals.first() {
             info!(
-                "MCMC best model: AUC={:.4}, accuracy={:.4}, sensitivity={:.4}, specificity={:.4}, k={}",
-                best.cls.auc, best.cls.accuracy, best.cls.sensitivity, best.cls.specificity, best.k
+                "Best model: AUC={:.4}, accuracy={:.4}, sensitivity={:.4}, specificity={:.4}, k={}, lang={}",
+                best.cls.auc, best.cls.accuracy, best.cls.sensitivity, best.cls.specificity,
+                best.k, best.get_language()
             );
         }
     }
