@@ -1350,8 +1350,23 @@ pub fn mcmc(
     }
 
     // Building complete posterior distribution
-    let pop: Population = mcmc_result.population;
+    let mut pop: Population = mcmc_result.population;
     mcmc_result.population = Population::new();
+
+    // Evaluate classification metrics (AUC, sensitivity, specificity, accuracy)
+    if !pop.individuals.is_empty() {
+        info!("Evaluating MCMC models as classifiers...");
+        pop.fit(&mut data, &mut None, &None, &None, param);
+        pop = pop.sort();
+        pop.compute_hash();
+
+        if let Some(best) = pop.individuals.first() {
+            info!(
+                "MCMC best model: AUC={:.4}, accuracy={:.4}, sensitivity={:.4}, specificity={:.4}, k={}",
+                best.cls.auc, best.cls.accuracy, best.cls.sensitivity, best.cls.specificity, best.k
+            );
+        }
+    }
 
     (
         vec![pop],
