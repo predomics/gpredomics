@@ -75,7 +75,7 @@ score = Bacteroides + Faecalibacterium - Enterococcus
 | | Iterated Local Search | 0.813 | **4** | **0.05s** | Single-solution |
 | | Ant Colony Optimization | 0.802 | 52 | 7.1s | Population-based |
 | | Genetic Algorithm | 0.791 | 48 | 0.5s | Population-based |
-| | MCMC / Bayesian | — | 10-50 | 11s | Bayesian |
+| | MCMC / Bayesian | 0.961 | 52 | 11s | Bayesian |
 
 > All models are human-readable: `score = species_A + species_B - species_C ≥ threshold`
 
