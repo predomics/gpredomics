@@ -432,3 +432,16 @@ mod tests {
         assert_eq!(*ind.features.get(&50).unwrap(), 1);
     }
 }
+
+/// Public wrapper for coordinate descent (used by MCMC pre-screening)
+pub fn coordinate_descent_pub(
+    x: &[Vec<f64>],
+    y: &[f64],
+    alpha: f64,
+    l1_ratio: f64,
+    max_iter: usize,
+    tolerance: f64,
+    warm_start: Option<&[f64]>,
+) -> Vec<f64> {
+    coordinate_descent(x, y, alpha, l1_ratio, max_iter, tolerance, warm_start)
+}
