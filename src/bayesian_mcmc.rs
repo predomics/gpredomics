@@ -867,19 +867,19 @@ impl MCMCAnalysisTrace {
 /// * Log posterior mean
 /// * Log evidence
 /// * Index of the dropped feature
-/// * Random number generator state
+/// * Random number generator seed (u64, instead of full RNG clone)
 pub fn run_mcmc_sbs(
     data: &Data,
     param: &Param,
     rng: &mut ChaCha8Rng,
     running: Arc<AtomicBool>,
-) -> Vec<(u32, f64, f64, f64, usize, ChaCha8Rng)> {
+) -> Vec<(u32, f64, f64, f64, usize, u64)> {
     let time = Instant::now();
     let mut data_train = data.clone();
     let nmax = data_train.feature_selection.len() as u32;
     let mut post_mean = Vec::new();
     let mut feature_to_drop = Vec::new();
-    let mut rng_trace = Vec::new();
+    let mut rng_seeds: Vec<u64> = Vec::new();
 
     let data_types: Vec<&str> = param.general.data_type.split(",").collect();
     let data_type = data_types[0];
@@ -890,13 +890,92 @@ pub fn run_mcmc_sbs(
         )
     }
 
-    for n in (param.mcmc.nmin..=nmax).rev() {
-        debug!(
-            "n = {}, (#Features, #Samples) = ({}, {})",
-            n,
-            &data_train.feature_selection.len(),
-            data_train.sample_len
+    // LASSO pre-screen: reduce features to top 50 using coordinate descent
+    let prescreen_target = 50usize;
+    if data_train.feature_selection.len() > prescreen_target {
+        info!(
+            "LASSO pre-screen: {} → {} features...",
+            data_train.feature_selection.len(),
+            prescreen_target
         );
+        let n_samples = data_train.sample_len;
+        let p = data_train.feature_selection.len();
+        let dt = individual::data_type(data_type);
+
+        // Build feature matrix (column-major)
+        let mut x_cols: Vec<Vec<f64>> = Vec::with_capacity(p);
+        for &feat_idx in &data_train.feature_selection {
+            let col: Vec<f64> = (0..n_samples)
+                .map(|s| *data_train.X.get(&(s, feat_idx)).unwrap_or(&0.0))
+                .collect();
+            x_cols.push(col);
+        }
+
+        // Standardize
+        for col in &mut x_cols {
+            let mean = col.iter().sum::<f64>() / n_samples as f64;
+            let var = col.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n_samples as f64;
+            let std = var.sqrt().max(1e-10);
+            for v in col.iter_mut() {
+                *v = (*v - mean) / std;
+            }
+        }
+
+        let y_f64: Vec<f64> = data_train.y.iter().map(|&v| v as f64).collect();
+        let y_mean = y_f64.iter().sum::<f64>() / n_samples as f64;
+        let y_centered: Vec<f64> = y_f64.iter().map(|v| v - y_mean).collect();
+
+        // Run LASSO at moderate alpha to select features
+        let w =
+            crate::lasso::coordinate_descent_pub(&x_cols, &y_centered, 0.01, 1.0, 500, 1e-4, None);
+
+        // Rank features by |coefficient|
+        let mut ranked: Vec<(usize, f64)> = data_train
+            .feature_selection
+            .iter()
+            .enumerate()
+            .map(|(j, &feat_idx)| (feat_idx, w.get(j).copied().unwrap_or(0.0).abs()))
+            .collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Keep top N features
+        let kept: Vec<usize> = ranked
+            .iter()
+            .take(prescreen_target)
+            .map(|(idx, _)| *idx)
+            .collect();
+
+        let removed = data_train.feature_selection.len() - kept.len();
+        data_train.feature_selection = kept;
+        info!(
+            "LASSO pre-screen complete: kept {}, removed {} features",
+            data_train.feature_selection.len(),
+            removed
+        );
+    }
+
+    let nmax = data_train.feature_selection.len() as u32;
+    let total_steps = (nmax as usize).saturating_sub(param.mcmc.nmin as usize);
+    let mut step = 0usize;
+    let n_chains = param.general.thread_number.max(1) as usize;
+
+    info!(
+        "SBS: {} → {} features ({} steps), {} parallel chain(s), n_iter={}",
+        nmax, param.mcmc.nmin, total_steps, n_chains, param.mcmc.n_iter
+    );
+
+    let mut n = nmax;
+    while n >= param.mcmc.nmin as u32 && n > 0 {
+        let n_current = data_train.feature_selection.len();
+
+        // Adaptive n_iter: use fewer iterations when many features remain
+        let adaptive_n_iter = if n_current > 50 {
+            (param.mcmc.n_iter as f64 * 50.0 / n_current as f64).max(100.0) as usize
+        } else {
+            param.mcmc.n_iter
+        };
+        let adaptive_n_burn = adaptive_n_iter / 2;
+
         let bp = BayesPred::new(
             &data_train,
             param.mcmc.lambda,
@@ -904,70 +983,137 @@ pub fn run_mcmc_sbs(
             param.general.data_type_epsilon,
         );
 
-        rng_trace.push(rng.clone());
-        let res = compute_mcmc(&bp, param, rng);
+        // Save seed for reproducibility (instead of full RNG clone)
+        let step_seed: u64 = rng.gen();
+        rng_seeds.push(step_seed);
+
+        // Run parallel chains
+        let mut adapted_param = param.clone();
+        adapted_param.mcmc.n_iter = adaptive_n_iter;
+        adapted_param.mcmc.n_burn = adaptive_n_burn;
+
+        let res = if n_chains > 1 {
+            // Multiple parallel chains — combine posteriors
+            use rayon::prelude::*;
+            let chain_seeds: Vec<u64> = (0..n_chains)
+                .map(|i| step_seed.wrapping_add(i as u64))
+                .collect();
+            let chain_results: Vec<MCMCAnalysisTrace> = chain_seeds
+                .par_iter()
+                .map(|&seed| {
+                    let mut chain_rng = ChaCha8Rng::seed_from_u64(seed);
+                    compute_mcmc(&bp, &adapted_param, &mut chain_rng)
+                })
+                .collect();
+            // Combine: use the chain with the highest posterior mean
+            chain_results
+                .into_iter()
+                .max_by(|a, b| {
+                    a.post_mean
+                        .partial_cmp(&b.post_mean)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap()
+        } else {
+            let mut step_rng = ChaCha8Rng::seed_from_u64(step_seed);
+            compute_mcmc(&bp, &adapted_param, &mut step_rng)
+        };
 
         post_mean.push(res.post_mean);
 
-        // Drop neutral feature but keep it
+        // Batch elimination: drop multiple features at once when many remain
+        let batch_size = if n_current > 50 { 5usize } else { 1usize };
         let mut feature_vec: Vec<_> = res.feature_prob.iter().collect();
-        feature_vec.sort_by(|a, b| a.0.cmp(b.0));
+        feature_vec.sort_by(|a, b| {
+            b.1 .1
+                .partial_cmp(&a.1 .1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let (idx, (_, neutral_prob, _)) = feature_vec
+        let features_to_drop_now: Vec<usize> = feature_vec
             .iter()
-            .max_by(|(_, (_, neutral1, _)), (_, (_, neutral2, _))| neutral1.total_cmp(neutral2))
-            .map(|(idx, &prob)| (*idx, prob))
-            .unwrap_or_else(|| panic!("Couldn't find maximum neutral probability"));
+            .take(batch_size.min(n_current.saturating_sub(param.mcmc.nmin as usize)))
+            .map(|(idx, _)| **idx)
+            .collect();
 
-        let feature_name = &data_train.features[*idx];
-        debug!(
-            "Feature {} has maximum neutral probability: {}",
-            feature_name, neutral_prob
-        );
+        for &idx in &features_to_drop_now {
+            let feature_name = &data_train.features[idx];
+            debug!(
+                "Dropping feature: {} (neutral_prob={:.3})",
+                feature_name,
+                res.feature_prob.get(&idx).map(|p| p.1).unwrap_or(0.0)
+            );
+            data_train
+                .feature_selection
+                .retain(|keep_idx| *keep_idx != idx);
+            feature_to_drop.push(idx);
+        }
 
-        data_train
-            .feature_selection
-            .retain(|keep_idx| keep_idx != idx);
+        step += 1;
+        let elapsed_so_far = time.elapsed();
+        let eta = if step > 0 {
+            let secs_per_step = elapsed_so_far.as_secs_f64() / step as f64;
+            let remaining_steps = (data_train.feature_selection.len() as usize)
+                .saturating_sub(param.mcmc.nmin as usize)
+                / batch_size.max(1);
+            remaining_steps as f64 * secs_per_step
+        } else {
+            0.0
+        };
 
         info!(
-            "[{}/{}] | Dropping feature: {}",
-            data.feature_selection.len() - (n as usize),
-            data.feature_selection.len() - (param.mcmc.nmin) as usize,
-            feature_name
+            "[{}/{}] n={} → {} (dropped {}) | n_iter={} | {:.1}s elapsed, ~{:.0}s remaining",
+            step,
+            total_steps,
+            n_current,
+            data_train.feature_selection.len(),
+            features_to_drop_now.len(),
+            adaptive_n_iter,
+            elapsed_so_far.as_secs_f64(),
+            eta
         );
-        feature_to_drop.push(idx.clone());
 
-        // Stop SBS loop if user want to safe quit from this step
+        n = data_train.feature_selection.len() as u32;
+
         if !running.load(Ordering::Relaxed) {
-            info!("Signal received");
+            info!("Signal received, stopping SBS");
             break;
         }
     }
 
     let elapsed = time.elapsed();
     info!(
-        "SBS computed {:?} steps in {:.2?}",
-        post_mean.len(),
-        elapsed
+        "SBS computed {} steps in {:.2?} ({} features → {})",
+        step,
+        elapsed,
+        nmax,
+        data_train.feature_selection.len()
     );
 
     // Calculate metrics
-    let nn: Vec<u32> = (param.mcmc.nmin..=nmax).rev().collect();
+    let nn: Vec<u32> = (0..post_mean.len()).map(|i| nmax - i as u32).collect();
     let log_post_mean: Vec<f64> = post_mean.iter().map(|v| v.log10()).collect();
-    let n_classes = 3.0 as f64;
+    let n_classes = 3.0_f64;
     let log_evidence: Vec<f64> = nn
         .iter()
         .zip(log_post_mean.iter())
         .map(|(n, lpm)| lpm - (*n as f64) * n_classes.log10())
         .collect();
 
+    // Pad seeds to match length
+    while rng_seeds.len() < nn.len() {
+        rng_seeds.push(0);
+    }
+
+    let result_len = post_mean.len();
     nn.into_iter()
         .zip(post_mean)
         .zip(log_post_mean)
         .zip(log_evidence)
-        .zip(feature_to_drop)
-        .zip(rng_trace)
-        .map(|(((((n, pm), lpm), le), idx), rng)| (n, pm, lpm, le, idx, rng))
+        .zip(feature_to_drop.into_iter().chain(std::iter::repeat(0)))
+        .zip(rng_seeds)
+        .map(|(((((n, pm), lpm), le), idx), seed)| (n, pm, lpm, le, idx, seed))
+        .take(result_len)
         .collect()
 }
 
@@ -1117,8 +1263,8 @@ pub fn mcmc(
     warn!("MCMC algorithm is still in beta!");
     warn!(" - results cannot be guaranteed,");
     warn!(" - isn't GPU-compatible,");
-    warn!(" - isn't multi-threaded,");
     warn!(" - contains only one 'GENERIC' language.");
+    info!("MCMC optimizations: parallel chains, adaptive n_iter, batch SBS elimination");
 
     // Each Gpredomics function currently handles class 2 as unknown
     // As MCMC does not, remove unknown sample before analysis
@@ -1213,7 +1359,7 @@ pub fn mcmc(
 /// The MCMC results for the best model configuration.
 pub fn get_best_mcmc_sbs(
     data: &Data,
-    results: &[(u32, f64, f64, f64, usize, ChaCha8Rng)],
+    results: &[(u32, f64, f64, f64, usize, u64)],
     param: &Param,
 ) -> MCMCAnalysisTrace {
     let best_models = results
@@ -1228,7 +1374,7 @@ pub fn get_best_mcmc_sbs(
     let features_to_drop: Vec<usize> = results
         .iter()
         .filter(|(n, _, _, _, _, _)| *n > n_best)
-        .map(|(_, _, _, _, idx, _)| idx.clone())
+        .map(|(_, _, _, _, idx, _)| *idx)
         .collect();
 
     let mut data_filtered = data.clone();
@@ -1263,7 +1409,7 @@ pub fn get_best_mcmc_sbs(
         individual::data_type(data_type),
         param.general.data_type_epsilon,
     );
-    let rng = &mut best_models.5.clone();
+    let rng = &mut ChaCha8Rng::seed_from_u64(best_models.5);
     let res: MCMCAnalysisTrace = compute_mcmc(&bp, param, rng);
 
     let elapsed = now.elapsed();
