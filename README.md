@@ -67,15 +67,16 @@ score = Bacteroides + Faecalibacterium - Enterococcus
 
 > Qin2014 cirrhosis dataset — 1,980 features, 180 samples, ternary:prevalence
 
-| | Algorithm | Test AUC | Model Size (k) | Time | Type |
-|---|-----------|:-------:|:--------------:|:----:|------|
-| 🥇 | **Beam Search** | **0.947** | 8 | 0.5s | Systematic |
-| 🥈 | **LASSO / Elastic Net** | 0.882 | 70 | 0.1s | Direct optimization |
-| 🥉 | **Simulated Annealing** | 0.856 | 40 | 1s | Single-solution |
-| | Genetic Algorithm | 0.855 | 28 | 20s | Population, multi-language |
-| | Ant Colony Optimization | 0.853 | 55 | 15s | Population, constructive |
-| | Iterated Local Search | 0.813 | **22** | **0.1s** | Single-solution |
-| | MCMC / Bayesian | 0.738 | 35 | 5s | Bayesian (overfits with more iters) |
+| | Algorithm | Test AUC | Train AUC | k | FBM | Time | Type |
+|---|-----------|:-------:|:---------:|:--:|:---:|:----:|------|
+| 🥇 | **Beam Search** | **0.923** | 0.936 | **8** | 23 | 0.3s | Systematic, exhaustive |
+| 🥈 | **Simulated Annealing** | **0.920** | 0.915 | 46 | 2 | 0.6s | Single-solution, perturbative |
+| 🥉 | **LASSO / Elastic Net** | 0.882 | 0.957 | 70 | 1 | **0.1s** | Direct optimization |
+| | Iterated Local Search | 0.880 | 0.996 | 38 | 1 | 0.3s | Single-solution, greedy |
+| | Genetic Algorithm | 0.855 | 1.000 | 28 | **240** | 12.5s | Population, multi-language |
+| | Ant Colony Optimization | 0.800 | 0.986 | 55 | 5 | 6.7s | Population, constructive |
+| | MCMC (SBS) | 0.794 | 0.918 | 51 | 25 | 3.2s | Bayesian, backward selection |
+| | MCMC (Gibbs) | 0.679 | 0.914 | **14** | 18 | 2.4s | Bayesian, joint variable selection |
 
 > All models are human-readable: `score = species_A + species_B - species_C ≥ threshold`
 
