@@ -155,8 +155,17 @@ fn main() {
         running.load(Ordering::Relaxed)
     );
 
-    // Suppress default panic backtrace — errors are already logged via error!() macro
-    std::panic::set_hook(Box::new(|_| {}));
+    // Only suppress backtrace for known user-facing panics
+    // All other panics print normally for debugging
+    std::panic::set_hook(Box::new(|info| {
+        if let Some(msg) = info.payload().downcast_ref::<String>() {
+            if msg.contains("No feature has been selected") || msg.contains("Failed to load") {
+                return; // Known user error, already logged
+            }
+        }
+        // Default: print the panic for debugging
+        eprintln!("{}", info);
+    }));
 
     let thread_param = param.clone();
     let handle = thread::spawn(move || gpredomics::run(&thread_param, running_clone));

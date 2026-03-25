@@ -806,22 +806,6 @@ pub fn remove_out_of_bounds(children: &mut Population, k_min: usize, k_max: usiz
     removed_count
 }
 
-// pub fn remove_inefficient(parents: &mut Population) -> u32 {
-//     let mut inefficient_parents: u32 = 0;
-//     let mut valid_individuals: Vec<Individual> = Vec::new();
-//     let individuals = mem::take(&mut parents.individuals);
-//     for individual in individuals.into_iter() {
-//         if individual.cls.specificity > 0.4 && individual.cls.sensitivity > 0.4 {
-//             valid_individuals.push(individual);
-//         } else {
-//             inefficient_parents += 1;
-//         }
-//     }
-//     parents.individuals = valid_individuals;
-//     inefficient_parents
-
-// }
-
 /// Mutates ternary individuals by changing signs, removing variables, or adding new variables
 ///
 /// # Arguments

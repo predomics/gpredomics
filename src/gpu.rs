@@ -29,20 +29,13 @@ fn hashmap_to_csr(
     rows: usize,
 ) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
     // 1) Count nonzeros in each row
-    //    row_counts[r] = how many entries in row r
-    //let R=row_selection.len();
     let mut row_counts = vec![0u32; rows];
 
     for (r, raw_c) in mat_map.keys() {
-        // Optional boundary check (comment out if not desired):
-        // if r >= R || c >= C {
-        //     panic!("(r, c) = ({}, {}) out of bounds for R={}, C={}", r, c, R, C);
-        // }
         if column_selection.contains_key(raw_c) {
             row_counts[*r] += 1;
         }
     }
-    //println!("row count {:?}",row_counts);
 
     // 2) Build row_ptr via prefix sums. row_ptr[r+1] = row_ptr[r] + row_counts[r].
     //    row_ptr[R] will hold the total number of nonzeros across all rows.
@@ -96,22 +89,6 @@ fn hashmap_to_csr(
         }
     }
 
-    //println!("csr matrix");
-    //for r in 0..rows {
-    //    let mut i: usize=row_ptr[r] as usize;
-    //    println!("{}: {}",r,
-    //        (0..row_ptr[r+1]-row_ptr[r]).map( |c| {
-    //        if c<col_idx[i] {
-    //            ".".to_string()
-    //        }
-    //        else {
-    //            i+=1;
-    //            val[i-1].to_string()
-    //        }
-    //    }).collect::<Vec<String>>().join(" "));
-    //}
-
-    //println!("row ptr {:?}\ncol idx {:?}\nval {:?}", row_ptr, col_idx, val);
     (row_ptr, col_idx, val)
 }
 
@@ -153,10 +130,6 @@ fn vechash_to_csc(
     // 4) Fill row_idxB and valB
     for (c, col_map) in mat_cols.iter().enumerate() {
         for (&raw_row, &val_f64) in col_map.iter() {
-            // optional boundary check
-            //if (row_u8 as usize) >= R {
-            //    panic!("Row index {} out of bounds for {} rows", row_u8, R);
-            //}
             let row_u32 = row_selection[&raw_row] as u32;
 
             // insertion position for this column
@@ -194,7 +167,6 @@ fn vechash_to_csc(
         }
     }
 
-    //println!("col ptr {:?}\nrow idx {:?}\nval {:?}", col_ptr, row_idx, val);
     (col_ptr, row_idx, val)
 }
 

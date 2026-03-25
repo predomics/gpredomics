@@ -1319,6 +1319,14 @@ impl Jury {
         let inconsistency_map: std::collections::HashMap<usize, f64> =
             inconsistency_list.iter().cloned().collect();
 
+        // Precompute expert predictions once to avoid re-evaluating per sample
+        let expert_predictions: Vec<Vec<u8>> = self
+            .experts
+            .individuals
+            .iter()
+            .map(|expert| expert.evaluate_class(data))
+            .collect();
+
         let nb_samples_to_show = if *complete_display {
             data.sample_len
         } else {
@@ -1361,7 +1369,8 @@ impl Jury {
                 let sample_name = &data.samples[sample_idx];
                 let real_class = data.y[sample_idx];
                 let predicted_class = predictions[sample_idx];
-                let expert_votes = self.display_expert_votes_for_sample(data, sample_idx);
+                let expert_votes =
+                    self.display_expert_votes_for_sample(data, sample_idx, &expert_predictions);
                 let inconsistency = inconsistency_map.get(&sample_idx).unwrap_or(&0.0);
                 let consistency_percent = (1.0 - inconsistency) * 100.0;
 
@@ -1391,7 +1400,8 @@ impl Jury {
                 let sample_name = &data.samples[sample_idx];
                 let real_class = data.y[sample_idx];
                 let predicted_class = predictions[sample_idx];
-                let expert_votes = self.display_expert_votes_for_sample(data, sample_idx);
+                let expert_votes =
+                    self.display_expert_votes_for_sample(data, sample_idx, &expert_predictions);
                 let inconsistency = inconsistency_map.get(&sample_idx).unwrap_or(&0.0);
                 let consistency_percent = (1.0 - inconsistency) * 100.0;
 
@@ -1421,7 +1431,8 @@ impl Jury {
                 let sample_name = &data.samples[sample_idx];
                 let real_class = data.y[sample_idx];
                 let predicted_class = predictions[sample_idx];
-                let expert_votes = self.display_expert_votes_for_sample(data, sample_idx);
+                let expert_votes =
+                    self.display_expert_votes_for_sample(data, sample_idx, &expert_predictions);
                 let inconsistency = inconsistency_map.get(&sample_idx).unwrap_or(&0.0);
                 let consistency_percent = (1.0 - inconsistency) * 100.0;
 
@@ -1674,11 +1685,16 @@ impl Jury {
     /// # Returns
     ///
     /// A formatted string containing the votes of each expert for the specified sample.
-    fn display_expert_votes_for_sample(&self, data: &Data, sample_idx: usize) -> String {
+    fn display_expert_votes_for_sample(
+        &self,
+        data: &Data,
+        sample_idx: usize,
+        expert_predictions: &[Vec<u8>],
+    ) -> String {
         let mut output = String::new();
 
-        for (_, expert) in self.experts.individuals.iter().enumerate() {
-            let predictions = expert.evaluate_class(data);
+        for (expert_i, expert) in self.experts.individuals.iter().enumerate() {
+            let predictions = &expert_predictions[expert_i];
 
             if sample_idx < predictions.len() {
                 let vote = predictions[sample_idx];

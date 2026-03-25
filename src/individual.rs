@@ -1224,7 +1224,7 @@ impl Individual {
             match data.y[i] {
                 1 => {
                     // Positive class
-                    if pred > self.cls.threshold {
+                    if pred >= self.cls.threshold {
                         tp += 1;
                     } else {
                         fn_count += 1;
@@ -1232,7 +1232,7 @@ impl Individual {
                 }
                 0 => {
                     // Negative class
-                    if pred > self.cls.threshold {
+                    if pred >= self.cls.threshold {
                         fp += 1;
                     } else {
                         tn += 1;
@@ -1926,18 +1926,34 @@ impl Individual {
 
                 let seeds = feature_seeds.get(&feature_idx).expect("Seeds required");
 
+                // Clone data.X once (not per permutation), then shuffle
+                // the feature column in-place and restore after each evaluation.
+                let mut x_permuted = data.X.clone();
+
+                // Save original column values for restoration
+                let original_col: Vec<(usize, f64)> = (0..data.sample_len)
+                    .filter_map(|i| x_permuted.get(&(i, feature_idx)).map(|&v| (i, v)))
+                    .collect();
+
                 for &seed in seeds.iter().take(permutations) {
                     let mut permutation_rng = ChaCha8Rng::seed_from_u64(seed);
-                    let mut X_permuted = data.X.clone();
                     shuffle_row(
-                        &mut X_permuted,
+                        &mut x_permuted,
                         data.sample_len,
                         feature_idx,
                         &mut permutation_rng,
                     );
-                    let scores = self.evaluate_from_features(&X_permuted, data.sample_len);
+                    let scores = self.evaluate_from_features(&x_permuted, data.sample_len);
                     let permuted_auc = compute_auc_from_value(&scores, &data.y);
                     permuted_auc_sum += permuted_auc;
+
+                    // Restore original column values before next permutation
+                    for i in 0..data.sample_len {
+                        x_permuted.remove(&(i, feature_idx));
+                    }
+                    for &(i, v) in &original_col {
+                        x_permuted.insert((i, feature_idx), v);
+                    }
                 }
 
                 let mean_permuted_auc = permuted_auc_sum / permutations as f64;
@@ -2578,10 +2594,6 @@ impl fmt::Debug for Individual {
         )
     }
 }
-
-// Safe implementation of Send and Sync
-unsafe impl Send for Individual {}
-unsafe impl Sync for Individual {}
 
 /// When a parent has a child of a different language, do we need to convert the gene values ?
 pub fn needs_conversion(parent_language: u8, child_language: u8) -> bool {

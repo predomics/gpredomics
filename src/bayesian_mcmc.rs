@@ -793,84 +793,71 @@ impl MCMCAnalysisTrace {
         }
         ImportanceCollection { importances }
     }
+}
 
-    //     pub fn import_from_files(outdir: &str) -> std::io::Result<MCMCAnalysisTrace> {
-    //         use std::fs::File;
-    //         use polars::prelude::*;
+//-----------------------------------------------------------------------------
+// Helper: LASSO pre-screen
+//-----------------------------------------------------------------------------
 
-    //         let p_mean_path = format!("{}/P_mean.tsv", outdir);
-    //         let df_p_mean = CsvReader::from_path(&p_mean_path)?
-    //             .with_separator(b'\t')
-    //             .has_header(true)
-    //             .finish()?;
+/// Reduces the feature set to the top `target` features using LASSO coordinate descent.
+/// Standardizes feature columns, centres the response, runs coordinate descent, and
+/// keeps the features with the largest absolute coefficients.
+fn lasso_prescreen(data: &mut Data, target: usize) {
+    if data.feature_selection.len() <= target {
+        return;
+    }
+    info!(
+        "LASSO pre-screen: {} → {} features...",
+        data.feature_selection.len(),
+        target
+    );
+    let n_samples = data.sample_len;
+    let p = data.feature_selection.len();
 
-    //         let beta_path = format!("{}/betas.tsv", outdir);
-    //         let df_betas = CsvReader::from_path(&beta_path)?
-    //             .with_separator(b'\t')
-    //             .has_header(true)
-    //             .finish()?;
+    // Build feature matrix (column-major)
+    let mut x_cols: Vec<Vec<f64>> = Vec::with_capacity(p);
+    for &feat_idx in &data.feature_selection {
+        let col: Vec<f64> = (0..n_samples)
+            .map(|s| *data.X.get(&(s, feat_idx)).unwrap_or(&0.0))
+            .collect();
+        x_cols.push(col);
+    }
 
-    //         let models_path = format!("{}/models.tsv", outdir);
-    //         let df_models = CsvReader::from_path(&models_path)?
-    //             .with_separator(b'\t')
-    //             .has_header(true)
-    //             .finish()?;
+    // Standardize
+    for col in &mut x_cols {
+        let mean = col.iter().sum::<f64>() / n_samples as f64;
+        let var = col.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n_samples as f64;
+        let std = var.sqrt().max(1e-10);
+        for v in col.iter_mut() {
+            *v = (*v - mean) / std;
+        }
+    }
 
-    //         let feature_names: Vec<String> = df_models.get_column_names()
-    //             .into_iter()
-    //             .map(|s| s.to_string())
-    //             .collect();
+    let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
+    let y_mean = y_f64.iter().sum::<f64>() / n_samples as f64;
+    let y_centered: Vec<f64> = y_f64.iter().map(|v| v - y_mean).collect();
 
-    //         let mut beta_trace: Vec<[f64; 3]> = Vec::new();
-    //         let a_col = df_betas.column("a")?.f64()?.to_vec();
-    //         let b_col = df_betas.column("b")?.f64()?.to_vec();
-    //         let c_col = df_betas.column("c")?.f64()?.to_vec();
+    // Run LASSO at moderate alpha to select features
+    let w = crate::lasso::coordinate_descent_pub(&x_cols, &y_centered, 0.01, 1.0, 500, 1e-4, None);
 
-    //         for i in 0..a_col.len() {
-    //             beta_trace.push([
-    //                 a_col[i].unwrap_or(0.0),
-    //                 b_col[i].unwrap_or(0.0),
-    //                 c_col[i].unwrap_or(0.0)
-    //             ]);
-    //         }
+    // Rank features by |coefficient|
+    let mut ranked: Vec<(usize, f64)> = data
+        .feature_selection
+        .iter()
+        .enumerate()
+        .map(|(j, &feat_idx)| (feat_idx, w.get(j).copied().unwrap_or(0.0).abs()))
+        .collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-    //         let mut population = Population::new();
-    //         for row_idx in 0..df_models.height() {
-    //             let mut individual = Individual::new();
-
-    //             for (col_idx, col_name) in feature_names.iter().enumerate() {
-    //                 let value = df_models.get(row_idx, col_idx)?;
-    //                 if let AnyValue::Int32(coef) = value {
-    //                     if coef != 0 {
-    //                         individual.features.insert(col_idx, coef as i8);
-    //                     }
-    //                 }
-    //             }
-
-    //             population.individuals.push(individual);
-    //         }
-
-    //         let mut trace = MCMCAnalysisTrace::new(
-    //             feature_names.len(),
-    //             true,
-    //             Some(feature_names)
-    //         );
-
-    //         trace.beta_trace = Some(beta_trace);
-    //         trace.population_trace = Some(population);
-
-    //         // To add : df_means_vars
-    //         // if let Ok(df_means_vars) = CsvReader::from_path(format!("{}/means_vars.tsv", outdir))
-    //         //     .with_separator(b'\t')
-    //         //     .has_header(true)
-    //         //     .finish() {
-
-    //         //
-    //         //
-    //         // }
-
-    //         Ok(trace)
-    //     }
+    // Keep top N features
+    let kept: Vec<usize> = ranked.iter().take(target).map(|(idx, _)| *idx).collect();
+    let removed = data.feature_selection.len() - kept.len();
+    data.feature_selection = kept;
+    info!(
+        "LASSO pre-screen complete: kept {}, removed {} features",
+        data.feature_selection.len(),
+        removed
+    );
 }
 
 //-----------------------------------------------------------------------------
@@ -917,69 +904,7 @@ pub fn run_mcmc_sbs(
         )
     }
 
-    // LASSO pre-screen: reduce features to top 50 using coordinate descent
-    let prescreen_target = 50usize;
-    if data_train.feature_selection.len() > prescreen_target {
-        info!(
-            "LASSO pre-screen: {} → {} features...",
-            data_train.feature_selection.len(),
-            prescreen_target
-        );
-        let n_samples = data_train.sample_len;
-        let p = data_train.feature_selection.len();
-        let _dt = individual::data_type(data_type);
-
-        // Build feature matrix (column-major)
-        let mut x_cols: Vec<Vec<f64>> = Vec::with_capacity(p);
-        for &feat_idx in &data_train.feature_selection {
-            let col: Vec<f64> = (0..n_samples)
-                .map(|s| *data_train.X.get(&(s, feat_idx)).unwrap_or(&0.0))
-                .collect();
-            x_cols.push(col);
-        }
-
-        // Standardize
-        for col in &mut x_cols {
-            let mean = col.iter().sum::<f64>() / n_samples as f64;
-            let var = col.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n_samples as f64;
-            let std = var.sqrt().max(1e-10);
-            for v in col.iter_mut() {
-                *v = (*v - mean) / std;
-            }
-        }
-
-        let y_f64: Vec<f64> = data_train.y.iter().map(|&v| v as f64).collect();
-        let y_mean = y_f64.iter().sum::<f64>() / n_samples as f64;
-        let y_centered: Vec<f64> = y_f64.iter().map(|v| v - y_mean).collect();
-
-        // Run LASSO at moderate alpha to select features
-        let w =
-            crate::lasso::coordinate_descent_pub(&x_cols, &y_centered, 0.01, 1.0, 500, 1e-4, None);
-
-        // Rank features by |coefficient|
-        let mut ranked: Vec<(usize, f64)> = data_train
-            .feature_selection
-            .iter()
-            .enumerate()
-            .map(|(j, &feat_idx)| (feat_idx, w.get(j).copied().unwrap_or(0.0).abs()))
-            .collect();
-        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-        // Keep top N features
-        let kept: Vec<usize> = ranked
-            .iter()
-            .take(prescreen_target)
-            .map(|(idx, _)| *idx)
-            .collect();
-
-        let removed = data_train.feature_selection.len() - kept.len();
-        data_train.feature_selection = kept;
-        info!(
-            "LASSO pre-screen complete: kept {}, removed {} features",
-            data_train.feature_selection.len(),
-            removed
-        );
-    }
+    lasso_prescreen(&mut data_train, 50);
 
     let nmax = data_train.feature_selection.len() as u32;
     let total_steps = (nmax as usize).saturating_sub(param.mcmc.nmin as usize);
@@ -1514,60 +1439,7 @@ pub fn mcmc(
     let mut mcmc_result;
     if param.mcmc.method == "gibbs" {
         // Gibbs variable selection: joint optimization over feature space
-        // LASSO pre-screen still applies to reduce candidates
-        let prescreen_target = 50usize;
-        if data.feature_selection.len() > prescreen_target {
-            info!(
-                "LASSO pre-screen: {} → {} features...",
-                data.feature_selection.len(),
-                prescreen_target
-            );
-            let n_samples = data.sample_len;
-            let p = data.feature_selection.len();
-            let mut x_cols: Vec<Vec<f64>> = Vec::with_capacity(p);
-            for &feat_idx in &data.feature_selection {
-                let col: Vec<f64> = (0..n_samples)
-                    .map(|s| *data.X.get(&(s, feat_idx)).unwrap_or(&0.0))
-                    .collect();
-                x_cols.push(col);
-            }
-            for col in &mut x_cols {
-                let mean = col.iter().sum::<f64>() / n_samples as f64;
-                let var = col.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n_samples as f64;
-                let std = var.sqrt().max(1e-10);
-                for v in col.iter_mut() {
-                    *v = (*v - mean) / std;
-                }
-            }
-            let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
-            let y_mean = y_f64.iter().sum::<f64>() / n_samples as f64;
-            let y_centered: Vec<f64> = y_f64.iter().map(|v| v - y_mean).collect();
-            let w = crate::lasso::coordinate_descent_pub(
-                &x_cols,
-                &y_centered,
-                0.01,
-                1.0,
-                500,
-                1e-4,
-                None,
-            );
-            let mut ranked: Vec<(usize, f64)> = data
-                .feature_selection
-                .iter()
-                .enumerate()
-                .map(|(j, &feat_idx)| (feat_idx, w.get(j).copied().unwrap_or(0.0).abs()))
-                .collect();
-            ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-            data.feature_selection = ranked
-                .iter()
-                .take(prescreen_target)
-                .map(|(idx, _)| *idx)
-                .collect();
-            info!(
-                "LASSO pre-screen complete: kept {} features",
-                data.feature_selection.len()
-            );
-        }
+        lasso_prescreen(&mut data, 50);
 
         cinfo!(
             param.general.display_colorful,

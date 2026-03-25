@@ -1183,9 +1183,11 @@ impl Data {
         if self.feature_len > 10000 {
             warn!("Large dataset. Removing non-selected features from memory to speed up...");
 
+            let selected: std::collections::HashSet<usize> =
+                self.feature_selection.iter().cloned().collect();
             let mut new_x = HashMap::new();
             for (&(sample, feature), &value) in &self.X {
-                if self.feature_selection.contains(&feature) {
+                if selected.contains(&feature) {
                     new_x.insert((sample, feature), value);
                 }
             }

@@ -57,28 +57,6 @@ pub enum ImportanceAggregation {
     median,
 }
 
-// To-do: re-implement these structs if needed later
-// pub struct FeatureImportance {
-//     // pub scope: ImportanceScope,
-//     pub mda: Vec<Importance>, // cv/pop level
-//     pub prevalence_pop_pct: Vec<f64>, // cv/pop level
-//     pub coefficient_sign_pct: Vec<(f64, f64, f64)>, // cv/pop level
-//     pub coefficient_abs: Vec<Importance>, // cv/pop level
-//     pub posterior_prob: Vec<(f64, f64, f64)>, // cv?/pop level
-//     pub prevalence_cv_pct: Vec<Importance>,  // cv level
-// }
-
-// pub struct FeatureImportanceAgg {
-//     // pub scope: ImportanceScope,
-//     pub mda: Vec<Importance>, // agg pop level
-//     pub prevalence_pop_pct: Vec<f64>, // agg pop level
-//     pub coefficient_sign_pct: Vec<(f64, f64, f64)>, // agg pop level
-//     pub coefficient_abs: Vec<Importance>, // agg pop level
-//     pub posterior_prob: Vec<(f64, f64, f64)>, // cv?/pop level
-
-//     pub prevalence_cv_pct: Vec<Importance>,  // cv level
-// }
-
 /// Feature importance complete information
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Importance {
@@ -232,7 +210,11 @@ impl ImportanceCollection {
     pub fn get_top(&self, pct: f64) -> ImportanceCollection {
         assert!((0.0..=1.0).contains(&pct));
         let mut subset = self.importances.clone();
-        subset.sort_unstable_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap());
+        subset.sort_unstable_by(|a, b| {
+            b.importance
+                .partial_cmp(&a.importance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let keep = ((subset.len() as f64 * pct).ceil() as usize).max(1);
         subset.truncate(keep);
         ImportanceCollection {
@@ -520,7 +502,9 @@ impl Experiment {
             let final_hashes: std::collections::HashSet<_> =
                 final_pop.individuals.iter().map(|i| i.hash).collect();
 
-            assert_eq!(fbm_hashes, final_hashes, "Something is wrong with the Experiment: reconstructed CV based FBM should be the same as final population");
+            if fbm_hashes != final_hashes {
+                warn!("Reconstructed CV FBM differs from final population — display may be inaccurate");
+            }
             text.push_str(&format!(
                 "{}\n",
                 crate::utils::strip_ansi_if_needed(
@@ -796,7 +780,7 @@ impl Experiment {
             return Ok(experiment);
         }
 
-        Err("Unable to load the experience".into())
+        Err("Unable to load the experiment".into())
     }
 
     /// Computes voting results using the final population.
