@@ -382,7 +382,7 @@ impl Jury {
 
         let (pred_classes, scores) = self.predict(data);
 
-        let filtered_data: Vec<(f64, u8, u8)> = scores
+        let filtered_data: Vec<(f64, u8, f64)> = scores
             .iter()
             .zip(pred_classes.iter())
             .zip(data.y.iter())
@@ -398,7 +398,7 @@ impl Jury {
         let rejection_rate = self.compute_rejection_rate(&pred_classes);
 
         if !filtered_data.is_empty() {
-            let (scores_filtered, pred_filtered, true_filtered): (Vec<f64>, Vec<u8>, Vec<u8>) =
+            let (scores_filtered, pred_filtered, true_filtered): (Vec<f64>, Vec<u8>, Vec<f64>) =
                 filtered_data.into_iter().fold(
                     (Vec::new(), Vec::new(), Vec::new()),
                     |(mut scores, mut preds, mut trues), (s, p, t)| {
@@ -487,13 +487,13 @@ impl Jury {
                 self.threshold_window,
             );
 
-            let filtered_data: Vec<(u8, u8)> = predictions
+            let filtered_data: Vec<(u8, f64)> = predictions
                 .1
                 .iter()
                 .zip(predictions.0.iter())
                 .zip(data.y.iter())
                 .filter_map(|((&score, &pred_class), &true_class)| {
-                    if score >= 0.0 && score <= 1.0 && pred_class != 2 && true_class != 2 {
+                    if score >= 0.0 && score <= 1.0 && pred_class != 2 && true_class != 2.0 {
                         Some((pred_class, true_class))
                     } else {
                         None
@@ -502,7 +502,7 @@ impl Jury {
                 .collect();
 
             if !filtered_data.is_empty() {
-                let (pred_classes, true_classes): (Vec<u8>, Vec<u8>) =
+                let (pred_classes, true_classes): (Vec<u8>, Vec<f64>) =
                     filtered_data.into_iter().unzip();
                 let (_, sensitivity, specificity, _) =
                     compute_metrics_from_classes(&pred_classes, &true_classes, [false; 5]);
@@ -1079,7 +1079,7 @@ impl Jury {
     fn display_confusion_matrix(
         &self,
         predictions: &[u8],
-        true_labels: &[u8],
+        true_labels: &[f64],
         title: &str,
     ) -> String {
         let mut text = "".to_string();
@@ -1087,17 +1087,22 @@ impl Jury {
             (0, 0, 0, 0, 0, 0);
 
         for (pred, real) in predictions.iter().zip(true_labels.iter()) {
-            match (*pred, *real) {
-                (1, 1) => tp += 1,
-                (0, 0) => tn += 1,
-                (1, 0) => fp += 1,
-                (0, 1) => fn_ += 1,
-                (2, 1) => rp_abstentions += 1,
-                (2, 0) => rn_abstentions += 1,
-                _ => warn!(
-                    "Warning: Unexpected class values pred={}, real={}",
-                    pred, real
-                ),
+            let p = *pred;
+            let r = *real;
+            if p == 1 && r == 1.0 {
+                tp += 1;
+            } else if p == 0 && r == 0.0 {
+                tn += 1;
+            } else if p == 1 && r == 0.0 {
+                fp += 1;
+            } else if p == 0 && r == 1.0 {
+                fn_ += 1;
+            } else if p == 2 && r == 1.0 {
+                rp_abstentions += 1;
+            } else if p == 2 && r == 0.0 {
+                rn_abstentions += 1;
+            } else {
+                warn!("Warning: Unexpected class values pred={}, real={}", p, r);
             }
         }
 
@@ -1552,7 +1557,7 @@ impl Jury {
 
             match predicted_class {
                 2 => abstentions.push(i),
-                _ if predicted_class != real_class => errors.push(i),
+                _ if (predicted_class as f64) != real_class => errors.push(i),
                 _ => correct.push(i),
             }
         }
@@ -1704,7 +1709,7 @@ impl Jury {
                         if vote == 2 {
                             output.push_str("\x1b[90m•\x1b[0m");
                         } else {
-                            let vote_display = match data.y[sample_idx] == vote {
+                            let vote_display = match data.y[sample_idx] == vote as f64 {
                                 true => &format!("\x1b[92m{}\x1b[0m", vote),
                                 false => &format!("\x1b[31m{}\x1b[0m", vote),
                             };
@@ -2503,7 +2508,7 @@ mod tests {
     }
 
     /// Helper for creating data with a single sample
-    fn create_single_sample_data(true_class: u8) -> Data {
+    fn create_single_sample_data(true_class: f64) -> Data {
         let mut X = HashMap::new();
         X.insert((0, 0), 1.0); // Sample 0, feature 0
 
@@ -2539,7 +2544,7 @@ mod tests {
     fn test_scenario_1_unanimous_majority_for() {
         // 5 experts unanimously vote 1, threshold 0.5 -> decision 1
         let pop = create_population_with_votes(vec![1, 1, 1, 1, 1]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -2566,7 +2571,7 @@ mod tests {
     fn test_scenario_2_unanimous_majority_against() {
         // 5 experts unanimously vote 0, threshold 0.5 -> decision 0
         let pop = create_population_with_votes(vec![0, 0, 0, 0, 0]);
-        let data = create_single_sample_data(0);
+        let data = create_single_sample_data(0.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -2596,7 +2601,7 @@ mod tests {
     fn test_scenario_3_simple_majority() {
         // 3 votes 1, 2 votes 0, threshold 0.5 -> decision 1
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -2623,7 +2628,7 @@ mod tests {
     fn test_scenario_4_abstention_due_to_threshold_window() {
         // 3 votes 1, 2 votes 0, threshold 0.6, window 10% -> abstention
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -2655,7 +2660,7 @@ mod tests {
     fn test_scenario_5_consensus_success() {
         // 4 votes 1, 1 vote 0, consensus threshold 0.7 -> decision 1
         let pop = create_population_with_votes(vec![1, 1, 1, 1, 0]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -2685,7 +2690,7 @@ mod tests {
     fn test_scenario_6_consensus_failure() {
         // 3 votes 1, 2 votes 0, consensus threshold 0.8 -> abstention
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -2716,7 +2721,7 @@ mod tests {
     fn test_scenario_7_weighted_majority() {
         // Votes [1,1,0,0,0] with weights [2,2,1,1,1] -> decision 1
         let pop = create_population_with_votes(vec![1, 1, 0, 0, 0]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         // To simulate different weights, we create a Jury with min_perf
         // that will filter certain experts based on their performance
@@ -2755,7 +2760,7 @@ mod tests {
     fn test_scenario_8_perfect_tie_with_window() {
         // 2 votes 1, 2 votes 0, seuil 0.5, window 5% -> abstention
         let pop = create_population_with_votes(vec![1, 1, 0, 0]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -2787,7 +2792,7 @@ mod tests {
     fn test_majority_vs_consensus_different_outcomes() {
         // Same population, different voting methods -> different results
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]); // 60% 1
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         // Majority Test (threshold 0.5)
         let mut jury_majority = Jury::new(
@@ -2822,7 +2827,7 @@ mod tests {
     #[test]
     fn test_threshold_window_boundary_cases() {
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]); // Score = 0.6
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         // Case 1: window too small -> no abstention
         let mut jury1 = Jury::new(
@@ -2861,7 +2866,7 @@ mod tests {
         let pop = create_population_with_votes(vec![1, 1, 1, 0, 0]); // 60% pour
 
         // Data with true class = 1
-        let data_positive = create_single_sample_data(1);
+        let data_positive = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -2883,7 +2888,7 @@ mod tests {
         assert_eq!(rejection_rate, 0.0, "No rejection expected");
 
         // Test on negative class
-        let data_negative = create_single_sample_data(0);
+        let data_negative = create_single_sample_data(0.0);
         let (_, accuracy_neg, _, specificity_neg, _, _) = jury.compute_new_metrics(&data_negative);
 
         // Short predicts 1, true class = 0 -> False Positive
@@ -2911,7 +2916,7 @@ mod tests {
 
         let data = Data {
             X,
-            y: vec![1, 0, 1],
+            y: vec![1.0, 0.0, 1.0],
             features: vec!["feature1".to_string()],
             samples: vec![
                 "sample1".to_string(),
@@ -2952,7 +2957,7 @@ mod tests {
     fn test_edge_case_single_expert() {
         // One expert -> no collective vote, but tests logic
         let pop = create_population_with_votes(vec![1]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -3013,7 +3018,7 @@ mod tests {
         pop
     }
 
-    fn create_multi_sample_data(true_classes: Vec<u8>) -> Data {
+    fn create_multi_sample_data(true_classes: Vec<f64>) -> Data {
         let mut X = HashMap::new();
         let mut samples = Vec::new();
 
@@ -3044,7 +3049,7 @@ mod tests {
     #[test]
     fn test_compute_new_metrics_consistency() {
         let pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
-        let data = create_multi_sample_data(vec![1, 1, 0, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 1.0, 0.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3091,7 +3096,7 @@ mod tests {
     fn test_compute_new_metrics_rejection_rate_calculation() {
         // Population that will create abstentions with window
         let pop = create_controlled_population(vec![1, 1, 0, 0]); // Perfect tie at 0.5
-        let data = create_multi_sample_data(vec![1, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3128,7 +3133,7 @@ mod tests {
     #[test]
     fn test_internal_vs_external_metrics_coherence() {
         let pop = create_controlled_population(vec![1, 1, 1, 1, 0]);
-        let data = create_multi_sample_data(vec![1, 1, 0, 0, 1, 0]);
+        let data = create_multi_sample_data(vec![1.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3156,7 +3161,7 @@ mod tests {
         );
 
         // Test on different test data
-        let test_data = create_multi_sample_data(vec![0, 0, 1, 1]);
+        let test_data = create_multi_sample_data(vec![0.0, 0.0, 1.0, 1.0]);
         let (test_auc, test_acc, test_sens, test_spec, _, _) = jury.compute_new_metrics(&test_data);
 
         // Metrics may differ based on different data,
@@ -3186,7 +3191,7 @@ mod tests {
     #[test]
     fn test_voting_threshold_systematic_variations() {
         let pop = create_controlled_population(vec![1, 1, 1, 0, 0]); // 60% 1
-        let data = create_multi_sample_data(vec![1]);
+        let data = create_multi_sample_data(vec![1.0]);
 
         let thresholds = vec![0.3, 0.5, 0.7, 0.9];
         let mut results = Vec::new();
@@ -3224,7 +3229,7 @@ mod tests {
     #[test]
     fn test_threshold_window_granular_effects() {
         let pop = create_controlled_population(vec![1, 1, 1, 0, 0]); // Score = 0.6
-        let data = create_multi_sample_data(vec![1]);
+        let data = create_multi_sample_data(vec![1.0]);
 
         let threshold = 0.5;
         let windows = vec![1.0, 5.0, 15.0, 25.0]; // 1%, 5%, 15%, 25%
@@ -3257,7 +3262,7 @@ mod tests {
     #[test]
     fn test_majority_vs_consensus_systematic_comparison() {
         let pop = create_controlled_population(vec![1, 1, 1, 0, 0]); // 60% pour
-        let data = create_multi_sample_data(vec![1, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0]);
 
         let test_cases = vec![
             (0.5, 1, 1), // Majority: 0.6 > 0.5 -> 1, Consensus: 0.6 > 0.5 -> 2
@@ -3308,7 +3313,7 @@ mod tests {
     #[test]
     fn test_edge_cases_boundary_conditions() {
         let pop = create_controlled_population(vec![1, 1, 0, 0]); // Perfect tie
-        let data = create_multi_sample_data(vec![1]);
+        let data = create_multi_sample_data(vec![1.0]);
 
         // Threshold test at 0.0
         let mut jury_min = Jury::new(
@@ -3369,7 +3374,7 @@ mod tests {
         }
 
         let pop = create_controlled_population(large_votes);
-        let data = create_multi_sample_data(vec![1, 0, 1, 0]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3427,7 +3432,7 @@ mod tests {
         // Create a dataset with 100 samples
         let mut large_classes = Vec::new();
         for i in 0..100 {
-            large_classes.push(if i % 2 == 0 { 1 } else { 0 });
+            large_classes.push(if i % 2 == 0 { 1.0 } else { 0.0 });
         }
         let large_data = create_multi_sample_data(large_classes);
 
@@ -3480,7 +3485,7 @@ mod tests {
     fn test_rejection_rate_mathematical_accuracy() {
         // Controlled scenario: 4 samples with 2 expected abstentions
         let pop = create_controlled_population(vec![1, 1, 0, 0]); // Perfect Tie 0.5
-        let data = create_multi_sample_data(vec![1, 0, 1, 0]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3538,7 +3543,7 @@ mod tests {
             pop.individuals[3].cls.specificity = 0.9;
         }
 
-        let data = create_multi_sample_data(vec![1]);
+        let data = create_multi_sample_data(vec![1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3592,7 +3597,7 @@ mod tests {
     fn test_jury_additional_metrics_not_computed_when_experts_have_none() {
         // Create a population without additional metrics
         let pop = create_controlled_population(vec![1, 1, 1, 0, 0]);
-        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3643,7 +3648,7 @@ mod tests {
             expert.cls.additional.g_mean = Some(0.79);
         }
 
-        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3714,7 +3719,7 @@ mod tests {
         pop.individuals[0].cls.additional.f1_score = Some(0.7);
         pop.individuals[1].cls.additional.f1_score = Some(0.75);
 
-        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3763,8 +3768,8 @@ mod tests {
             expert.cls.additional.f1_score = Some(0.8);
         }
 
-        let train_data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
-        let test_data = create_multi_sample_data(vec![0, 1, 0, 1]);
+        let train_data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0, 1.0]);
+        let test_data = create_multi_sample_data(vec![0.0, 1.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3826,7 +3831,7 @@ mod tests {
             expert.cls.additional.f1_score = Some(0.6);
         }
 
-        let data = create_multi_sample_data(vec![1, 0, 1, 0]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3868,7 +3873,7 @@ mod tests {
             expert.cls.additional.npv = Some(0.78);
         }
 
-        let data = create_multi_sample_data(vec![1, 1, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 1.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3912,7 +3917,7 @@ mod tests {
             expert.cls.additional.g_mean = Some(0.73);
         }
 
-        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -3952,7 +3957,7 @@ mod tests {
             expert.cls.additional.mcc = Some(0.5);
         }
 
-        let data = create_multi_sample_data(vec![1, 0]);
+        let data = create_multi_sample_data(vec![1.0, 0.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -4010,7 +4015,7 @@ mod tests {
             });
         }
 
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -4051,7 +4056,7 @@ mod tests {
             });
         }
 
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -4092,7 +4097,7 @@ mod tests {
             });
         }
 
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -4134,7 +4139,7 @@ mod tests {
             });
         }
 
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -4175,7 +4180,7 @@ mod tests {
             });
         }
 
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -4218,7 +4223,7 @@ mod tests {
             });
         }
 
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -4262,7 +4267,7 @@ mod tests {
             });
         }
 
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         let mut jury = Jury::new(
             &pop,
@@ -4305,7 +4310,7 @@ mod tests {
 
         let data = Data {
             X,
-            y: vec![1, 0],
+            y: vec![1.0, 0.0],
             features: vec!["feature1".to_string()],
             samples: vec!["sample1".to_string(), "sample2".to_string()],
             feature_class,
@@ -4357,7 +4362,7 @@ mod tests {
         // Predictions: [1, 0, 1, 1, 0, 0, 0]
         // After filtering out 2s: GT=[1,0,1,0,1], Pred=[1,0,1,0,0]
         // TP=2, TN=1, FP=0, FN=1 => Acc=3/4=0.75, Se=2/3=0.667, Sp=1/1=1.0
-        let data = create_multi_sample_data(vec![1, 0, 2, 1, 0, 2, 1]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 2.0, 1.0, 0.0, 2.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -4426,7 +4431,7 @@ mod tests {
         }
 
         // Create multi-sample data
-        let data = create_multi_sample_data(vec![1, 1, 1, 0, 0, 0, 1, 1, 0, 0]);
+        let data = create_multi_sample_data(vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -4470,7 +4475,7 @@ mod tests {
     fn test_consensus_with_threshold_window_has_no_effect() {
         // Test that threshold_window parameter (used only in Majority) doesn't affect Consensus
         let pop = create_controlled_population(vec![1, 1, 1, 1, 0]);
-        let data = create_single_sample_data(1);
+        let data = create_single_sample_data(1.0);
 
         // Create two juries with different threshold_window values
         let mut jury_no_window = Jury::new(
@@ -4533,7 +4538,7 @@ mod tests {
         }
 
         // Create data where different samples trigger different abstention patterns
-        let data = create_multi_sample_data(vec![1, 1, 0, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 1.0, 0.0, 0.0, 1.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -4626,7 +4631,7 @@ mod tests {
         }
 
         // Multi-sample data to test aggregation
-        let data = create_multi_sample_data(vec![1, 0, 1, 0, 1, 0, 1, 0]);
+        let data = create_multi_sample_data(vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
 
         let mut jury = Jury::new(
             &pop,
@@ -4748,7 +4753,7 @@ mod tests {
             expert.cls.threshold = 0.5;
         }
 
-        let data = create_multi_sample_data(vec![1, 1, 0, 0, 1, 0]);
+        let data = create_multi_sample_data(vec![1.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
 
         let mut jury_narrow = Jury::new(
             &pop,
@@ -4802,7 +4807,7 @@ mod tests {
             (0.20, 0.80),
         ];
 
-        let data = create_multi_sample_data(vec![1, 1, 0, 0, 1, 0, 1]);
+        let data = create_multi_sample_data(vec![1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0]);
 
         let mut prev_rejection_rate = 0.0;
 
@@ -4852,7 +4857,7 @@ mod tests {
             expert.cls.threshold_ci = None;
         }
 
-        let data = create_multi_sample_data(vec![1, 1, 0, 0]);
+        let data = create_multi_sample_data(vec![1.0, 1.0, 0.0, 0.0]);
 
         let mut jury_no_ci = Jury::new(
             &pop_no_ci,
