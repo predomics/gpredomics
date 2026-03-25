@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>gpredomics Vignette</title>
+<style>
+@page { size: A4; margin: 2cm; @bottom-center { content: "gpredomics v0.9.0 — Vignette"; font-size: 8pt; color: #888; } @bottom-right { content: "Page " counter(page); font-size: 8pt; color: #888; } }
+body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 10pt; line-height: 1.6; color: #1e293b; max-width: 100%; }
+h1 { font-size: 18pt; color: #1a365d; margin-top: 1.5cm; border-bottom: 2px solid #2563eb; padding-bottom: 4px; page-break-after: avoid; }
+h2 { font-size: 13pt; color: #1a365d; margin-top: 1cm; page-break-after: avoid; }
+h3 { font-size: 11pt; color: #334155; margin-top: 0.6cm; page-break-after: avoid; }
+table { width: 100%; border-collapse: collapse; margin: 0.4cm 0; font-size: 9pt; page-break-inside: avoid; }
+th { background: #1a365d; color: white; padding: 5px 8px; text-align: left; }
+td { padding: 4px 8px; border-bottom: 1px solid #e2e8f0; }
+tr:nth-child(even) { background: #f8fafc; }
+code { font-family: 'SF Mono', monospace; font-size: 8.5pt; background: #f1f5f9; padding: 1px 4px; border-radius: 3px; }
+pre { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px; font-size: 8pt; line-height: 1.4; page-break-inside: avoid; }
+pre code { background: none; padding: 0; }
+a { color: #2563eb; text-decoration: none; }
+hr { border: none; border-top: 1px solid #e2e8f0; margin: 0.5cm 0; }
+li { margin-bottom: 3px; }
+strong { color: #1a365d; }
+</style></head><body>
+<h1>gpredomics Vignette — A Practical Tutorial</h1>
+
+<em>Last updated: v0.9.0 — March 2026</em><p>This vignette walks through a complete analysis using the <strong>Qin2014 liver cirrhosis</strong> metagenomics dataset (1,980 metagenomic species, 180 train / 30 test samples). By the end, you will know how to:<p>1. Prepare data and configure parameters
+2. Run different optimization algorithms
+3. Interpret the output (models, FBM, metrics)
+4. Compare algorithms
+5. Use cross-validation and voting ensemble
+6. Extract feature importance
+<hr>
+<h2>1. Installation</h2>
+
+<pre><code><h1>Clone and build</h1>
+git clone https://github.com/predomics/gpredomics.git
+cd gpredomics
+cargo build --release
+
+<h1>Verify</h1>
+./target/release/gpredomics --help
+</code></pre><p>The binary is at <code>target/release/gpredomics</code>. The sample dataset is in <code>samples/Qin2014/</code>.
+<hr>
+<h2>2. Data Format</h2><p>gpredomics expects <strong>tab-separated</strong> files with features in rows:
+
+<strong>X.tsv</strong> (features × samples):
+<pre><code>            sample1   sample2   sample3   ...
+msp_0001    0.023     0.001     0.045     ...
+msp_0002    0.000     0.012     0.003     ...
+</code></pre>
+
+<strong>y.tsv</strong> (class labels):
+<pre><code>sample1   1
+sample2   0
+sample3   1
+</code></pre><p>- Class <code>0</code> = control (e.g., healthy)
+<li>Class <code>1</code> = case (e.g., disease)</li>
+<li>Class <code>2</code> = unknown (excluded from training)<p>The Qin2014 dataset:</li>
+<li><code>Xtrain.tsv</code>: 1,980 features × 180 samples</li>
+<li><code>Ytrain.tsv</code>: 180 labels (97 class 0, 83 class 1)</li>
+<li><code>Xtest.tsv</code>: 1,980 features × 30 samples</li>
+<li><code>Ytest.tsv</code>: 30 labels (independent test set)</li>
+<hr>
+<h2>3. Your First Run — Beam Search</h2><p>Create <code>param.yaml</code>:
+
+<pre><code>general:
+  seed: 42
+  algo: beam
+  language: ter         # ternary: coefficients {-1, 0, +1}
+  data_type: prev       # prevalence: presence/absence
+  fit: auc              # optimize for AUC
+  thread_number: 4<p>data:
+  X: samples/Qin2014/Xtrain.tsv
+  y: samples/Qin2014/Ytrain.tsv
+  Xtest: samples/Qin2014/Xtest.tsv
+  ytest: samples/Qin2014/Ytest.tsv
+  features_in_rows: true
+  feature_selection_method: wilcoxon
+  feature_minimal_prevalence_pct: 10
+  feature_maximal_adj_pvalue: 0.05<p>beam:
+  method: LimitedExhaustive
+  kmin: 1
+  kmax: 10
+</code></pre><p>Run:
+
+<pre><code>./target/release/gpredomics --config param.yaml
+</code></pre>
+
+<h3>Understanding the Output</h3>
+
+<pre><code>INFO [gpredomics::data] 340 features selected
+</code></pre>
+From 1,980 features, 340 pass the prevalence (≥10%) and significance (p < 0.05) filters.
+
+<pre><code>INFO [gpredomics::beam] Beam algorithm (LimitedExhaustive mode) computed 9 generations in 395ms
+</code></pre>
+Beam explored all combinations from k=1 to k=10 in under a second.
+
+<pre><code>FBM mean (n=23) - AUC 0.936/0.923 | accuracy 0.884/0.854 | sensitivity 0.842/0.875 | specificity 0.932/0.832
+</code></pre>
+The <strong>Family of Best Models</strong> (FBM) contains 23 models whose AUC confidence intervals overlap. Metrics are shown as <strong>Train/Test</strong>. The FBM mean test AUC is <strong>0.923</strong>.
+
+<pre><code>Model #1 Ternary:Prevalence [k=8] [fit:0.939] AUC 0.939/0.947
+  Class 1: (msp_0610⁰ + msp_0844c⁰ + msp_0884⁰ + msp_1127⁰ + msp_1325⁰)
+         - (msp_0063⁰ + msp_0151⁰ + msp_0478⁰) ≥ 1
+</code></pre>
+The best model uses <strong>8 features</strong>. It predicts cirrhosis when the sum of 5 positive features minus 3 negative features exceeds 1. The <code>⁰</code> superscript indicates prevalence data type. This formula is directly interpretable by clinicians.
+<hr>
+<h2>4. Trying Different Algorithms</h2>
+
+<h3>4.1 Genetic Algorithm (GA) — Population-based evolution</h3>
+
+<pre><code>general:
+  algo: ga
+  language: bin,ter,ratio   # search across multiple languages
+  data_type: raw,prev       # and multiple data types
+  k_penalty: 0.0001         # penalize complexity<p>ga:
+  population_size: 5000
+  max_epochs: 200
+</code></pre><p>The GA evolves 5,000 models over 200 generations using crossover and mutation. It searches across <strong>multiple model languages</strong> (binary, ternary, ratio) and <strong>data types</strong> (raw, prevalence) simultaneously — producing the most diverse FBM (240 models).
+
+<strong>Result</strong>: Train 1.000 / Test 0.855, k=28, 12.5s
+
+<h3>4.2 Simulated Annealing (SA) — Temperature-guided search</h3>
+
+<pre><code>general:
+  algo: sa
+  k_penalty: 0.0001<p>sa:
+  initial_temperature: 1.0
+  cooling_rate: 0.9995
+  max_iterations: 10000
+  k_min: 1
+  k_max: 50
+</code></pre><p>SA starts with a random model and makes small perturbations (add/remove/flip one feature). Worse solutions are accepted with decreasing probability as the temperature cools.
+
+<strong>Result</strong>: Train 0.915 / Test 0.920, k=46, 0.6s — excellent test AUC!
+
+<h3>4.3 LASSO — Mathematical baseline</h3>
+
+<pre><code>general:
+  algo: lasso<p>lasso:
+  alpha_min: 0.001
+  alpha_max: 1.0
+  n_alphas: 100
+  l1_ratio: 1.0       # pure L1 (LASSO); 0.5 = Elastic Net
+</code></pre><p>LASSO solves the optimal sparse linear model via coordinate descent. Continuous coefficients are converted to {-1, +1} for BTR models. The fastest algorithm and a strong mathematical baseline.
+
+<strong>Result</strong>: Train 0.957 / Test 0.882, k=70, 0.1s
+
+<h3>4.4 Iterated Local Search (ILS) — Fast greedy optimization</h3>
+
+<pre><code>general:
+  algo: ils
+  k_penalty: 0.0001<p>ils:
+  max_iterations: 500
+  perturbation_size: 3
+  local_search_steps: 100
+</code></pre><p>ILS alternates between greedy hill-climbing and random perturbation. Extremely fast.
+
+<strong>Result</strong>: Train 0.996 / Test 0.880, k=38, 0.3s
+
+<h3>4.5 Ant Colony Optimization (ACO) — Pheromone-guided construction</h3>
+
+<pre><code>general:
+  algo: aco
+  k_penalty: 0.0001<p>aco:
+  n_ants: 500
+  max_iterations: 200
+</code></pre><p>Ants construct models feature-by-feature, guided by pheromone trails that encode collective experience.
+
+<strong>Result</strong>: Train 0.986 / Test 0.800, k=55, 6.7s
+
+<h3>4.6 MCMC — Bayesian posterior sampling</h3>
+
+<pre><code>general:
+  algo: mcmc<p>mcmc:
+  method: gibbs          # or "sbs" for backward selection
+  n_iter: 5000
+  n_burn: 2500
+  p0: 0.1               # prior inclusion probability
+</code></pre><p>Gibbs variable selection jointly samples feature inclusion and coefficients. Produces the sparsest models with posterior uncertainty estimates.
+
+<strong>Result (Gibbs)</strong>: Train 0.914 / Test 0.679, k=14, 2.4s
+<strong>Result (SBS)</strong>: Train 0.918 / Test 0.794, k=51, 3.2s
+<hr>
+<h2>5. Algorithm Comparison</h2>
+
+<pre><code>Algorithm      | Train  | Test   | k    | FBM  | Time
+---------------|--------|--------|------|------|------
+Beam           | 0.936  | 0.923  | 8    | 23   | 0.3s   ← best test AUC
+SA             | 0.915  | 0.920  | 46   | 2    | 0.6s   ← close second
+LASSO          | 0.957  | 0.882  | 70   | 1    | 0.1s   ← fastest
+ILS            | 0.996  | 0.880  | 38   | 1    | 0.3s
+GA             | 1.000  | 0.855  | 28   | 240  | 12.5s  ← most diverse
+ACO            | 0.986  | 0.800  | 55   | 5    | 6.7s
+MCMC (SBS)     | 0.918  | 0.794  | 51   | 25   | 3.2s
+MCMC (Gibbs)   | 0.914  | 0.679  | 14   | 18   | 2.4s   ← sparsest
+</code></pre>
+
+<strong>How to choose:</strong>
+<li><strong>Best predictive performance</strong>: Beam Search (small, exhaustive models)</li>
+<li><strong>Best speed/accuracy tradeoff</strong>: SA or LASSO</li>
+<li><strong>Most model diversity</strong>: GA (multi-language, 240 FBM models)</li>
+<li><strong>Mathematical baseline</strong>: LASSO</li>
+<li><strong>Sparsest models</strong>: MCMC Gibbs (k=14 with uncertainty)</li>
+<li><strong>Fastest</strong>: LASSO (0.1s) or ILS (0.3s)</li>
+<hr>
+<h2>6. Cross-Validation</h2><p>Add <code>cv: true</code> and configure folds:
+
+<pre><code>general:
+  algo: beam
+  cv: true<p>cv:
+  outer_folds: 5         # 5-fold outer CV for performance estimation
+  inner_folds: 5         # 5-fold inner CV for model selection
+</code></pre><p>Cross-validation produces a more robust FBM by selecting models that perform consistently across folds. The output shows per-fold metrics and the inter-fold FBM.
+<hr>
+<h2>7. Voting Ensemble</h2><p>Enable voting to combine the FBM into a jury:
+
+<pre><code>voting:
+  vote: true
+  method: Majority       # or Consensus
+  min_perf: 0.5          # minimum individual AUC for experts
+  min_diversity: 5.0     # minimum Jaccard distance (%) between experts
+  fbm_ci_alpha: 0.05     # confidence level for FBM selection
+</code></pre><p>The <strong>Jury</strong> selects diverse, high-performing models from the FBM and combines their predictions through majority voting. Each expert votes independently, and the consensus prediction is often more robust than any single model.
+
+<h3>Expert Specialization</h3>
+
+<pre><code>voting:
+  specialized: true
+  specialized_sensitivity_threshold: 0.7
+  specialized_specificity_threshold: 0.7
+</code></pre><p>Experts can specialize: <strong>PositiveSpecialists</strong> (high sensitivity) vote only on positive predictions, <strong>NegativeSpecialists</strong> (high specificity) vote only on negative predictions, and <strong>Balanced</strong> experts vote on everything.
+<hr>
+<h2>8. Feature Importance</h2>
+
+<pre><code>importance:
+  compute_importance: true
+  n_permutations_mda: 100    # permutations for Mean Decrease in Accuracy
+</code></pre><p>gpredomics computes multiple importance types:
+
+<table>
+<tr><th>Type</th><th>What it measures</th></tr>
+<tr><td><strong>MDA</strong></td><td>How much AUC drops when a feature is permuted</td></tr>
+<tr><td><strong>Prevalence (Pop)</strong></td><td>% of FBM models containing the feature</td></tr>
+<tr><td><strong>Prevalence (CV)</strong></td><td>% of CV folds where the feature appears</td></tr>
+<tr><td><strong>Coefficient</strong></td><td>Mean absolute coefficient across models</td></tr>
+</table><p>The output shows the top features ranked by importance:
+
+<pre><code>Top features by importance:
+  1. msp_1127  MDA: 0.082  Prevalence: 87%  Direction: +
+  2. msp_0610  MDA: 0.071  Prevalence: 83%  Direction: +
+  3. msp_0063  MDA: 0.058  Prevalence: 74%  Direction: -
+  ...
+</code></pre>
+<hr>
+<h2>9. Saving and Loading Experiments</h2>
+
+<h3>Save</h3>
+
+<pre><code>general:
+  save_exp: results/my_experiment
+</code></pre><p>This saves the full experiment (parameters, data, models, importance, voting) as a MessagePack binary (<code>results/my_experiment.msgpack</code>).
+
+<h3>Load and Evaluate on New Data</h3>
+
+<pre><code>./target/release/gpredomics \
+  --load results/my_experiment.msgpack \
+  --x-test new_data/X.tsv \
+  --y-test new_data/y.tsv
+</code></pre>
+
+<h3>Export CSV Report</h3>
+
+<pre><code>general:
+  csv_report: true
+  save_exp: results/my_experiment
+</code></pre><p>Generates <code>results/my_experiment_report.csv</code> with all model metrics in a structured format for downstream analysis.
+<hr>
+<h2>10. GPU Acceleration</h2>
+
+<pre><code>general:
+  gpu: true<p>gpu:
+  memory_policy: Adaptive   # Strict, Adaptive, or Performance
+  max_total_memory_mb: 256
+  fallback_to_cpu: true
+</code></pre><p>GPU acceleration (Metal on macOS, Vulkan on Linux) speeds up fitness evaluation for large populations (GA, ACO). The <code>fallback_to_cpu: true</code> option ensures the analysis still runs if no GPU is available.
+<hr>
+<h2>11. Complete Example — Full Pipeline</h2>
+
+<pre><code>general:
+  seed: 42
+  algo: ga
+  language: ter
+  data_type: prev
+  fit: auc
+  k_penalty: 0.0001
+  thread_number: 4
+  cv: true
+  gpu: false
+  save_exp: results/qin2014_full<p>data:
+  X: samples/Qin2014/Xtrain.tsv
+  y: samples/Qin2014/Ytrain.tsv
+  Xtest: samples/Qin2014/Xtest.tsv
+  ytest: samples/Qin2014/Ytest.tsv
+  features_in_rows: true
+  feature_selection_method: wilcoxon
+  feature_minimal_prevalence_pct: 10
+  feature_maximal_adj_pvalue: 0.05<p>ga:
+  population_size: 5000
+  max_epochs: 200<p>cv:
+  outer_folds: 5<p>voting:
+  vote: true
+  method: Majority
+  min_perf: 0.5
+  min_diversity: 5.0<p>importance:
+  compute_importance: true
+  n_permutations_mda: 100
+</code></pre><p>This runs the complete pipeline: feature selection → GA optimization → 5-fold CV → voting ensemble → feature importance → save experiment + CSV report.
+<hr>
+<h2>12. Tips and Best Practices</h2>
+
+<h3>Choosing Parameters</h3>
+
+<table>
+<tr><th>Parameter</th><th>Default</th><th>Guidance</th></tr>
+<tr><td><code>k_penalty</code></td><td>0.0001</td><td>Increase (0.001) for sparser models, decrease (0) for max AUC</td></tr>
+<tr><td><code>feature_minimal_prevalence_pct</code></td><td>10</td><td>Lower for rare features, higher to reduce noise</td></tr>
+<tr><td><code>population_size</code> (GA)</td><td>5000</td><td>Larger = more diverse, slower. 1000 is fine for quick runs</td></tr>
+<tr><td><code>max_epochs</code> (GA)</td><td>200</td><td>Early stopping kicks in when best model doesn't improve</td></tr>
+<tr><td><code>n_ants</code> (ACO)</td><td>100</td><td>500 for thorough search, 50 for quick runs</td></tr>
+<tr><td><code>cooling_rate</code> (SA)</td><td>0.995</td><td>Slower (0.9995) = more thorough, faster (0.99) = quicker</td></tr>
+</table>
+
+<h3>When to Use Each Algorithm</h3><p>- <strong>Exploratory analysis</strong>: Start with <strong>Beam</strong> (fast, small models, best test AUC) or <strong>LASSO</strong> (instant baseline)
+<li><strong>Production model</strong>: Run <strong>GA</strong> with CV + voting for the most robust ensemble</li>
+<li><strong>Feature discovery</strong>: Use <strong>MCMC Gibbs</strong> for posterior inclusion probabilities</li>
+<li><strong>Quick screening</strong>: <strong>ILS</strong> or <strong>SA</strong> (sub-second results)</li>
+<li><strong>Algorithm comparison</strong>: Run all 7 and compare (see Section 5)</li>
+
+<h3>Reproducibility</h3><p>gpredomics is fully deterministic with a fixed seed. The same <code>seed</code>, parameters, and data always produce identical results, regardless of platform or thread count.
+<hr>
+<h2>References</h2><p>1. Prifti, E. et al. (2020). Interpretable and accurate prediction models for metagenomics data. <em>GigaScience</em>, 9(3). <a href="https://doi.org/10.1093/gigascience/giaa010">doi:10.1093/gigascience/giaa010</a>
+2. Qin, N. et al. (2014). Alterations of the human gut microbiome in liver cirrhosis. <em>Nature</em>, 513(7516). <a href="https://doi.org/10.1038/nature13568">doi:10.1038/nature13568</a>
+
+</body></html>
