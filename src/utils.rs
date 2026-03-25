@@ -706,7 +706,10 @@ pub fn compute_roc_and_metrics_from_value(
         FitFunction::ppv => ppv(tp_init, fp_init),
         FitFunction::g_mean => g_mean(sens_init, spec_init),
         // Regression metrics — threshold optimization not applicable
-        FitFunction::spearman | FitFunction::rmse | FitFunction::mutual_information => 0.0,
+        FitFunction::spearman
+        | FitFunction::pearson
+        | FitFunction::rmse
+        | FitFunction::mutual_information => 0.0,
     };
 
     if obj_init > best_objective {
@@ -765,7 +768,10 @@ pub fn compute_roc_and_metrics_from_value(
             FitFunction::npv => npv(tn, fn_count),
             FitFunction::ppv => ppv(tp, fp),
             FitFunction::g_mean => g_mean(sensitivity, specificity),
-            FitFunction::spearman | FitFunction::rmse | FitFunction::mutual_information => 0.0,
+            FitFunction::spearman
+            | FitFunction::pearson
+            | FitFunction::rmse
+            | FitFunction::mutual_information => 0.0,
         };
 
         if objective > best_objective {
@@ -944,6 +950,40 @@ pub fn spearman_correlation(x: &[f64], y: &[f64]) -> f64 {
     for i in 0..n {
         let dx = rx[i] - mean_rx;
         let dy = ry[i] - mean_ry;
+        cov += dx * dy;
+        var_x += dx * dx;
+        var_y += dy * dy;
+    }
+
+    if var_x == 0.0 || var_y == 0.0 {
+        return 0.0;
+    }
+
+    cov / (var_x.sqrt() * var_y.sqrt())
+}
+
+/// Compute Pearson correlation coefficient between two vectors.
+///
+/// Returns r ∈ [-1, 1]. Higher = stronger linear association.
+/// Unlike Spearman (rank-based), Pearson measures linear correlation on raw values.
+pub fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
+    assert_eq!(x.len(), y.len(), "Pearson: vectors must have equal length");
+    let n = x.len();
+    if n < 2 {
+        return 0.0;
+    }
+
+    let n_f = n as f64;
+    let mean_x: f64 = x.iter().sum::<f64>() / n_f;
+    let mean_y: f64 = y.iter().sum::<f64>() / n_f;
+
+    let mut cov = 0.0;
+    let mut var_x = 0.0;
+    let mut var_y = 0.0;
+
+    for i in 0..n {
+        let dx = x[i] - mean_x;
+        let dy = y[i] - mean_y;
         cov += dx * dy;
         var_x += dx * dx;
         var_y += dy * dy;

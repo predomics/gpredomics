@@ -1153,6 +1153,7 @@ impl Data {
         let is_regression = matches!(
             param.general.fit,
             crate::param::FitFunction::spearman
+                | crate::param::FitFunction::pearson
                 | crate::param::FitFunction::rmse
                 | crate::param::FitFunction::mutual_information
         );

@@ -340,7 +340,10 @@ impl Population {
             if param.general.bias_penalty != 0.0
                 && !matches!(
                     param.general.fit,
-                    FitFunction::spearman | FitFunction::rmse | FitFunction::mutual_information
+                    FitFunction::spearman
+                        | FitFunction::pearson
+                        | FitFunction::rmse
+                        | FitFunction::mutual_information
                 )
             {
                 if i.cls.sensitivity < 0.5 {
@@ -447,9 +450,10 @@ impl Population {
                 let penalties = match param.general.fit {
                     FitFunction::sensitivity => Some([param.general.fr_penalty, 1.0]),
                     FitFunction::specificity => Some([1.0, param.general.fr_penalty]),
-                    FitFunction::spearman | FitFunction::rmse | FitFunction::mutual_information => {
-                        None
-                    }
+                    FitFunction::spearman
+                    | FitFunction::pearson
+                    | FitFunction::rmse
+                    | FitFunction::mutual_information => None,
                     _ => None,
                 };
                 match param.general.fit {
@@ -512,6 +516,9 @@ impl Population {
                     }
                     FitFunction::spearman => {
                         i.fit = crate::utils::spearman_correlation(&scores, &data.y);
+                    }
+                    FitFunction::pearson => {
+                        i.fit = crate::utils::pearson_correlation(&scores, &data.y);
                     }
                     FitFunction::rmse => {
                         i.fit = crate::utils::neg_rmse(&scores, &data.y);

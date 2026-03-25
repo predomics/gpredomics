@@ -28,6 +28,8 @@ pub enum FitFunction {
     g_mean,
     /// Spearman rank correlation (regression mode)
     spearman,
+    /// Pearson linear correlation coefficient
+    pearson,
     /// Root Mean Squared Error (regression mode, negated so higher = better)
     rmse,
     /// Mutual Information (regression/classification)
@@ -79,6 +81,7 @@ pub enum FbmCIMethod {
     agresti_coull,
     /// Clopper-Pearson exact interval via Beta distribution quantiles.
     /// Conservative (guaranteed ≥ nominal coverage), widest intervals. Clopper & Pearson (1934).
+    /// Pearson linear correlation coefficient
     clopper_pearson,
 }
 
