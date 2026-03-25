@@ -474,6 +474,53 @@ impl CostFunction for NegLogPostToMinimize<'_> {
     }
 }
 
+/// Fast golden section search for 1D minimization.
+/// Replaces argmin::BrentOpt to avoid framework overhead.
+fn golden_section_minimize(
+    bp: &BayesPred,
+    ind: &Individual,
+    z: &Vec<[f64; 3]>,
+    beta_idx: usize,
+    mut a: f64,
+    mut b: f64,
+    tol: f64,
+    max_iter: usize,
+) -> f64 {
+    const PHI: f64 = 1.618033988749895; // golden ratio
+    const RESPHI: f64 = 0.381966011250105; // 2 - phi
+
+    let eval = |x: f64| -> f64 {
+        let mut clone = ind.clone();
+        clone.set_beta(beta_idx, x);
+        -bp.log_posterior(&clone, z)
+    };
+
+    let mut c = b - (b - a) * RESPHI;
+    let mut d = a + (b - a) * RESPHI;
+    let mut fc = eval(c);
+    let mut fd = eval(d);
+
+    for _ in 0..max_iter {
+        if (b - a).abs() < tol {
+            break;
+        }
+        if fc < fd {
+            b = d;
+            d = c;
+            fd = fc;
+            c = b - (b - a) * RESPHI;
+            fc = eval(c);
+        } else {
+            a = c;
+            c = d;
+            fc = fd;
+            d = a + (b - a) * RESPHI;
+            fd = eval(d);
+        }
+    }
+    (a + b) / 2.0
+}
+
 //-----------------------------------------------------------------------------
 // Structure for MCMC tracing
 //-----------------------------------------------------------------------------
@@ -1162,7 +1209,6 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
 
     debug!("Computing MCMC...");
 
-    let solver = BrentOpt::new(-10_f64.powf(4_f64), 10_f64.powf(4_f64));
     for n in 0..param.mcmc.n_iter {
         if param.mcmc.n_iter > 1000
             && ((n as f64 == param.mcmc.n_iter as f64 * 0.25)
@@ -1178,19 +1224,9 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
             );
         }
         for i in 0..nbeta {
-            let cost = NegLogPostToMinimize {
-                bp,
-                i,
-                ind: &ind,
-                z: &z,
-            };
-
-            let res = Executor::new(cost, solver.clone())
-                .configure(|state| state.max_iters(100))
-                .run()
-                .unwrap();
-
-            ind.set_beta(i, res.state.param.unwrap());
+            // Fast golden section search (replaces argmin Executor + BrentOpt)
+            let optimal = golden_section_minimize(bp, &ind, &z, i, -1e4, 1e4, 1e-6, 50);
+            ind.set_beta(i, optimal);
 
             let scale_i = bp.compute_sigma_i(&ind, &z, i);
             let mut b_i = ind.get_betas()[i];
