@@ -69,11 +69,13 @@ score = Bacteroides + Faecalibacterium - Enterococcus
 
 | | Algorithm | Test AUC | Model Size (k) | Time | Type |
 |---|-----------|:-------:|:--------------:|:----:|------|
-| 🥇 | **Simulated Annealing** | **0.911** | 48 | 0.3s | Single-solution |
-| 🥈 | **LASSO / Elastic Net** | 0.882 | 70 | 0.1s | Direct optimization |
-| 🥉 | **Iterated Local Search** | 0.813 | **22** | **0.05s** | Single-solution |
+| 🥇 | **Beam Search** | **0.947** | 8 | 0.4s | Systematic |
+| 🥈 | **Simulated Annealing** | 0.911 | 48 | 0.3s | Single-solution |
+| 🥉 | **LASSO / Elastic Net** | 0.882 | 70 | 0.1s | Direct optimization |
+| | Iterated Local Search | 0.813 | **4** | **0.05s** | Single-solution |
 | | Ant Colony Optimization | 0.802 | 52 | 7.1s | Population-based |
 | | Genetic Algorithm | 0.791 | 48 | 0.5s | Population-based |
+| | MCMC / Bayesian | — | 10-50 | 11s | Bayesian |
 
 > All models are human-readable: `score = species_A + species_B - species_C ≥ threshold`
 

@@ -1,10 +1,6 @@
 use crate::experiment::ExperimentMetadata;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use crate::individual::{LOG_TYPE, PREVALENCE_TYPE, RAW_TYPE};
-use argmin::{
-    core::{CostFunction, Error as ArgminError, Executor},
-    solver::brent::BrentOpt,
-};
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use rand::SeedableRng;
@@ -451,31 +447,15 @@ impl BayesPred {
     }
 }
 
-/// Helper structure for Brent optimization that implements the CostFunction trait.
+/// Helper structure for beta optimization (unused, kept for reference).
 /// Used to minimize the negative log posterior probability for parameter optimization.
 /// Holds references to the Bayesian prediction model, parameter index, current beta values, and feature groups.
-struct NegLogPostToMinimize<'a> {
-    bp: &'a BayesPred,
-    i: usize,
-    ind: &'a Individual,
-    z: &'a Vec<[f64; 3]>,
-}
 
 /// Implements the cost function for optimization.
 /// Returns the negative log posterior probability for the proposed parameter value.
-impl CostFunction for NegLogPostToMinimize<'_> {
-    type Param = f64;
-    type Output = f64;
-
-    fn cost(&self, beta_i: &Self::Param) -> Result<Self::Output, ArgminError> {
-        let mut clone = self.ind.clone();
-        clone.set_beta(self.i, *beta_i);
-        Ok(-self.bp.log_posterior(&clone, self.z))
-    }
-}
 
 /// Fast golden section search for 1D minimization.
-/// Replaces argmin::BrentOpt to avoid framework overhead.
+
 fn golden_section_minimize(
     bp: &BayesPred,
     ind: &Individual,
@@ -486,7 +466,7 @@ fn golden_section_minimize(
     tol: f64,
     max_iter: usize,
 ) -> f64 {
-    const PHI: f64 = 1.618033988749895; // golden ratio
+    const _PHI: f64 = 1.618033988749895; // golden ratio
     const RESPHI: f64 = 0.381966011250105; // 2 - phi
 
     let eval = |x: f64| -> f64 {
@@ -923,7 +903,6 @@ pub fn run_mcmc_sbs(
 ) -> Vec<(u32, f64, f64, f64, usize, u64)> {
     let time = Instant::now();
     let mut data_train = data.clone();
-    let nmax = data_train.feature_selection.len() as u32;
     let mut post_mean = Vec::new();
     let mut feature_to_drop = Vec::new();
     let mut rng_seeds: Vec<u64> = Vec::new();
@@ -947,7 +926,7 @@ pub fn run_mcmc_sbs(
         );
         let n_samples = data_train.sample_len;
         let p = data_train.feature_selection.len();
-        let dt = individual::data_type(data_type);
+        let _dt = individual::data_type(data_type);
 
         // Build feature matrix (column-major)
         let mut x_cols: Vec<Vec<f64>> = Vec::with_capacity(p);
