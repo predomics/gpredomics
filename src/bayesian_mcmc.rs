@@ -1268,6 +1268,7 @@ pub fn compute_mcmc(bp: &BayesPred, param: &Param, rng: &mut ChaCha8Rng) -> MCMC
 /// where p0 is the prior inclusion probability (default 0.1).
 pub fn compute_mcmc_gibbs(
     bp: &BayesPred,
+    bp_valid: Option<&BayesPred>,
     param: &Param,
     rng: &mut ChaCha8Rng,
 ) -> MCMCAnalysisTrace {
@@ -1316,6 +1317,13 @@ pub fn compute_mcmc_gibbs(
 
     let mut n_accepted = 0u64;
     let mut n_proposed = 0u64;
+
+    // Validation tracking for early stopping
+    let eval_interval = 100;
+    let mut best_valid_auc = 0.0_f64;
+    let mut best_valid_ind = ind.clone();
+    let mut iters_since_improvement = 0usize;
+    let early_stop_patience = 500;
 
     for n in 0..param.mcmc.n_iter {
         // Phase 1: Optimize betas (same as standard MCMC)
@@ -1388,6 +1396,31 @@ pub fn compute_mcmc_gibbs(
             }
         }
 
+        // Validation + early stopping (after burn-in)
+        if n > param.mcmc.n_burn && n % eval_interval == 0 {
+            if let Some(bp_v) = bp_valid {
+                let z_valid = bp_v.compute_feature_groups(&ind);
+                let valid_log_post = bp_v.log_posterior(&ind, &z_valid);
+                // Use validation log posterior as a proxy for generalization
+                // Higher = better fit on validation data
+                if valid_log_post > best_valid_auc {
+                    best_valid_auc = valid_log_post;
+                    best_valid_ind = ind.clone();
+                    iters_since_improvement = 0;
+                } else {
+                    iters_since_improvement += eval_interval;
+                }
+
+                if iters_since_improvement >= early_stop_patience {
+                    info!(
+                        "Early stopping at iter {}: no validation improvement for {} iters, best at log_post={:.2}",
+                        n, early_stop_patience, best_valid_auc
+                    );
+                    break;
+                }
+            }
+        }
+
         // Progress logging
         if param.mcmc.n_iter >= 100 && n % (param.mcmc.n_iter / 10) == 0 && n > 0 {
             let accept_rate = if n_proposed > 0 {
@@ -1396,14 +1429,22 @@ pub fn compute_mcmc_gibbs(
                 0.0
             };
             debug!(
-                "Gibbs iter {}/{}: k={}, accept_rate={:.3}, log_post={:.2}",
+                "Gibbs iter {}/{}: k={}, accept_rate={:.3}, log_post={:.2}, valid_best={:.2}",
                 n,
                 param.mcmc.n_iter,
                 ind.features.len(),
                 accept_rate,
-                log_post
+                log_post,
+                best_valid_auc
             );
         }
+    }
+
+    // If we had validation, store the best-on-validation model
+    if bp_valid.is_some() && best_valid_auc > f64::NEG_INFINITY {
+        // Add best validation model to the trace population
+        res_mcmc.population.individuals.push(best_valid_ind);
+        info!("Best model on validation: log_post={:.2}", best_valid_auc);
     }
 
     let accept_rate = if n_proposed > 0 {
@@ -1542,7 +1583,7 @@ pub fn mcmc(
             individual::data_type(dt),
             param.general.data_type_epsilon,
         );
-        mcmc_result = compute_mcmc_gibbs(&bp, param, &mut rng);
+        mcmc_result = compute_mcmc_gibbs(&bp, None, param, &mut rng);
     } else if param.mcmc.nmin != 0 && data.feature_selection.len() > param.mcmc.nmin as usize {
         // SBS mode (original)
         cinfo!(
