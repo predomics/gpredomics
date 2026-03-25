@@ -26,7 +26,7 @@ Models with **discrete coefficients** {-1, 0, +1} that clinicians can read, veri
 score = Bacteroides + Faecalibacterium - Enterococcus
 ```
 
-[Get Started](#-quick-start) · [Documentation](#-documentation) · [Web App](https://github.com/predomics/predomicsapp-web) · [Python Bindings](https://github.com/predomics/gpredomicspy)
+[Get Started](#-quick-start) · [Documentation](#-documentation) · [Web App](https://github.com/predomics/predomicsapp) · [Python Bindings](https://github.com/predomics/gpredomicspy)
 
 </div>
 
@@ -259,7 +259,7 @@ Enable with `general.gpu: true` in param.yaml. Falls back to CPU automatically.
 |---|-----------|-------------|
 | ⚙️ | [**gpredomics**](https://github.com/predomics/gpredomics) | Rust core engine (this repo) |
 | 🐍 | [**gpredomicspy**](https://github.com/predomics/gpredomicspy) | Python bindings + clinical integration |
-| 🌐 | [**predomicsapp-web**](https://github.com/predomics/predomicsapp-web) | Full-stack web application |
+| 🌐 | [**predomicsapp**](https://github.com/predomics/predomicsapp) | Full-stack web application |
 | 📊 | [**GpredomicsR**](https://github.com/predomics/gpredomicsR) | R package interface |
 | 📦 | [**Legacy Predomics**](https://github.com/predomics/predomicspkg) | Original R implementation |
 
