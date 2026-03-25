@@ -390,6 +390,18 @@ pub struct MCMC {
     pub nmin: u32,
     #[serde(default = "empty_string")]
     pub save_trace_outdir: String,
+    /// MCMC method: "sbs" (Sequential Backward Selection, default) or "gibbs" (joint variable selection)
+    #[serde(default = "mcmc_method_default")]
+    pub method: String,
+    /// Prior inclusion probability per feature for Gibbs variable selection.
+    /// Controls expected model size: E[k] = p0 × n_features.
+    /// Lower = sparser models. Default 0.1.
+    #[serde(default = "mcmc_p0_default")]
+    pub p0: f64,
+    /// Number of parallel MCMC chains. Default 1 (single chain, recommended by Vadim).
+    /// Only increase when n_iter is large enough (>2000) for each chain to converge.
+    #[serde(default = "mcmc_n_chains_default")]
+    pub n_chains: usize,
 }
 
 /// Ant Colony Optimization parameters
@@ -818,11 +830,18 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
     .cloned()
     .collect();
 
-    let valid_mcmc_keys: HashSet<&str> =
-        ["n_iter", "n_burn", "lambda", "nmin", "save_trace_outdir"]
-            .iter()
-            .cloned()
-            .collect();
+    let valid_mcmc_keys: HashSet<&str> = [
+        "n_iter",
+        "n_burn",
+        "lambda",
+        "nmin",
+        "save_trace_outdir",
+        "method",
+        "p0",
+    ]
+    .iter()
+    .cloned()
+    .collect();
 
     let valid_aco_keys: HashSet<&str> = [
         "n_ants",
@@ -1536,4 +1555,14 @@ mod tests {
         param.ga.k_max = 0;
         assert!(validate(&mut param).is_ok());
     }
+}
+
+fn mcmc_method_default() -> String {
+    "gibbs".to_string()
+}
+fn mcmc_p0_default() -> f64 {
+    0.1
+}
+fn mcmc_n_chains_default() -> usize {
+    1
 }
