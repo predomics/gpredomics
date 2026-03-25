@@ -403,7 +403,7 @@ impl BayesPred {
         let [a, b, c] = ind.get_betas();
         let mut log_likelihood = 0.0;
         for (i_sample, z_sample) in z.iter().enumerate() {
-            let y_sample = self.data.y[i_sample] as f64;
+            let y_sample = self.data.y[i_sample];
             let value = z_sample[0] * a + z_sample[1] * b + z_sample[2] * c;
 
             if y_sample == 1.0 {
@@ -833,9 +833,8 @@ fn lasso_prescreen(data: &mut Data, target: usize) {
         }
     }
 
-    let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
-    let y_mean = y_f64.iter().sum::<f64>() / n_samples as f64;
-    let y_centered: Vec<f64> = y_f64.iter().map(|v| v - y_mean).collect();
+    let y_mean = data.y.iter().sum::<f64>() / n_samples as f64;
+    let y_centered: Vec<f64> = data.y.iter().map(|v| v - y_mean).collect();
 
     // Run LASSO at moderate alpha to select features
     let w = crate::lasso::coordinate_descent_pub(&x_cols, &y_centered, 0.01, 1.0, 500, 1e-4, None);
@@ -1417,7 +1416,7 @@ pub fn mcmc(
 
     // Each Gpredomics function currently handles class 2 as unknown
     // As MCMC does not, remove unknown sample before analysis
-    let mut data = data.remove_class(2);
+    let mut data = data.remove_class(2.0);
 
     // Selecting features
     data.select_features(param);

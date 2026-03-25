@@ -74,7 +74,7 @@ pub struct Data {
     pub feature_significance: HashMap<usize, f64>,
 
     /// Sample real classes
-    pub y: Vec<u8>,
+    pub y: Vec<f64>,
     /// Sample names
     pub samples: Vec<String>,
     /// Samples count
@@ -230,7 +230,7 @@ impl Data {
             if let Some(sample_name) = fields.next() {
                 // Second field is the target value
                 if let Some(value) = fields.next() {
-                    let target: u8 = value.parse()?;
+                    let target: f64 = value.parse()?;
                     y_map.insert(sample_name.to_string(), target);
                 }
             }
@@ -246,7 +246,7 @@ impl Data {
                         "No y value available for {}. Setting y to 2 for this sample.",
                         sample_name
                     );
-                    &2
+                    &2.0
                 })
             })
             .collect();
@@ -476,13 +476,14 @@ impl Data {
     /// ```
     pub fn inverse_classes(&mut self) {
         for label in &mut self.y {
-            match *label {
-                0 => *label = 1,
-                1 => *label = 0,
-                2 => *label = 2,
-                _ => {
-                    warn!("Unknown classes : {}. Passed.", *label);
-                }
+            if *label == 0.0 {
+                *label = 1.0;
+            } else if *label == 1.0 {
+                *label = 0.0;
+            } else if *label == 2.0 {
+                *label = 2.0;
+            } else {
+                warn!("Unknown classes : {}. Passed.", *label);
             }
         }
 
@@ -750,7 +751,7 @@ impl Data {
         let mut count_1: usize = 0;
 
         let class_0: Vec<f64> = (0..self.sample_len)
-            .filter(|i| self.y[*i] == 0)
+            .filter(|i| self.y[*i] == 0.0)
             .map(|i| {
                 if self.X.contains_key(&(i, j)) {
                     count_0 += 1;
@@ -762,7 +763,7 @@ impl Data {
             .collect();
 
         let class_1: Vec<f64> = (0..self.sample_len)
-            .filter(|i| self.y[*i] == 1)
+            .filter(|i| self.y[*i] == 1.0)
             .map(|i| {
                 if self.X.contains_key(&(i, j)) {
                     count_1 += 1;
@@ -837,7 +838,7 @@ impl Data {
         let mut count_1: usize = 0;
 
         let class_0: Vec<f64> = (0..self.sample_len)
-            .filter(|i| self.y[*i] == 0)
+            .filter(|i| self.y[*i] == 0.0)
             .map(|i| {
                 if self.X.contains_key(&(i, j)) {
                     count_0 += 1;
@@ -849,7 +850,7 @@ impl Data {
             .collect();
 
         let class_1: Vec<f64> = (0..self.sample_len)
-            .filter(|i| self.y[*i] == 1)
+            .filter(|i| self.y[*i] == 1.0)
             .map(|i| {
                 if self.X.contains_key(&(i, j)) {
                     count_1 += 1;
@@ -973,14 +974,14 @@ impl Data {
         let mut class_1_values: Vec<f64> = Vec::new();
 
         for i in 0..self.sample_len {
-            if self.y[i] == 0 {
+            if self.y[i] == 0.0 {
                 if self.X.contains_key(&(i, j)) && self.X[&(i, j)] >= 0.0 {
                     class_0_present += 1;
                     class_0_values.push(self.X[&(i, j)]);
                 } else {
                     class_0_absent += 1;
                 }
-            } else if self.y[i] == 1 {
+            } else if self.y[i] == 1.0 {
                 if self.X.contains_key(&(i, j)) && self.X[&(i, j)] >= 0.0 {
                     class_1_present += 1;
                     class_1_values.push(self.X[&(i, j)]);
@@ -1147,6 +1148,36 @@ impl Data {
 
         self.feature_selection = Vec::new();
         self.feature_class = HashMap::new();
+
+        // For regression (continuous y), skip statistical test — use all features above prevalence threshold
+        let is_regression = matches!(
+            param.general.fit,
+            crate::param::FitFunction::spearman
+                | crate::param::FitFunction::rmse
+                | crate::param::FitFunction::mutual_information
+        );
+
+        if is_regression {
+            info!("Regression mode: selecting features by prevalence only (no class-based test)");
+            let min_prev = param.data.feature_minimal_prevalence_pct / 100.0;
+            for j in 0..self.feature_len {
+                let n_nonzero = (0..self.sample_len)
+                    .filter(|&s| *self.X.get(&(s, j)).unwrap_or(&0.0) > 0.0)
+                    .count();
+                let prevalence = n_nonzero as f64 / self.sample_len as f64;
+                if prevalence >= min_prev {
+                    self.feature_selection.push(j);
+                    self.feature_class.insert(j, 0); // no class association for regression
+                    self.feature_significance.insert(j, prevalence);
+                }
+            }
+            info!(
+                "{} features selected (prevalence >= {:.0}%)",
+                self.feature_selection.len(),
+                param.data.feature_minimal_prevalence_pct
+            );
+            return;
+        }
 
         let (class_0_features, class_1_features) = self.evaluate_features(param);
 
@@ -1389,9 +1420,9 @@ impl Data {
     /// # use gpredomics::data::Data;
     /// let mut data = Data::new();
     /// data.load_data("./samples/Qin2014/Xtrain.tsv", "./samples/Qin2014/Ytrain.tsv", false).unwrap();
-    /// let filtered_data = data.remove_class(2);
+    /// let filtered_data = data.remove_class(2.0);
     /// ```
-    pub fn remove_class(&mut self, class_to_remove: u8) -> Data {
+    pub fn remove_class(&mut self, class_to_remove: f64) -> Data {
         let indices_to_keep: Vec<usize> = self
             .y
             .iter()
@@ -1699,7 +1730,7 @@ mod tests {
             feature_class.insert(1, 1);
             Data {
                 X,
-                y: vec![0, 1, 0, 1, 1, 1],
+                y: vec![0.0, 1.0, 0.0, 1.0, 1.0, 1.0],
                 features: vec!["feature1".to_string(), "feature2".to_string()],
                 samples: vec![
                     "sample1".to_string(),
@@ -1741,8 +1772,8 @@ mod tests {
                 }
             }
 
-            let y: Vec<u8> = (0..num_samples)
-                .map(|_| if rng.gen::<f64>() > 0.5 { 1 } else { 0 })
+            let y: Vec<f64> = (0..num_samples)
+                .map(|_| if rng.gen::<f64>() > 0.5 { 1.0 } else { 0.0 })
                 .collect();
 
             Data {
@@ -1784,12 +1815,12 @@ mod tests {
                 }
             }
 
-            let y: Vec<u8> = (0..num_samples)
+            let y: Vec<f64> = (0..num_samples)
                 .map(|sample| {
                     if X.get(&(sample, 0)).cloned().unwrap_or(0.0) > 0.5 {
-                        1
+                        1.0
                     } else {
-                        0
+                        0.0
                     }
                 })
                 .collect();
@@ -1834,7 +1865,7 @@ mod tests {
                 }
             }
 
-            data.y = vec![0, 1, 0, 1, 0];
+            data.y = vec![0.0, 1.0, 0.0, 1.0, 0.0];
             data.feature_selection = feature_indices.to_vec();
             data
         }
@@ -1874,7 +1905,7 @@ mod tests {
 
             Data {
                 X,
-                y: vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0], // Vraies étiquettes
+                y: vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0], // Vraies étiquettes
                 features: vec!["feature1".to_string(), "feature2".to_string()],
                 samples: vec![
                     "sample1".to_string(),
@@ -1924,7 +1955,7 @@ mod tests {
 
             Data {
                 X,
-                y: vec![1, 0, 1, 0, 0], // Vraies étiquettes
+                y: vec![1.0, 0.0, 1.0, 0.0, 0.0], // Vraies étiquettes
                 features: vec!["feature1".to_string(), "feature2".to_string()],
                 samples: vec![
                     "sample1".to_string(),
@@ -1969,7 +2000,7 @@ mod tests {
 
             Data {
                 X,
-                y: vec![0, 0, 0, 1, 0], // Vraies étiquettes
+                y: vec![0.0, 0.0, 0.0, 1.0, 0.0], // Vraies étiquettes
                 features: vec!["feature1".to_string(), "feature2".to_string()],
                 samples: vec![
                     "sample6".to_string(),
@@ -2007,7 +2038,7 @@ mod tests {
 
         assert_eq!(format!("{:x}", hash), "adba327f62ffab0a8d43c1aa3a6c20e630783d3b103dd103f28b9e23ab51eb18", 
         "the test X hash isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
-        assert_eq!(data_test.y, [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1],
+        assert_eq!(data_test.y, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0],
         "the test y are not the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/y.tsv");
         assert_eq!(data_test.features, ["msp_0001", "msp_0002", "msp_0003", "msp_0004", "msp_0005", "msp_0006", "msp_0007", "msp_0008", "msp_0009", "msp_0010"],
         "the test X features isn't the same as generated in the past, indicating a reproducibility problem linked either to the load_data function or to the modification of ./tests/X.tsv");
@@ -2210,7 +2241,7 @@ mod tests {
         );
         assert_eq!(
             subset_data.y,
-            vec![0, 1],
+            vec![0.0, 1.0],
             "the subset y should be composed of the selected-samples y"
         );
         assert_eq!(
@@ -2233,7 +2264,7 @@ mod tests {
         let original_data = Data::test();
         let subset_data = original_data.subset(vec![]);
         let expected_X: HashMap<(usize, usize), f64> = HashMap::new();
-        let expected_y: Vec<u8> = vec![];
+        let expected_y: Vec<f64> = vec![];
         let expected_samples: Vec<String> = vec![];
 
         assert_eq!(
@@ -2343,7 +2374,7 @@ mod tests {
     fn test_add_basic() {
         let mut data1 = Data {
             X: HashMap::from([((0, 0), 0.5), ((1, 0), 0.8)]),
-            y: vec![0, 1],
+            y: vec![0.0, 1.0],
             features: vec!["feature1".to_string()],
             samples: vec!["sample1".to_string(), "sample2".to_string()],
             feature_class: HashMap::new(),
@@ -2358,7 +2389,7 @@ mod tests {
 
         let data2 = Data {
             X: HashMap::from([((0, 0), 0.3), ((1, 0), 0.6)]),
-            y: vec![1, 0],
+            y: vec![1.0, 0.0],
             features: vec!["feature1".to_string()],
             samples: vec!["sample3".to_string(), "sample4".to_string()],
             feature_class: HashMap::new(),
@@ -2375,7 +2406,7 @@ mod tests {
 
         let expected_X: HashMap<(usize, usize), f64> =
             HashMap::from([((0, 0), 0.5), ((1, 0), 0.8), ((2, 0), 0.3), ((3, 0), 0.6)]);
-        let expected_y = vec![0, 1, 1, 0];
+        let expected_y = vec![0.0, 1.0, 1.0, 0.0];
         let expected_samples = vec![
             "sample1".to_string(),
             "sample2".to_string(),
@@ -2474,7 +2505,7 @@ mod tests {
         assert_eq!(data.feature_len, 3);
         assert_eq!(data.samples, vec!["Sample1", "Sample2", "Sample3"]);
         assert_eq!(data.features, vec!["Feature1", "Feature2", "Feature3"]);
-        assert_eq!(data.y, vec![0, 1, 1]);
+        assert_eq!(data.y, vec![0.0, 1.0, 1.0]);
         assert_eq!(data.X.get(&(0, 0)), Some(&0.5));
         assert_eq!(data.X.get(&(1, 0)), None);
         assert_eq!(data.X.get(&(2, 1)), Some(&1.5));
@@ -2558,7 +2589,7 @@ mod tests {
         data.load_data(x_path.to_str().unwrap(), y_path.to_str().unwrap(), true)
             .unwrap();
 
-        assert_eq!(data.y, vec![0, 1, 1]);
+        assert_eq!(data.y, vec![0.0, 1.0, 1.0]);
         assert_eq!(data.samples, vec!["Sample1", "Sample2", "Sample3"]);
 
         cleanup_test_files(&x_path, &y_path);
@@ -3219,14 +3250,14 @@ mod tests {
         let test_ratio = 0.25;
         let (train, test) = data.train_test_split(test_ratio, &mut rng, None);
 
-        let orig_class0 = data.y.iter().filter(|&&y| y == 0).count();
-        let orig_class1 = data.y.iter().filter(|&&y| y == 1).count();
+        let orig_class0 = data.y.iter().filter(|&&y| y == 0.0).count();
+        let orig_class1 = data.y.iter().filter(|&&y| y == 1.0).count();
 
-        let train_class0 = train.y.iter().filter(|&&y| y == 0).count();
-        let train_class1 = train.y.iter().filter(|&&y| y == 1).count();
+        let train_class0 = train.y.iter().filter(|&&y| y == 0.0).count();
+        let train_class1 = train.y.iter().filter(|&&y| y == 1.0).count();
 
-        let test_class0 = test.y.iter().filter(|&&y| y == 0).count();
-        let test_class1 = test.y.iter().filter(|&&y| y == 1).count();
+        let test_class0 = test.y.iter().filter(|&&y| y == 0.0).count();
+        let test_class1 = test.y.iter().filter(|&&y| y == 1.0).count();
 
         assert_eq!(
             train_class0 + test_class0,
@@ -3385,7 +3416,7 @@ mod tests {
 
         // Overwrite y to make class-balanced
         data.y = (0..total_samples)
-            .map(|i| if i < total_samples / 2 { 0 } else { 1 })
+            .map(|i| if i < total_samples / 2 { 0.0 } else { 1.0 })
             .collect();
 
         // Batch annotation alternating A/B
@@ -3764,7 +3795,7 @@ mod tests {
     fn test_traintestsplit_panic_on_missing_annotations() {
         let mut data = Data::test_with_these_features(&[0, 1, 2, 3]);
         data.sample_len = 10;
-        data.y = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
+        data.y = vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
         data.sample_annotations = None;
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -3776,7 +3807,7 @@ mod tests {
     fn test_traintestsplit_panic_on_incomplete_annotation_line() {
         let mut data = Data::test_with_these_features(&[0, 1, 2, 3]);
         data.sample_len = 3;
-        data.y = vec![0, 1, 1];
+        data.y = vec![0.0, 1.0, 1.0];
         let mut sample_tags = HashMap::new();
         sample_tags.insert(0, vec!["control".to_string()]);
         sample_tags.insert(1, vec!["treatment".to_string(), "batch1".to_string()]);

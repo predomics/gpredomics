@@ -551,14 +551,14 @@ pub fn export_jury_csv(exp: &Experiment, writer: &mut impl Write) -> Result<(), 
     // We need to recompute using the jury's predict on train data
     let (train_f1, train_mcc, train_ppv, train_npv, train_gmean) = {
         let (pred_classes, _scores) = jury.predict(&exp.train_data);
-        let filtered: Vec<(u8, u8)> = pred_classes
+        let filtered: Vec<(u8, f64)> = pred_classes
             .iter()
             .zip(exp.train_data.y.iter())
             .filter(|(&p, _)| p != 2)
             .map(|(&p, &y)| (p, y))
             .collect();
         if !filtered.is_empty() {
-            let (preds, trues): (Vec<u8>, Vec<u8>) = filtered.into_iter().unzip();
+            let (preds, trues): (Vec<u8>, Vec<f64>) = filtered.into_iter().unzip();
             let (_, _, _, add) = compute_metrics_from_classes(&preds, &trues, [true; 5]);
             (
                 add.f1_score.unwrap_or(f64::NAN),
@@ -586,7 +586,7 @@ pub fn export_jury_csv(exp: &Experiment, writer: &mut impl Write) -> Result<(), 
         test_rej,
     ) = if let Some(ref td) = exp.test_data {
         let (pred_classes, scores) = jury.predict(td);
-        let filtered: Vec<(f64, u8, u8)> = scores
+        let filtered: Vec<(f64, u8, f64)> = scores
             .iter()
             .zip(pred_classes.iter())
             .zip(td.y.iter())
@@ -603,7 +603,7 @@ pub fn export_jury_csv(exp: &Experiment, writer: &mut impl Write) -> Result<(), 
             pred_classes.iter().filter(|&&c| c == 2).count() as f64 / pred_classes.len() as f64;
 
         if !filtered.is_empty() {
-            let (scores_f, preds_f, trues_f): (Vec<f64>, Vec<u8>, Vec<u8>) =
+            let (scores_f, preds_f, trues_f): (Vec<f64>, Vec<u8>, Vec<f64>) =
                 filtered.into_iter().fold(
                     (Vec::new(), Vec::new(), Vec::new()),
                     |(mut s, mut p, mut t), (sc, pr, tr)| {

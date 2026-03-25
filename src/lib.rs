@@ -219,7 +219,7 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
             td.inverse_classes();
         }
         if param.general.algo == "mcmc" {
-            td = td.remove_class(2);
+            td = td.remove_class(2.0);
         }
         if data.check_compatibility(&td) {
             test_data = Some(td);
