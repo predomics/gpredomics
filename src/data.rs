@@ -1149,6 +1149,36 @@ impl Data {
         self.feature_selection = Vec::new();
         self.feature_class = HashMap::new();
 
+        // For regression (continuous y), skip statistical test — use all features above prevalence threshold
+        let is_regression = matches!(
+            param.general.fit,
+            crate::param::FitFunction::spearman
+                | crate::param::FitFunction::rmse
+                | crate::param::FitFunction::mutual_information
+        );
+
+        if is_regression {
+            info!("Regression mode: selecting features by prevalence only (no class-based test)");
+            let min_prev = param.data.feature_minimal_prevalence_pct / 100.0;
+            for j in 0..self.feature_len {
+                let n_nonzero = (0..self.sample_len)
+                    .filter(|&s| *self.X.get(&(s, j)).unwrap_or(&0.0) > 0.0)
+                    .count();
+                let prevalence = n_nonzero as f64 / self.sample_len as f64;
+                if prevalence >= min_prev {
+                    self.feature_selection.push(j);
+                    self.feature_class.insert(j, 0); // no class association for regression
+                    self.feature_significance.insert(j, prevalence);
+                }
+            }
+            info!(
+                "{} features selected (prevalence >= {:.0}%)",
+                self.feature_selection.len(),
+                param.data.feature_minimal_prevalence_pct
+            );
+            return;
+        }
+
         let (class_0_features, class_1_features) = self.evaluate_features(param);
 
         for (j, class, value) in class_0_features
