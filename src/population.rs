@@ -511,16 +511,13 @@ impl Population {
                         i.fit = i.cls.auc;
                     }
                     FitFunction::spearman => {
-                        let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
-                        i.fit = crate::utils::spearman_correlation(&scores, &y_f64);
+                        i.fit = crate::utils::spearman_correlation(&scores, &data.y);
                     }
                     FitFunction::rmse => {
-                        let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
-                        i.fit = crate::utils::neg_rmse(&scores, &y_f64);
+                        i.fit = crate::utils::neg_rmse(&scores, &data.y);
                     }
                     FitFunction::mutual_information => {
-                        let y_f64: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
-                        i.fit = crate::utils::mutual_information(&scores, &y_f64);
+                        i.fit = crate::utils::mutual_information(&scores, &data.y);
                     }
                     _ => {
                         if let Some(ref mut threshold_ci) = i.cls.threshold_ci {
@@ -2513,8 +2510,8 @@ mod tests {
                 X.insert((sample, feature), (sample * feature) as f64 * 0.1);
             }
         }
-        let y: Vec<u8> = (0..num_samples)
-            .map(|i| if i % 2 == 0 { 1 } else { 0 })
+        let y: Vec<f64> = (0..num_samples)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
             .collect();
         Data {
             X,
@@ -3504,7 +3501,7 @@ mod tests {
         data.X.insert((3, 0), 0.2);
         data.X.insert((3, 1), 0.8);
 
-        data.y = vec![1, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0];
         data.sample_len = 4;
         data.feature_len = 2;
         data.features = vec!["feature1".to_string(), "feature2".to_string()];

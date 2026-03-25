@@ -1128,13 +1128,13 @@ impl Individual {
     /// # use std::collections::HashMap;
     /// # let mut individual = Individual::new();
     /// # let X: HashMap<(usize, usize), f64> = HashMap::new();
-    /// # let y: Vec<u8> = vec![];
+    /// # let y: Vec<f64> = vec![];
     /// let auc = individual.compute_auc_from_features(&X, &y);
     /// ```
     pub fn compute_auc_from_features(
         &mut self,
         X: &HashMap<(usize, usize), f64>,
-        y: &Vec<u8>,
+        y: &Vec<f64>,
     ) -> f64 {
         let value = self.evaluate_from_features(X, y.len());
         self.cls.auc = compute_auc_from_value(&value, y);
@@ -1221,27 +1221,24 @@ impl Individual {
         let value = self.evaluate(data);
 
         for (i, &pred) in value.iter().enumerate() {
-            match data.y[i] {
-                1 => {
-                    // Positive class
-                    if pred >= self.cls.threshold {
-                        tp += 1;
-                    } else {
-                        fn_count += 1;
-                    }
+            if data.y[i] == 1.0 {
+                // Positive class
+                if pred >= self.cls.threshold {
+                    tp += 1;
+                } else {
+                    fn_count += 1;
                 }
-                0 => {
-                    // Negative class
-                    if pred >= self.cls.threshold {
-                        fp += 1;
-                    } else {
-                        tn += 1;
-                    }
+            } else if data.y[i] == 0.0 {
+                // Negative class
+                if pred >= self.cls.threshold {
+                    fp += 1;
+                } else {
+                    tn += 1;
                 }
-                2 => {
-                    // Unknown class, ignore
-                }
-                _ => panic!("Invalid class label in y: {}", data.y[i]),
+            } else if data.y[i] == 2.0 {
+                // Unknown class, ignore
+            } else {
+                panic!("Invalid class label in y: {}", data.y[i]);
             }
         }
 
@@ -1760,14 +1757,15 @@ impl Individual {
     /// ```
     pub fn compute_threshold_and_metrics(&self, d: &Data) -> (f64, f64, f64, f64) {
         let value = self.evaluate(d);
-        let mut combined: Vec<(f64, u8)> = value.iter().cloned().zip(d.y.iter().cloned()).collect();
+        let mut combined: Vec<(f64, f64)> =
+            value.iter().cloned().zip(d.y.iter().cloned()).collect();
 
         combined.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
-        let mut tp = d.y.iter().filter(|&&label| label == 1).count();
+        let mut tp = d.y.iter().filter(|&&label| label == 1.0).count();
         let mut fn_count = 0;
         let mut tn = 0;
-        let mut fp = d.y.iter().filter(|&&label| label == 0).count();
+        let mut fp = d.y.iter().filter(|&&label| label == 0.0).count();
 
         let mut best_threshold = 0.0;
         let mut best_youden_index = f64::NEG_INFINITY;
@@ -1803,16 +1801,12 @@ impl Individual {
                 best_metrics = (accuracy, sensitivity, specificity);
             }
 
-            match label {
-                1 => {
-                    tp -= 1;
-                    fn_count += 1;
-                }
-                0 => {
-                    fp -= 1;
-                    tn += 1;
-                }
-                _ => (),
+            if label == 1.0 {
+                tp -= 1;
+                fn_count += 1;
+            } else if label == 0.0 {
+                fp -= 1;
+                tn += 1;
             }
         }
 
@@ -2043,14 +2037,14 @@ impl Individual {
         let mut paired_data: Vec<_> = scores
             .iter()
             .zip(data.y.iter())
-            .filter(|(_, &y)| y == 0 || y == 1)
+            .filter(|(_, &y)| y == 0.0 || y == 1.0)
             .map(|(&score, &label)| (score, label))
             .collect();
 
         paired_data
             .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        let total_pos = paired_data.iter().filter(|(_, y)| *y == 1).count();
+        let total_pos = paired_data.iter().filter(|(_, y)| *y == 1.0).count();
         let total_neg = paired_data.len() - total_pos;
 
         if total_pos == 0 || total_neg == 0 {
@@ -2073,10 +2067,10 @@ impl Individual {
             let mut current_fn = 0;
 
             while i < paired_data.len() && (paired_data[i].0 - current_score).abs() < f64::EPSILON {
-                match paired_data[i].1 {
-                    0 => current_tn += 1,
-                    1 => current_fn += 1,
-                    _ => unreachable!(),
+                if paired_data[i].1 == 0.0 {
+                    current_tn += 1;
+                } else if paired_data[i].1 == 1.0 {
+                    current_fn += 1;
                 }
                 i += 1;
             }
@@ -3222,7 +3216,7 @@ mod tests {
             0.0,
             compute_auc_from_value(
                 &vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64],
-                &vec![1_u8, 1_u8, 1_u8, 1_u8, 0_u8]
+                &vec![1.0_f64, 1.0_f64, 1.0_f64, 1.0_f64, 0.0_f64]
             ),
             "auc with a perfect classification and class1 < class0 should be 0.0"
         );
@@ -3230,7 +3224,7 @@ mod tests {
             1.0,
             compute_auc_from_value(
                 &vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64],
-                &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]
+                &vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64]
             ),
             "auc with a perfect classification and class0 < class1 should be 1.0"
         );
@@ -3238,7 +3232,7 @@ mod tests {
             1.0,
             compute_auc_from_value(
                 &vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64],
-                &vec![0_u8, 0_u8, 0_u8, 0_u8, 1_u8]
+                &vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 1.0_f64]
             ),
             "auc with a perfect classification and class0 < class1 should be 1.0"
         );
@@ -3247,17 +3241,17 @@ mod tests {
             0.5,
             compute_auc_from_value(
                 &vec![0.1_f64, 0.2_f64, 0.3_f64, 0.4_f64],
-                &vec![0_u8, 0_u8, 0_u8, 0_u8]
+                &vec![0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64]
             ),
             "auc should be equal to 0 when there is no positive class"
         );
-        assert_eq!(0.5, compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.7_f64, 0.8_f64], &vec![1_u8, 1_u8, 1_u8, 1_u8]),
+        assert_eq!(0.5, compute_auc_from_value(&vec![0.5_f64, 0.6_f64, 0.7_f64, 0.8_f64], &vec![1.0_f64, 1.0_f64, 1.0_f64, 1.0_f64]),
         "auc should be equal to 0 when there is no negative class to avoid positive biais in model selection");
         assert_eq!(
             0.4166666666666667,
             compute_auc_from_value(
                 &vec![0.5_f64, 0.6_f64, 0.3_f64, 0.1_f64, 0.9_f64, 0.1_f64],
-                &vec![1_u8, 2_u8, 1_u8, 0_u8, 0_u8, 1_u8]
+                &vec![1.0_f64, 2.0_f64, 1.0_f64, 0.0_f64, 0.0_f64, 1.0_f64]
             ),
             "class 2 should be omited in AUC"
         );
@@ -3293,7 +3287,7 @@ mod tests {
         let mut ind = Individual::test();
         ind.cls.threshold = 0.75;
         let mut data = Data::test2();
-        data.y = vec![1, 0, 2, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let confusion_matrix = ind.calculate_confusion_matrix(&data);
         assert_eq!(confusion_matrix.3, 0, "class 2 shoudn't  be classified");
     }
@@ -3303,7 +3297,7 @@ mod tests {
     fn test_calculate_confusion_matrix_invalid_class_label() {
         let ind = Individual::test();
         let mut data = Data::test2();
-        data.y = vec![1, 0, 3, 3, 3, 3, 0, 1, 0, 1];
+        data.y = vec![1.0, 0.0, 3.0, 3.0, 3.0, 3.0, 0.0, 1.0, 0.0, 1.0];
         let _confusion_matrix = ind.calculate_confusion_matrix(&data);
     }
 
@@ -3544,7 +3538,7 @@ mod tests {
         let mut ind = Individual::test();
         ind.cls.threshold = 0.75;
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let metrics = ind.compute_metrics(&data);
         assert_eq!(0.5_f64, metrics.0, "bad calculation for accuracy");
         assert_eq!(
@@ -3562,7 +3556,7 @@ mod tests {
         let mut ind = Individual::test();
         ind.cls.threshold = 0.75;
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 2];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0];
         assert_eq!(
             (
                 0.5555555555555556_f64,
@@ -3587,7 +3581,9 @@ mod tests {
         let mut ind = Individual::test();
         ind.cls.threshold = 0.75;
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1];
+        data.y = vec![
+            1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0,
+        ];
         assert_eq!((0.5_f64, 0.6666666666666666_f64, 0.42857142857142855_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_mean: None}), ind.compute_metrics(&data),
         "when ind.sample_len < data.sample_len (or y.len() if it does not match), only the ind.sample_len values should be used to calculate its metrics");
     }
@@ -3597,7 +3593,7 @@ mod tests {
         let mut ind = Individual::test();
         ind.cls.threshold = 0.75;
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 1];
+        data.y = vec![1.0, 0.0, 1.0, 1.0];
         assert_eq!((0.25_f64, 0.3333333333333333_f64, 0.0_f64, 0.0_f64, AdditionalMetrics { mcc:None, f1_score: None, npv: None, ppv: None, g_mean: None}), ind.compute_metrics(&data),
         "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
     }
@@ -3608,7 +3604,7 @@ mod tests {
     fn test_compute_threshold_and_metrics_basic() {
         let ind = Individual::test();
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let results = ind.compute_threshold_and_metrics(&data);
         assert_eq!(0.89_f64, results.0, "bad identification of the threshold");
         assert_eq!(0.8_f64, results.1, "bad calculation for accuracy");
@@ -3634,7 +3630,7 @@ mod tests {
     fn test_compute_threshold_and_metrics_class_2() {
         let ind = Individual::test();
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 2];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0];
         assert_eq!(
             (
                 0.79_f64,
@@ -3669,7 +3665,7 @@ mod tests {
         let mut ind = Individual::test();
         ind.cls.threshold = 0.75;
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 1];
+        data.y = vec![1.0, 0.0, 1.0, 1.0];
         assert_eq!((0.89_f64, 0.5_f64, 0.3333333333333333_f64, 1.0_f64), ind.compute_threshold_and_metrics(&data),
         "when data.sample_len (or y.len() if it does not match) < ind.sample_len, only the data.sample_len values should be used to calculate its metrics");
 
@@ -4172,7 +4168,7 @@ mod tests {
         let feature_seeds = generate_feature_seeds(&features_to_process, 10, 456);
 
         // Test: All positive labels (y = 1)
-        data.y = vec![1u8; 50];
+        data.y = vec![1.0; 50];
         let result_all_pos = individual.compute_mda_feature_importance(
             &data,
             10,
@@ -4190,7 +4186,7 @@ mod tests {
         }
 
         // Test: All negative labels (y = 0)
-        data.y = vec![0u8; 50];
+        data.y = vec![0.0; 50];
         let result_all_neg = individual.compute_mda_feature_importance(
             &data,
             10,
@@ -4207,8 +4203,8 @@ mod tests {
         }
 
         // Test: Highly unbalanced (49:1)
-        data.y = vec![0u8; 49];
-        data.y.push(1u8);
+        data.y = vec![0.0; 49];
+        data.y.push(1.0);
         let result_unbalanced = individual.compute_mda_feature_importance(
             &data,
             5,
@@ -4521,9 +4517,9 @@ mod tests {
         }
 
         data.classes = vec!["healthy".to_string(), "cirrhosis".to_string()];
-        data.y[3] = 2 as u8;
-        data.y[4] = 2 as u8;
-        data_test.y[7] = 2 as u8;
+        data.y[3] = 2.0;
+        data.y[4] = 2.0;
+        data_test.y[7] = 2.0;
 
         // control both metrics and display
         let right_string = "Ternary:Log [k=66] [gen:0] [fit:0.000] AUC 0.962/0.895 | accuracy 0.921/0.828 | sensitivity 0.937/0.867 | specificity 0.904/0.786\n\
@@ -5504,7 +5500,7 @@ mod tests {
         ind.cls.additional.mcc = Some(0.0); // Signal that we want MCC computed
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5527,7 +5523,7 @@ mod tests {
         ind.cls.additional.f1_score = Some(0.0); // Signal that we want F1 computed
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5550,7 +5546,7 @@ mod tests {
         ind.cls.additional.npv = Some(0.0); // Signal that we want NPV computed
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5573,7 +5569,7 @@ mod tests {
         ind.cls.additional.ppv = Some(0.0); // Signal that we want PPV computed
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5596,7 +5592,7 @@ mod tests {
         ind.cls.additional.g_mean = Some(0.0); // Signal that we want G-mean computed
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5624,7 +5620,7 @@ mod tests {
         ind.cls.additional.g_mean = Some(0.0);
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5645,7 +5641,7 @@ mod tests {
         // Don't request any additional metrics
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5670,7 +5666,7 @@ mod tests {
 
         let mut data = Data::new();
         data.sample_len = 10;
-        data.y = vec![1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
+        data.y = vec![1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         data.feature_len = 1;
 
         // Create perfect separation: class 1 has high scores, class 0 has low scores
@@ -5722,7 +5718,7 @@ mod tests {
         ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::test2();
-        data.y = vec![1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
+        data.y = vec![1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
         let (accuracy, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5751,8 +5747,8 @@ mod tests {
 
         let mut data = Data::test2();
         // 99 negatives, 1 positive
-        data.y = vec![0; 99];
-        data.y.push(1);
+        data.y = vec![0.0; 99];
+        data.y.push(1.0);
         data.sample_len = 100;
 
         // Modify X to have 100 samples
@@ -5789,8 +5785,8 @@ mod tests {
 
         let mut data = Data::new();
         // 1 negative, 99 positives
-        data.y = vec![1; 99];
-        data.y.insert(0, 0);
+        data.y = vec![1.0; 99];
+        data.y.insert(0, 0.0);
         data.sample_len = 100;
         data.feature_len = 2;
 
@@ -5821,7 +5817,7 @@ mod tests {
         ind.cls.additional.f1_score = Some(0.0);
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 2, 2, 0, 0, 2, 0, 1, 0]; // Include class 2
+        data.y = vec![1.0, 0.0, 2.0, 2.0, 0.0, 0.0, 2.0, 0.0, 1.0, 0.0]; // Include class 2
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -5845,7 +5841,7 @@ mod tests {
         ind.cls.additional.ppv = Some(0.0);
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (tp, fp, _, _) = ind.calculate_confusion_matrix(&data);
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
@@ -5872,7 +5868,7 @@ mod tests {
         ind.cls.additional.npv = Some(0.0);
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, _, tn, fn_count) = ind.calculate_confusion_matrix(&data);
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
@@ -5899,7 +5895,7 @@ mod tests {
         ind.cls.additional.g_mean = Some(0.0);
 
         let mut data = Data::test2();
-        data.y = vec![1, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        data.y = vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let (_, sensitivity, specificity, _, additional) = ind.compute_metrics(&data);
 
@@ -6639,7 +6635,7 @@ mod tests {
 
         let mut data = Data::test2();
         data.sample_len = 1;
-        data.y = vec![1];
+        data.y = vec![1.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -6660,7 +6656,7 @@ mod tests {
 
         let mut data = Data::test2();
         data.sample_len = 2;
-        data.y = vec![0, 1];
+        data.y = vec![0.0, 1.0];
 
         let (_, _, _, _, additional) = ind.compute_metrics(&data);
 
@@ -6681,7 +6677,7 @@ mod tests {
         ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::test2();
-        data.y = vec![0; 10];
+        data.y = vec![0.0; 10];
 
         let (_, sensitivity, specificity, _, additional) = ind.compute_metrics(&data);
 
@@ -6712,7 +6708,7 @@ mod tests {
         ind.cls.additional.mcc = Some(0.0);
 
         let mut data = Data::test2();
-        data.y = vec![1; 10];
+        data.y = vec![1.0; 10];
 
         let (_, sensitivity, specificity, _, additional) = ind.compute_metrics(&data);
 
@@ -6743,7 +6739,7 @@ mod tests {
 
         let mut data = Data::new();
         data.sample_len = 10;
-        data.y = vec![0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
+        data.y = vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0];
         data.feature_len = 1;
 
         // All scores very close to threshold
@@ -6772,7 +6768,7 @@ mod tests {
 
         let mut data = Data::new();
         data.sample_len = 6;
-        data.y = vec![0, 0, 0, 1, 1, 1];
+        data.y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         data.feature_len = 1;
 
         // Extreme scores
@@ -6803,8 +6799,8 @@ mod tests {
         });
 
         let mut data = Data::test2();
-        data.y = vec![0; 100];
-        data.y.push(1);
+        data.y = vec![0.0; 100];
+        data.y.push(1.0);
         data.sample_len = 101;
 
         // Create X for 101 samples

@@ -398,20 +398,20 @@ pub fn conf_inter_binomial_method(
 /// ```
 /// # use gpredomics::utils::compute_auc_from_value;
 /// let scores = vec![0.1, 0.4, 0.35, 0.8];
-/// let labels = vec![0, 0, 1, 1];
+/// let labels = vec![0.0, 0.0, 1.0, 1.0];
 /// let auc = compute_auc_from_value(&scores, &labels);
 /// assert!((auc - 0.75).abs() < 1e-6);
 /// ```
-pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
-    let mut data: Vec<(f64, u8)> = value
+pub fn compute_auc_from_value(value: &[f64], y: &[f64]) -> f64 {
+    let mut data: Vec<(f64, f64)> = value
         .iter()
         .zip(y.iter())
-        .filter(|(_, &label)| label == 0 || label == 1)
+        .filter(|(_, &label)| label == 0.0 || label == 1.0)
         .map(|(&v, &y)| (v, y))
         .collect();
 
     let n = data.len();
-    let n1 = data.iter().filter(|(_, label)| *label == 1).count();
+    let n1 = data.iter().filter(|(_, label)| *label == 1.0).count();
     let n0 = n - n1;
 
     if n1 == 0 || n0 == 0 {
@@ -431,7 +431,7 @@ pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
         let mut neg_equal = 0;
 
         while i < n && data[i].0 == score {
-            if data[i].1 == 1 {
+            if data[i].1 == 1.0 {
                 pos_equal += 1;
             } else {
                 neg_equal += 1;
@@ -469,7 +469,7 @@ pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
 /// # use gpredomics::utils::compute_metrics_from_classes;
 /// # use gpredomics::individual::AdditionalMetrics;
 /// let predicted = vec![1, 0, 1, 1, 0, 2];
-/// let y = vec![1, 0, 0, 1, 0, 1];
+/// let y = vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0];
 /// let others_to_compute = [true, true, false, true, true];
 /// let (accuracy, sensitivity, specificity, additional) =
 ///    compute_metrics_from_classes(&predicted, &y, others_to_compute);
@@ -484,7 +484,7 @@ pub fn compute_auc_from_value(value: &[f64], y: &Vec<u8>) -> f64 {
 /// ```
 pub fn compute_metrics_from_classes(
     predicted: &Vec<u8>,
-    y: &Vec<u8>,
+    y: &[f64],
     others_to_compute: [bool; 5],
 ) -> (f64, f64, f64, AdditionalMetrics) {
     let mut tp = 0;
@@ -493,15 +493,17 @@ pub fn compute_metrics_from_classes(
     let mut fp = 0;
 
     for (&pred, &real) in predicted.iter().zip(y.iter()) {
-        if real == 2 {
+        if real == 2.0 {
             continue;
         }
-        match (pred, real) {
-            (1, 1) => tp += 1,
-            (1, 0) => fp += 1,
-            (0, 0) => tn += 1,
-            (0, 1) => fn_count += 1,
-            _ => {} //warn!("A predicted vs real class of 2 should not exist"),
+        if pred == 1 && real == 1.0 {
+            tp += 1;
+        } else if pred == 1 && real == 0.0 {
+            fp += 1;
+        } else if pred == 0 && real == 0.0 {
+            tn += 1;
+        } else if pred == 0 && real == 1.0 {
+            fn_count += 1;
         }
     }
 
@@ -568,7 +570,7 @@ pub fn compute_metrics_from_classes(
 /// # use gpredomics::utils::compute_metrics_from_value;
 /// # use gpredomics::individual::AdditionalMetrics;
 /// let scores = vec![0.1, 0.4, 0.35, 0.8];
-/// let labels = vec![0, 0, 1, 1];
+/// let labels = vec![0.0, 0.0, 1.0, 1.0];
 /// let threshold = 0.5;
 /// let threshold_ci = None;
 /// let others_to_compute = [true, true, false, true, true];
@@ -586,7 +588,7 @@ pub fn compute_metrics_from_classes(
 /// ```
 pub fn compute_metrics_from_value(
     value: &[f64],
-    y: &Vec<u8>,
+    y: &[f64],
     threshold: f64,
     threshold_ci: Option<[f64; 2]>,
     others_to_compute: [bool; 5],
@@ -642,7 +644,7 @@ pub fn compute_metrics_from_value(
 /// # use gpredomics::utils::compute_roc_and_metrics_from_value;
 /// # use gpredomics::param::FitFunction;
 /// let scores = vec![0.1, 0.4, 0.35, 0.8];
-/// let labels = vec![0, 0, 1, 1];
+/// let labels = vec![0.0, 0.0, 1.0, 1.0];
 /// let fit_function = FitFunction::f1_score;
 /// let penalties = None;
 /// let (auc, best_threshold, accuracy, sensitivity, specificity, best_objective) =
@@ -656,20 +658,20 @@ pub fn compute_metrics_from_value(
 /// ```
 pub fn compute_roc_and_metrics_from_value(
     scores: &[f64],
-    y: &[u8],
+    y: &[f64],
     fit_function: &FitFunction,
     penalties: Option<[f64; 2]>,
 ) -> (f64, f64, f64, f64, f64, f64) {
     let mut data: Vec<_> = scores
         .iter()
         .zip(y.iter())
-        .filter(|(_, &label)| label == 0 || label == 1)
+        .filter(|(_, &label)| label == 0.0 || label == 1.0)
         .map(|(&score, &label)| (score, label))
         .collect();
 
     data.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    let total_pos = data.iter().filter(|(_, label)| *label == 1).count();
+    let total_pos = data.iter().filter(|(_, label)| *label == 1.0).count();
     let total_neg = data.len() - total_pos;
 
     if total_pos == 0 || total_neg == 0 {
@@ -726,10 +728,12 @@ pub fn compute_roc_and_metrics_from_value(
         let mut current_fn = 0;
 
         while i < data.len() && (data[i].0 - current_score).abs() < f64::EPSILON {
-            match data[i].1 {
-                0 => current_tn += 1,
-                1 => current_fn += 1,
-                _ => unreachable!(),
+            if data[i].1 == 0.0 {
+                current_tn += 1;
+            } else if data[i].1 == 1.0 {
+                current_fn += 1;
+            } else {
+                unreachable!();
             }
             i += 1;
         }
@@ -1131,23 +1135,23 @@ pub fn mad(values: &[f64]) -> f64 {
 ///
 /// ```
 /// # use gpredomics::utils::stratify_indices_by_class;
-/// let y = vec![0, 1, 0, 1, 1, 0];
+/// let y = vec![0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
 /// let (pos_indices, neg_indices) = stratify_indices_by_class(&y);
 /// assert_eq!(pos_indices, vec![1, 3, 4]);
 /// assert_eq!(neg_indices, vec![0, 2, 5]);
 /// ```
-pub fn stratify_indices_by_class(y: &[u8]) -> (Vec<usize>, Vec<usize>) {
+pub fn stratify_indices_by_class(y: &[f64]) -> (Vec<usize>, Vec<usize>) {
     let pos_indices: Vec<usize> = y
         .iter()
         .enumerate()
-        .filter(|(_, &label)| label == 1)
+        .filter(|(_, &label)| label == 1.0)
         .map(|(i, _)| i)
         .collect();
 
     let neg_indices: Vec<usize> = y
         .iter()
         .enumerate()
-        .filter(|(_, &label)| label == 0)
+        .filter(|(_, &label)| label == 0.0)
         .map(|(i, _)| i)
         .collect();
 
@@ -1394,7 +1398,7 @@ pub fn geyer_rescale_ci(
 /// # use rand_chacha::ChaCha8Rng;
 /// # use rand::SeedableRng;
 /// let mut rng = ChaCha8Rng::seed_from_u64(42);
-/// let y = vec![0, 1, 0, 1, 1, 0];
+/// let y = vec![0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
 /// let n_bootstrap = 1000;
 /// let alpha = 0.05;
 /// let subsample_frac = 0.8;
@@ -1403,7 +1407,7 @@ pub fn geyer_rescale_ci(
 /// assert_eq!(precomputed.bootstrap_y_samples.len(), n_bootstrap);
 /// ```
 pub fn precompute_bootstrap_indices(
-    y: &Vec<u8>,
+    y: &[f64],
     n_bootstrap: usize,
     alpha: f64,
     subsample_frac: f64,
@@ -1446,7 +1450,7 @@ pub fn precompute_bootstrap_indices(
         .collect();
 
     // Precompute bootstrap_y samples (identical for all individuals)
-    let bootstrap_y_samples: Vec<Vec<u8>> = bootstrap_indices
+    let bootstrap_y_samples: Vec<Vec<f64>> = bootstrap_indices
         .iter()
         .map(|indices| indices.iter().map(|&i| y[i]).collect())
         .collect();
@@ -1532,7 +1536,7 @@ pub fn precompute_bootstrap_indices(
 /// # use rand::SeedableRng;
 /// let mut rng = ChaCha8Rng::seed_from_u64(42);
 /// let value = vec![0.1, 0.4, 0.35, 0.8];
-/// let y = vec![0, 0, 1, 1];
+/// let y = vec![0.0, 0.0, 1.0, 1.0];
 /// let n_bootstrap = 1000;
 /// let alpha = 0.05;
 /// let subsample_frac = 0.8;
@@ -1556,7 +1560,7 @@ pub fn precompute_bootstrap_indices(
 /// ```
 pub fn compute_threshold_and_metrics_with_bootstrap(
     value: &[f64],
-    y: &Vec<u8>,
+    y: &[f64],
     fit_function: &FitFunction,
     penalties: Option<[f64; 2]>,
     n_bootstrap: usize,
@@ -1607,7 +1611,7 @@ pub fn compute_threshold_and_metrics_with_bootstrap(
             );
 
             let bootstrap_values: Vec<f64> = bootstrap_indices.iter().map(|&i| value[i]).collect();
-            let bootstrap_y: Vec<u8> = bootstrap_indices.iter().map(|&i| y[i]).collect();
+            let bootstrap_y: Vec<f64> = bootstrap_indices.iter().map(|&i| y[i]).collect();
 
             let (_, threshold_boot, _, _, _, _) = compute_roc_and_metrics_from_value(
                 &bootstrap_values,
@@ -1673,7 +1677,7 @@ pub struct PrecomputedBootstrap {
     /// Pre-generated bootstrap sample indices for each iteration
     pub bootstrap_indices: Vec<Vec<usize>>,
     /// Pre-computed y labels for each bootstrap sample (identical across individuals)
-    pub bootstrap_y_samples: Vec<Vec<u8>>,
+    pub bootstrap_y_samples: Vec<Vec<f64>>,
     /// Square root of subsample size (for Geyer rescaling)
     pub sqrt_m: f64,
     /// Square root of full sample size (for Geyer rescaling)
@@ -1702,7 +1706,7 @@ pub struct PrecomputedBootstrap {
 ///         sensitivity, specificity, objective, rejection_rate)
 pub fn compute_threshold_and_metrics_with_precomputed_bootstrap(
     value: &[f64],
-    y: &Vec<u8>,
+    y: &[f64],
     fit_function: &FitFunction,
     penalties: Option<[f64; 2]>,
     precomputed: &PrecomputedBootstrap,
@@ -2783,7 +2787,7 @@ mod tests {
     #[test]
     fn test_compute_auc_from_value_perfect_classification() {
         let value = vec![0.1, 0.2, 0.8, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
         let auc = compute_auc_from_value(&value, &y);
         assert_eq!(auc, 1.0, "Perfect classification should yield AUC = 1.0");
     }
@@ -2791,7 +2795,7 @@ mod tests {
     #[test]
     fn test_compute_auc_from_value_random_classification() {
         let value = vec![0.5, 0.5, 0.5, 0.5];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
         let auc = compute_auc_from_value(&value, &y);
         assert_eq!(auc, 0.5, "Random classification should yield AUC = 0.5");
     }
@@ -2807,7 +2811,7 @@ mod tests {
     #[test]
     fn test_compute_auc_from_value_single_class_only() {
         let value = vec![0.1, 0.2, 0.3, 0.4];
-        let y = vec![0, 0, 0, 0];
+        let y = vec![0.0, 0.0, 0.0, 0.0];
         let auc = compute_auc_from_value(&value, &y);
         assert_eq!(auc, 0.5, "Single class only should yield AUC = 0.5");
     }
@@ -2815,7 +2819,7 @@ mod tests {
     #[test]
     fn test_compute_auc_from_value_ties_handling() {
         let value = vec![0.5, 0.5, 0.5, 0.5];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
         let auc = compute_auc_from_value(&value, &y);
         assert_eq!(auc, 0.5, "Ties should be handled correctly");
     }
@@ -2823,7 +2827,7 @@ mod tests {
     #[test]
     fn test_compute_auc_from_value_infinite_values() {
         let value = vec![f64::NEG_INFINITY, 0.5, f64::INFINITY];
-        let y = vec![0, 1, 1];
+        let y = vec![0.0, 1.0, 1.0];
         let auc = compute_auc_from_value(&value, &y);
         assert!(
             auc >= 0.0 && auc <= 1.0,
@@ -2835,7 +2839,7 @@ mod tests {
     fn test_compute_auc_large_dataset() {
         let n = 10000;
         let value: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
-        let y: Vec<u8> = (0..n).map(|i| if i < n / 2 { 0 } else { 1 }).collect();
+        let y: Vec<f64> = (0..n).map(|i| if i < n / 2 { 0.0 } else { 1.0 }).collect();
         let auc = compute_auc_from_value(&value, &y);
         assert!(
             (auc - 1.0).abs() < 1e-10,
@@ -2846,7 +2850,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_from_classes_perfect_predictions() {
         let predicted = vec![0, 1, 0, 1];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
         let (accuracy, sensitivity, specificity, _) =
             compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(
@@ -2866,7 +2870,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_from_classes_all_wrong_predictions() {
         let predicted = vec![1, 0, 1, 0];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
         let (accuracy, sensitivity, specificity, _) =
             compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(
@@ -2886,7 +2890,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_from_classes_mixed_predictions() {
         let predicted = vec![0, 1, 0, 0];
-        let y = vec![0, 1, 1, 0];
+        let y = vec![0.0, 1.0, 1.0, 0.0];
         let (accuracy, sensitivity, specificity, _) =
             compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(
@@ -2906,7 +2910,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_from_classes_class_2_ignored() {
         let predicted = vec![0, 1, 0, 1];
-        let y = vec![0, 1, 2, 1];
+        let y = vec![0.0, 1.0, 2.0, 1.0];
         let (accuracy, _, _, _) = compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(accuracy, 1.0, "Class 2 should be ignored in calculations");
     }
@@ -2925,7 +2929,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_extreme_imbalance() {
         let predicted = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-        let y = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
         let (accuracy, sensitivity, specificity, _) =
             compute_metrics_from_classes(&predicted, &y, [false; 5]);
         assert_eq!(
@@ -2945,7 +2949,7 @@ mod tests {
     #[test]
     fn test_compute_roc_and_metrics_from_value_basic_case() {
         let value = vec![0.1, 0.4, 0.6, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
         let (auc, threshold, accuracy, sensitivity, specificity, _) =
             compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         assert!(auc >= 0.0 && auc <= 1.0, "AUC should be between 0 and 1");
@@ -2967,7 +2971,7 @@ mod tests {
     #[test]
     fn test_compute_roc_and_metrics_from_value_with_penalties() {
         let value = vec![0.1, 0.4, 0.6, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
         let penalties = Some([2.0, 1.0]);
         let (_, _, _, _, _, objective) =
             compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, penalties);
@@ -2977,7 +2981,7 @@ mod tests {
     #[test]
     fn test_compute_roc_and_metrics_from_value_without_penalties() {
         let value = vec![0.1, 0.4, 0.6, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
         let (_, _, _, sensitivity, specificity, objective) =
             compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         let expected_youden = sensitivity + specificity - 1.0;
@@ -2990,7 +2994,7 @@ mod tests {
     #[test]
     fn test_compute_roc_and_metrics_from_value_single_class_only() {
         let value = vec![0.1, 0.2, 0.3, 0.4];
-        let y = vec![0, 0, 0, 0];
+        let y = vec![0.0, 0.0, 0.0, 0.0];
         let (auc, threshold, _, _, _, _) =
             compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         assert_eq!(auc, 0.5, "Single class should yield AUC = 0.5");
@@ -3553,7 +3557,7 @@ mod tests {
     #[test]
     fn test_auc_roc_mcc_consistency() {
         let value = vec![0.1, 0.4, 0.6, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         let auc1 = compute_auc_from_value(&value, &y);
         let (auc2, _, _, _, _, _) =
@@ -3571,7 +3575,7 @@ mod tests {
         let value: Vec<f64> = (0..n)
             .map(|i| (i as f64 / n as f64) + 0.001 * (i % 10) as f64)
             .collect();
-        let y: Vec<u8> = (0..n).map(|i| if i < n / 2 { 0 } else { 1 }).collect();
+        let y: Vec<f64> = (0..n).map(|i| if i < n / 2 { 0.0 } else { 1.0 }).collect();
         let (auc, _, _, _, _, _) =
             compute_roc_and_metrics_from_value(&value, &y, &FitFunction::auc, None);
         assert!(
@@ -3584,7 +3588,7 @@ mod tests {
     fn test_compute_auc_manual_example_1() {
         // Simple case: 4 samples with clear classification
         let value = vec![0.1, 0.3, 0.7, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         // Manual AUC calculation:
         // Pairs (negative, positive): (0.1,0.7), (0.1,0.9), (0.3,0.7), (0.3,0.9)
@@ -3602,7 +3606,7 @@ mod tests {
     fn test_compute_auc_manual_example_2() {
         // Partially inverted classification
         let value = vec![0.8, 0.6, 0.4, 0.2];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         // Manual AUC calculation:
         // Pairs (negative, positive): (0.8,0.4), (0.8,0.2), (0.6,0.4), (0.6,0.2)
@@ -3620,7 +3624,7 @@ mod tests {
     fn test_compute_auc_manual_example_3() {
         // Medium classification performance
         let value = vec![0.2, 0.6, 0.4, 0.8];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         // Manual AUC calculation:
         // Pairs (negative, positive): (0.2,0.4), (0.2,0.8), (0.6,0.4), (0.6,0.8)
@@ -3635,7 +3639,7 @@ mod tests {
     fn test_compute_auc_manual_example_4() {
         // Case with ties handling
         let value = vec![0.5, 0.5, 0.3, 0.7];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
 
         // Manual AUC calculation with ties:
         // Pairs (negative, positive): (0.5,0.5), (0.5,0.7), (0.3,0.5), (0.3,0.7)
@@ -3650,7 +3654,7 @@ mod tests {
     fn test_compute_auc_manual_example_5() {
         // Imbalanced dataset
         let value = vec![0.1, 0.2, 0.9];
-        let y = vec![0, 0, 1];
+        let y = vec![0.0, 0.0, 1.0];
 
         // Manual AUC calculation:
         // Pairs (negative, positive): (0.1,0.9), (0.2,0.9)
@@ -3667,7 +3671,7 @@ mod tests {
     fn test_compute_mcc_manual_example_1() {
         // Perfect balanced classification
         let value = vec![0.1, 0.2, 0.8, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         // With optimal threshold at 0.5: TP=2, TN=2, FP=0, FN=0
         // MCC = (2*2 - 0*0) / sqrt((2+0)*(2+0)*(2+0)*(2+0)) = 4/4 = 1.0
@@ -3684,7 +3688,7 @@ mod tests {
     fn test_compute_mcc_manual_example_2() {
         // Imperfect but balanced classification
         let value = vec![0.5, 0.5, 0.5, 0.5];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
 
         // With optimal threshold at 0.5: TP=1, TN=1, FP=1, FN=1
         // MCC = (1*1 - 1*1) / sqrt((1+1)*(1+1)*(1+1)*(1+1)) = 0/4 = 0.0
@@ -3702,7 +3706,7 @@ mod tests {
     fn test_compute_mcc_manual_example_3() {
         // Classification with class bias
         let value = vec![0.2, 0.3, 0.7, 0.8];
-        let y = vec![0, 0, 0, 1];
+        let y = vec![0.0, 0.0, 0.0, 1.0];
 
         // With optimal threshold at ~0.75: TP=1, TN=3, FP=0, FN=0
         // MCC = (1*3 - 0*0) / sqrt((1+0)*(1+0)*(3+0)*(3+0)) = 3/sqrt(9) = 3/3 = 1.0
@@ -3719,7 +3723,7 @@ mod tests {
     fn test_compute_mcc_manual_example_4() {
         // Intermediate case with manual calculation
         let value = vec![0.1, 0.4, 0.6, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         // With optimal threshold at 0.5: TP=2, TN=2, FP=0, FN=0
         // MCC = (2*2 - 0*0) / sqrt((2+0)*(2+0)*(2+0)*(2+0)) = 4/4 = 1.0
@@ -3733,7 +3737,7 @@ mod tests {
     fn test_compute_mcc_manual_example_5() {
         // Classification with symmetric errors
         let value = vec![0.2, 0.6, 0.4, 0.8];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         // Analysis of possible thresholds:
         // Threshold 0.5: TP=1, TN=1, FP=1, FN=1 → MCC = 0
@@ -3748,7 +3752,7 @@ mod tests {
     fn test_auc_mcc_relationship_manual_verification() {
         // Verification on a case where we can calculate both manually
         let value = vec![0.1, 0.3, 0.7, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         let auc = compute_auc_from_value(&value, &y);
         let (_, _, _, _, _, mcc) =
@@ -3769,7 +3773,7 @@ mod tests {
     fn test_compute_auc_manual_complex_case() {
         // More complex case with multiple score values
         let value = vec![0.1, 0.3, 0.4, 0.6, 0.7, 0.9];
-        let y = vec![0, 0, 1, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0];
 
         // Manual calculation:
         // Negatives: 0.1, 0.3, 0.6 (indices 0, 1, 3)
@@ -3789,7 +3793,7 @@ mod tests {
     fn test_compute_mcc_manual_complex_case() {
         // Complex case with known MCC calculation
         let value = vec![0.1, 0.3, 0.6, 0.8];
-        let y = vec![0, 1, 1, 0];
+        let y = vec![0.0, 1.0, 1.0, 0.0];
 
         // With threshold 0.45: predictions [0, 0, 1, 1], actual [0, 1, 1, 0]
         // TP=1 (index 2), TN=1 (index 0), FP=1 (index 3), FN=1 (index 1)
@@ -3808,7 +3812,7 @@ mod tests {
     fn test_compute_auc_edge_case_with_duplicate_scores() {
         // Edge case: multiple samples with same score
         let value = vec![0.2, 0.2, 0.8, 0.8];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
 
         // Manual calculation with ties:
         // Pairs: (0.2,0.8), (0.2,0.8) → both count as 1.0
@@ -3830,7 +3834,7 @@ mod tests {
 
     #[test]
     fn test_stratify_balanced_dataset() {
-        let y = vec![0, 1, 0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
         let (pos, neg) = stratify_indices_by_class(&y);
 
         assert_eq!(pos.len(), 3, "Should have 3 positive samples");
@@ -3841,7 +3845,7 @@ mod tests {
 
     #[test]
     fn test_stratify_imbalanced_dataset() {
-        let y = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
         let (pos, neg) = stratify_indices_by_class(&y);
 
         assert_eq!(pos.len(), 1, "Should have 1 positive sample");
@@ -3856,7 +3860,7 @@ mod tests {
 
     #[test]
     fn test_stratify_all_positive() {
-        let y = vec![1, 1, 1, 1];
+        let y = vec![1.0, 1.0, 1.0, 1.0];
         let (pos, neg) = stratify_indices_by_class(&y);
 
         assert_eq!(pos.len(), 4, "Should have 4 positive samples");
@@ -3867,7 +3871,7 @@ mod tests {
 
     #[test]
     fn test_stratify_all_negative() {
-        let y = vec![0, 0, 0];
+        let y = vec![0.0, 0.0, 0.0];
         let (pos, neg) = stratify_indices_by_class(&y);
 
         assert_eq!(pos.len(), 0, "Should have 0 positive samples");
@@ -3878,7 +3882,7 @@ mod tests {
 
     #[test]
     fn test_stratify_preserves_order() {
-        let y = vec![1, 0, 1, 0, 1];
+        let y = vec![1.0, 0.0, 1.0, 0.0, 1.0];
         let (pos, neg) = stratify_indices_by_class(&y);
 
         // Indices should be in ascending order
@@ -3895,7 +3899,7 @@ mod tests {
         // This test ensures that stratify_indices_by_class produces
         // the same result as the manual loop-based implementation
         // previously used in cv.rs and data.rs
-        let y = vec![0, 1, 0, 0, 1, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0];
 
         // New implementation
         let (pos_new, neg_new) = stratify_indices_by_class(&y);
@@ -3904,9 +3908,9 @@ mod tests {
         let mut pos_old = Vec::new();
         let mut neg_old = Vec::new();
         for (i, &label) in y.iter().enumerate() {
-            if label == 0 {
+            if label == 0.0 {
                 neg_old.push(i);
-            } else if label == 1 {
+            } else if label == 1.0 {
                 pos_old.push(i);
             }
         }
@@ -4310,7 +4314,7 @@ mod tests {
     #[test]
     fn test_bootstrap_ci_with_balanced_dataset() {
         let value = vec![0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9];
-        let y = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (auc, [lower, center, upper], _, _, _, _, rej) =
@@ -4345,7 +4349,7 @@ mod tests {
     #[test]
     fn test_bootstrap_ci_reproducibility() {
         let value = vec![0.1, 0.3, 0.7, 0.9];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
@@ -4387,7 +4391,7 @@ mod tests {
     fn test_bootstrap_ci_with_imbalanced_dataset() {
         // Highly unbalanced dataset (10% positive)
         let value = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
-        let y = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (auc, [lower, center, upper], acc, sens, spec, obj, rej) =
@@ -4441,7 +4445,9 @@ mod tests {
         let value = vec![
             0.1, 0.3, 0.5, 0.7, 0.9, 0.3, 0.1, 0.2, 0.2, 0.1, 0.5, 0.2, 0.9, 0.2,
         ];
-        let y = vec![0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0];
+        let y = vec![
+            0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0,
+        ];
 
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let mut rng2 = ChaCha8Rng::seed_from_u64(42);
@@ -4485,7 +4491,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_with_additional_perfect_classification() {
         let predicted = vec![0, 1, 0, 1];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
 
         let (acc, sens, spec, additional) = compute_metrics_from_classes(&predicted, &y, [true; 5]);
 
@@ -4511,7 +4517,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_with_additional_random_classification() {
         let predicted = vec![0, 1, 0, 1];
-        let y = vec![1, 0, 1, 0];
+        let y = vec![1.0, 0.0, 1.0, 0.0];
 
         let (acc, sens, spec, additional) = compute_metrics_from_classes(&predicted, &y, [true; 5]);
 
@@ -4528,7 +4534,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_with_additional_imbalanced() {
         let predicted = vec![0, 0, 0, 0, 0, 0, 1, 1, 0, 1];
-        let y = vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0];
 
         let (_, _, _, additional) = compute_metrics_from_classes(&predicted, &y, [true; 5]);
 
@@ -4552,7 +4558,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_selective_additional() {
         let predicted = vec![0, 1, 0, 1];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
 
         let (_, _, _, additional) =
             compute_metrics_from_classes(&predicted, &y, [true, true, false, false, false]);
@@ -4567,7 +4573,7 @@ mod tests {
     #[test]
     fn test_compute_metrics_with_abstentions_and_additional() {
         let predicted = vec![0, 1, 2, 1, 0, 2];
-        let y = vec![0, 1, 0, 1, 1, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0, 1.0, 1.0];
 
         let (acc, sens, spec, additional) = compute_metrics_from_classes(&predicted, &y, [true; 5]);
 
@@ -4589,7 +4595,7 @@ mod tests {
         // Case where MCC denominator = 0
         // All predicted positive, but true class mixed
         let predicted = vec![1, 1, 1, 1];
-        let y = vec![1, 1, 1, 1];
+        let y = vec![1.0, 1.0, 1.0, 1.0];
 
         let (_, _, _, additional) =
             compute_metrics_from_classes(&predicted, &y, [true, false, false, false, false]);
@@ -4605,7 +4611,7 @@ mod tests {
     #[test]
     fn test_gmean_calculation() {
         let predicted = vec![0, 0, 1, 1];
-        let y = vec![0, 1, 0, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0];
 
         let (_, sens, spec, additional) =
             compute_metrics_from_classes(&predicted, &y, [false, false, false, false, true]);
@@ -4635,7 +4641,7 @@ mod tests {
     #[should_panic(expected = "assertion failed")]
     fn test_bootstrap_invalid_subsample_frac_zero() {
         let value = vec![0.1, 0.9];
-        let y = vec![0, 1];
+        let y = vec![0.0, 1.0];
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let _ = compute_threshold_and_metrics_with_bootstrap(
@@ -4654,7 +4660,7 @@ mod tests {
     #[should_panic(expected = "assertion failed")]
     fn test_bootstrap_invalid_subsample_frac_above_one() {
         let value = vec![0.1, 0.9];
-        let y = vec![0, 1];
+        let y = vec![0.0, 1.0];
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let _ = compute_threshold_and_metrics_with_bootstrap(
@@ -4673,7 +4679,7 @@ mod tests {
     #[should_panic(expected = "assertion failed")]
     fn test_bootstrap_too_few_iterations() {
         let value = vec![0.1, 0.5, 0.9];
-        let y = vec![0, 0, 1];
+        let y = vec![0.0, 0.0, 1.0];
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let _ = compute_threshold_and_metrics_with_bootstrap(
@@ -4692,7 +4698,7 @@ mod tests {
     #[should_panic(expected = "assertion failed")]
     fn test_bootstrap_invalid_alpha_zero() {
         let value = vec![0.1, 0.9];
-        let y = vec![0, 1];
+        let y = vec![0.0, 1.0];
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let _ = compute_threshold_and_metrics_with_bootstrap(
@@ -4711,7 +4717,7 @@ mod tests {
     #[should_panic(expected = "assertion failed")]
     fn test_bootstrap_invalid_alpha_one() {
         let value = vec![0.1, 0.9];
-        let y = vec![0, 1];
+        let y = vec![0.0, 1.0];
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let _ = compute_threshold_and_metrics_with_bootstrap(
@@ -4730,7 +4736,7 @@ mod tests {
     fn test_bootstrap_subsample_632() {
         // Test with .632 bootstrap (optimal subsampling)
         let value = vec![0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9];
-        let y = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (auc, [lower, center, upper], acc, se, sp, obj, rej) =
@@ -4761,7 +4767,7 @@ mod tests {
     fn test_bootstrap_half_bootstrap() {
         // Test with half-bootstrap (very conservative)
         let value = vec![0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9];
-        let y = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (_, [lower_half, _, upper_half], _, _, _, _, _) =
@@ -4812,7 +4818,7 @@ mod tests {
     #[test]
     fn test_bootstrap_ci_width_vs_n_bootstrap() {
         let value = vec![0.1, 0.2, 0.4, 0.6, 0.8, 0.9];
-        let y = vec![0, 0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
         // Small n_bootstrap
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
@@ -4862,7 +4868,7 @@ mod tests {
     #[test]
     fn test_bootstrap_different_fit_functions() {
         let value = vec![0.1, 0.2, 0.3, 0.7, 0.8, 0.9];
-        let y = vec![0, 0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let (_, [_, center_auc, _], _, _, _, obj_auc, _) =
@@ -4918,7 +4924,7 @@ mod tests {
     #[test]
     fn test_bootstrap_with_penalties() {
         let value = vec![0.1, 0.3, 0.5, 0.7, 0.9];
-        let y = vec![0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 1.0];
 
         // Test with FPR/FNR penalties using sensitivity as fit function
         let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -4942,7 +4948,7 @@ mod tests {
     fn test_bootstrap_stratification_preserved() {
         // Test that stratification is maintained across bootstrap samples
         let value = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
-        let y = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (_, [lower, _, upper], acc, se, sp, _, rej) =
@@ -4974,7 +4980,7 @@ mod tests {
     fn test_bootstrap_extreme_scores() {
         // Test with extreme score values
         let value = vec![-1e6, -1e3, 1e3, 1e6];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (auc, [lower, center, upper], _, _, _, _, _) =
@@ -5001,7 +5007,7 @@ mod tests {
     fn test_bootstrap_small_dataset() {
         // Test with minimal dataset (edge case)
         let value = vec![0.2, 0.3, 0.7, 0.8];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (auc, [lower, center, upper], _, _, _, _, _) =
@@ -5031,7 +5037,7 @@ mod tests {
     fn test_bootstrap_all_same_class() {
         // Edge case: all samples from same class
         let value = vec![0.1, 0.2, 0.3, 0.4];
-        let y = vec![1, 1, 1, 1];
+        let y = vec![1.0, 1.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -5078,7 +5084,7 @@ mod tests {
     fn test_bootstrap_perfect_separation() {
         // Perfect separation between classes
         let value = vec![0.1, 0.2, 0.3, 0.7, 0.8, 0.9];
-        let y = vec![0, 0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (auc, [lower, center, upper], acc, se, sp, _, _) =
@@ -5116,7 +5122,7 @@ mod tests {
     fn test_bootstrap_ties_in_scores() {
         // Many tied scores
         let value = vec![0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
-        let y = vec![0, 0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (auc, [lower, center, upper], _, _, _, _, _) =
@@ -5146,7 +5152,7 @@ mod tests {
     fn test_bootstrap_geyer_rescaling() {
         // Test that Geyer rescaling is applied correctly for subsampling
         let value: Vec<f64> = (0..20).map(|i| i as f64 / 20.0).collect();
-        let y: Vec<u8> = (0..20).map(|i| if i < 10 { 0 } else { 1 }).collect();
+        let y: Vec<f64> = (0..20).map(|i| if i < 10 { 0.0 } else { 1.0 }).collect();
 
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let (_, [l1, c1, u1], _, _, _, _, _) = compute_threshold_and_metrics_with_bootstrap(
@@ -5181,7 +5187,7 @@ mod tests {
     fn test_bootstrap_ci_coverage_stability() {
         // Test that CI is stable across different random seeds
         let value = vec![0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9];
-        let y = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
 
         let mut widths = Vec::new();
 
@@ -5220,7 +5226,7 @@ mod tests {
     #[test]
     fn test_bootstrap_metrics_consistency() {
         let value = vec![0.1, 0.3, 0.5, 0.7, 0.9];
-        let y = vec![0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let (_auc, [lower, center, upper], acc, se, sp, _, rej) =
@@ -5271,7 +5277,7 @@ mod tests {
     #[test]
     fn test_bootstrap_return_values_structure() {
         let value = vec![0.1, 0.9];
-        let y = vec![0, 1];
+        let y = vec![0.0, 1.0];
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let result = compute_threshold_and_metrics_with_bootstrap(
@@ -5314,7 +5320,7 @@ mod tests {
     fn test_precomputed_bootstrap_equivalence() {
         // Test that precomputed bootstrap gives same results as regular bootstrap
         let value = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
-        let y = vec![0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0];
 
         let seed = 12345;
         let n_bootstrap = 1000;
@@ -5410,7 +5416,7 @@ mod tests {
     fn test_precomputed_bootstrap_with_penalties() {
         // Test precomputed bootstrap with penalties
         let value = vec![0.2, 0.4, 0.6, 0.8];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
 
         let seed = 42;
         let n_bootstrap = 500;
@@ -5471,7 +5477,7 @@ mod tests {
         // We have 3 positive samples and 2 negative samples
 
         let scores = vec![0.1, 0.3, 0.5, 0.7, 0.9];
-        let y = vec![0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 1.0];
 
         // Compute ROC and get the optimal threshold
         let (auc, threshold, acc_roc, sens_roc, spec_roc, _obj) =
@@ -5510,7 +5516,7 @@ mod tests {
         // This tests the >= rule explicitly
 
         let scores = vec![0.2, 0.4, 0.6, 0.6, 0.8];
-        let y = vec![0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 1.0];
         let threshold = 0.6;
 
         // Manually compute expected metrics with >= rule
@@ -5533,7 +5539,7 @@ mod tests {
     fn test_threshold_boundary_all_equal() {
         // Case: All scores equal to threshold
         let scores = vec![0.5, 0.5, 0.5, 0.5];
-        let y = vec![1, 1, 0, 0];
+        let y = vec![1.0, 1.0, 0.0, 0.0];
         let threshold = 0.5;
 
         // With >= rule, all should be classified as positive (class 1)
@@ -5560,7 +5566,7 @@ mod tests {
     fn test_threshold_boundary_just_below() {
         // Case: Threshold just below the smallest positive score
         let scores = vec![0.1, 0.2, 0.5, 0.6];
-        let y = vec![0, 0, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0];
         let threshold = 0.49;
 
         // Scores >= 0.49: [0.5, 0.6] -> class 1
@@ -5580,7 +5586,7 @@ mod tests {
         // by checking against manual computation
 
         let scores = vec![0.1, 0.3, 0.5, 0.7, 0.9];
-        let y = vec![0, 1, 0, 1, 1];
+        let y = vec![0.0, 1.0, 0.0, 1.0, 1.0];
 
         let (auc, threshold, acc, sens, spec, obj) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5613,8 +5619,8 @@ mod tests {
             0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, // 7 positives
         ];
         let y_high = vec![
-            0, 0, 0, // negatives
-            1, 1, 1, 1, 1, 1, 1, // positives
+            0.0, 0.0, 0.0, // negatives
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, // positives
         ];
 
         let (auc_high, threshold_high, acc_high, sens_high, spec_high, _) =
@@ -5638,8 +5644,8 @@ mod tests {
             0.8, 0.9, 1.0, // 3 positives
         ];
         let y_low = vec![
-            0, 0, 0, 0, 0, 0, 0, // negatives
-            1, 1, 1, // positives
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // negatives
+            1.0, 1.0, 1.0, // positives
         ];
 
         let (auc_low, threshold_low, acc_low, sens_low, spec_low, _) =
@@ -5659,7 +5665,7 @@ mod tests {
         // Test when optimal threshold equals the last (highest) score
         // This should result in classifying all samples as negative
         let scores = vec![0.1, 0.3, 0.5, 0.7, 0.9];
-        let y = vec![1, 1, 1, 1, 0]; // Last score is negative
+        let y = vec![1.0, 1.0, 1.0, 1.0, 0.0]; // Last score is negative
 
         let (auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5707,7 +5713,7 @@ mod tests {
         // Test when optimal threshold equals the first (lowest) score
         // This should result in classifying all samples as positive
         let scores = vec![0.1, 0.3, 0.5, 0.7, 0.9];
-        let y = vec![0, 1, 1, 1, 1]; // First score is negative
+        let y = vec![0.0, 1.0, 1.0, 1.0, 1.0]; // First score is negative
 
         let (auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5749,7 +5755,7 @@ mod tests {
         // Test with continuous scores (no duplicates)
         // This is common in real-world scenarios with floating-point predictions
         let scores = vec![0.123, 0.456, 0.789, 0.234, 0.567, 0.890, 0.345, 0.678];
-        let y = vec![0, 0, 1, 0, 1, 1, 0, 1];
+        let y = vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
 
         let (auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5782,7 +5788,7 @@ mod tests {
     fn test_continuous_scores_with_ties() {
         // Test with continuous scores that have some ties
         let scores = vec![0.1, 0.2, 0.2, 0.3, 0.4, 0.4, 0.5, 0.6];
-        let y = vec![0, 0, 1, 0, 1, 1, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0];
 
         let (_auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5802,7 +5808,7 @@ mod tests {
     fn test_threshold_with_very_small_continuous_values() {
         // Test with very small continuous values (near zero)
         let scores = vec![0.0001, 0.0002, 0.0003, 0.0004, 0.0005];
-        let y = vec![0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 1.0];
 
         let (auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5820,7 +5826,7 @@ mod tests {
     fn test_threshold_with_large_continuous_values() {
         // Test with large continuous values
         let scores = vec![1000.1, 2000.5, 3000.3, 4000.7, 5000.2];
-        let y = vec![0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 1.0];
 
         let (auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5839,7 +5845,7 @@ mod tests {
         // Test edge case where optimal threshold is last_score + 1.0
         // This happens when classifying all as negative is optimal
         let scores = vec![0.1, 0.2, 0.3, 0.4, 0.5];
-        let y = vec![0, 0, 0, 0, 0]; // All negatives
+        let y = vec![0.0, 0.0, 0.0, 0.0, 0.0]; // All negatives
 
         let (auc, _threshold, _acc, _sens, _spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5855,7 +5861,7 @@ mod tests {
     fn test_threshold_negative_scores() {
         // Test with negative scores
         let scores = vec![-0.5, -0.3, -0.1, 0.1, 0.3];
-        let y = vec![0, 0, 1, 1, 1];
+        let y = vec![0.0, 0.0, 1.0, 1.0, 1.0];
 
         let (auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5876,7 +5882,7 @@ mod tests {
     fn test_threshold_mixed_positive_negative_scores() {
         // Test with mix of positive and negative scores, unsorted
         let scores = vec![1.5, -2.3, 0.5, -0.8, 3.2, 0.0, -1.1, 2.7];
-        let y = vec![1, 0, 0, 0, 1, 0, 0, 1];
+        let y = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
 
         let (auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5897,7 +5903,7 @@ mod tests {
     fn test_threshold_continuous_perfect_separation() {
         // Perfect separation with continuous scores
         let scores = vec![0.12, 0.23, 0.34, 0.45, 0.67, 0.78, 0.89, 0.91];
-        let y = vec![0, 0, 0, 0, 1, 1, 1, 1];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
 
         let (auc, threshold, acc, sens, spec, _) =
             compute_roc_and_metrics_from_value(&scores, &y, &FitFunction::auc, None);
@@ -5942,7 +5948,7 @@ mod tests {
 
         // Case 3a: All scores equal to threshold
         let scores_a = vec![0.5, 0.5, 0.5, 0.5];
-        let y_a = vec![1, 1, 0, 0];
+        let y_a = vec![1.0, 1.0, 0.0, 0.0];
         let threshold_a = 0.5;
 
         println!("\nCase 3a: All scores == threshold");
@@ -5975,7 +5981,7 @@ mod tests {
 
         // Case 3b: Threshold just below the smallest positive score
         let scores_b = vec![0.1, 0.2, 0.5, 0.6];
-        let y_b = vec![0, 0, 1, 1];
+        let y_b = vec![0.0, 0.0, 1.0, 1.0];
         let threshold_b = 0.49; // Just below 0.5
 
         println!("\nCase 3b: Threshold just below smallest positive");
@@ -6012,8 +6018,8 @@ mod tests {
             0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, // 7 positives
         ];
         let y_high = vec![
-            0, 0, 0, // negatives
-            1, 1, 1, 1, 1, 1, 1, // positives
+            0.0, 0.0, 0.0, // negatives
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, // positives
         ];
 
         println!("\nHigh prevalence (70% positive):");
@@ -6048,8 +6054,8 @@ mod tests {
             0.8, 0.9, 1.0, // 3 positives
         ];
         let y_low = vec![
-            0, 0, 0, 0, 0, 0, 0, // negatives
-            1, 1, 1, // positives
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // negatives
+            1.0, 1.0, 1.0, // positives
         ];
 
         println!("\nLow prevalence (30% positive):");

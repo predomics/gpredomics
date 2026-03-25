@@ -741,9 +741,9 @@ mod tests {
         assert_eq!(cv.validation_folds[1].X, X2);
         assert_eq!(cv.validation_folds[2].X, X3);
 
-        assert_eq!(cv.validation_folds[0].y, [0, 1, 1]);
-        assert_eq!(cv.validation_folds[1].y, [0, 1]);
-        assert_eq!(cv.validation_folds[2].y, [1]);
+        assert_eq!(cv.validation_folds[0].y, [0.0, 1.0, 1.0]);
+        assert_eq!(cv.validation_folds[1].y, [0.0, 1.0]);
+        assert_eq!(cv.validation_folds[2].y, [1.0]);
 
         assert_eq!(
             cv.validation_folds[0].samples,
@@ -766,7 +766,7 @@ mod tests {
     fn test_cv_new_with_single_class() {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::test();
-        data.y = vec![0; data.y.len()];
+        data.y = vec![0.0; data.y.len()];
 
         let outer_folds = 3;
         let cv = CV::new(&data, outer_folds, &mut rng);
@@ -776,7 +776,7 @@ mod tests {
 
         for fold in &cv.validation_folds {
             for &label in &fold.y {
-                assert_eq!(label, 0);
+                assert_eq!(label, 0.0);
             }
         }
     }
@@ -920,9 +920,9 @@ mod tests {
         // Define 95% of samples as class 0, 5% as class 1
         let n = data.y.len();
         let n_class1 = (n as f64 * 0.05).round() as usize;
-        data.y = vec![0; n];
+        data.y = vec![0.0; n];
         for i in 0..n_class1 {
-            data.y[i] = 1;
+            data.y[i] = 1.0;
         }
 
         let outer_folds = 5;
@@ -930,7 +930,7 @@ mod tests {
 
         // Each fold should contain a few class 1 samples or be empty if there are too few.
         for fold in &cv.validation_folds {
-            let count_class1 = fold.y.iter().filter(|&&y| y == 1).count();
+            let count_class1 = fold.y.iter().filter(|&&y| y == 1.0).count();
             assert!(count_class1 <= n_class1);
         }
 
@@ -938,7 +938,7 @@ mod tests {
         let total_class1: usize = cv
             .validation_folds
             .iter()
-            .map(|fold| fold.y.iter().filter(|&&y| y == 1).count())
+            .map(|fold| fold.y.iter().filter(|&&y| y == 1.0).count())
             .sum();
         assert_eq!(total_class1, n_class1);
     }
@@ -1614,13 +1614,13 @@ mod tests {
         let cv = CV::new(&data, outer_folds, &mut rng);
 
         // Count the classes in the original data
-        let original_class0 = data.y.iter().filter(|&&y| y == 0).count();
-        let original_class1 = data.y.iter().filter(|&&y| y == 1).count();
+        let original_class0 = data.y.iter().filter(|&&y| y == 0.0).count();
+        let original_class1 = data.y.iter().filter(|&&y| y == 1.0).count();
 
         // Check the distribution in each fold
         for (i, fold) in cv.validation_folds.iter().enumerate() {
-            let fold_class0 = fold.y.iter().filter(|&&y| y == 0).count();
-            let fold_class1 = fold.y.iter().filter(|&&y| y == 1).count();
+            let fold_class0 = fold.y.iter().filter(|&&y| y == 0.0).count();
+            let fold_class1 = fold.y.iter().filter(|&&y| y == 1.0).count();
 
             // The distribution should be roughly balanced
             let expected_class0 = (original_class0 + outer_folds - 1) / outer_folds;
@@ -1717,8 +1717,8 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let mut data = Data::specific_test(30, 10);
 
-        let class0_count = data.y.iter().filter(|&&y| y == 0).count();
-        let _class1_count = data.y.iter().filter(|&&y| y == 1).count();
+        let class0_count = data.y.iter().filter(|&&y| y == 0.0).count();
+        let _class1_count = data.y.iter().filter(|&&y| y == 1.0).count();
 
         let annotation_values: Vec<String> = (0..30)
             .map(|i| {
@@ -1739,7 +1739,7 @@ mod tests {
         let expected_size_class0 = class0_count / outer_folds;
 
         for (i, fold) in cv.validation_folds.iter().enumerate() {
-            let fold_class0 = fold.y.iter().filter(|&&y| y == 0).count();
+            let fold_class0 = fold.y.iter().filter(|&&y| y == 0.0).count();
 
             // Tolerance of +1/-1 due to integer divisions
             assert!(
@@ -1771,8 +1771,8 @@ mod tests {
         }
 
         // Create exactly 30 samples of each class
-        let mut y: Vec<u8> = vec![0; 30];
-        y.extend(vec![1; 30]);
+        let mut y: Vec<f64> = vec![0.0; 30];
+        y.extend(vec![1.0; 30]);
 
         let mut data = Data {
             X,
@@ -1823,7 +1823,7 @@ mod tests {
 
         for i in 0..data.sample_len {
             let batch = &annot.sample_tags[&i][col_idx];
-            if data.y[i] == 0 {
+            if data.y[i] == 0.0 {
                 if batch == "A" {
                     batch_a_class0 += 1;
                 } else {
@@ -1864,7 +1864,7 @@ mod tests {
                 }
 
                 // Count by combination (class, batch) for this fold
-                if fold.y[i] == 0 {
+                if fold.y[i] == 0.0 {
                     if batch == "A" {
                         fold_batch_a_class0 += 1;
                     } else {
@@ -2046,23 +2046,23 @@ mod tests {
             let class0_standard = cv_standard.validation_folds[i]
                 .y
                 .iter()
-                .filter(|&&y| y == 0)
+                .filter(|&&y| y == 0.0)
                 .count();
             let class1_standard = cv_standard.validation_folds[i]
                 .y
                 .iter()
-                .filter(|&&y| y == 1)
+                .filter(|&&y| y == 1.0)
                 .count();
 
             let class0_stratified = cv_stratified.validation_folds[i]
                 .y
                 .iter()
-                .filter(|&&y| y == 0)
+                .filter(|&&y| y == 0.0)
                 .count();
             let class1_stratified = cv_stratified.validation_folds[i]
                 .y
                 .iter()
-                .filter(|&&y| y == 1)
+                .filter(|&&y| y == 1.0)
                 .count();
 
             assert_eq!(
@@ -2366,7 +2366,7 @@ mod tests {
 
         // Build class labels: [0,0,...0 (40x), 1,1,...1 (40x)]
         data.y = (0..total_samples)
-            .map(|i| if i < total_samples / 2 { 0 } else { 1 })
+            .map(|i| if i < total_samples / 2 { 0.0 } else { 1.0 })
             .collect();
 
         // Build batch annotations: alternating A/B within each class
@@ -2407,12 +2407,16 @@ mod tests {
                 let class = fold.y[sample_idx];
                 let batch = &fold_annot.sample_tags[&sample_idx][col_idx];
 
-                match (class, batch.as_str()) {
-                    (0, "A") => count_0_a += 1,
-                    (0, "B") => count_0_b += 1,
-                    (1, "A") => count_1_a += 1,
-                    (1, "B") => count_1_b += 1,
-                    _ => panic!("Unexpected class/batch combination"),
+                if class == 0.0 && batch == "A" {
+                    count_0_a += 1;
+                } else if class == 0.0 && batch == "B" {
+                    count_0_b += 1;
+                } else if class == 1.0 && batch == "A" {
+                    count_1_a += 1;
+                } else if class == 1.0 && batch == "B" {
+                    count_1_b += 1;
+                } else {
+                    panic!("Unexpected class/batch combination");
                 }
             }
 
@@ -2492,7 +2496,7 @@ mod tests {
                     .position(|c| c == "batch")
                     .unwrap();
                 (0..fold.sample_len)
-                    .filter(|&i| fold.y[i] == 0 && annot.sample_tags[&i][col_idx] == "A")
+                    .filter(|&i| fold.y[i] == 0.0 && annot.sample_tags[&i][col_idx] == "A")
                     .count()
             })
             .sum();
@@ -2518,7 +2522,7 @@ mod tests {
         // Configuration :
         // - Class 0: 4 samples (2 batch A, 2 batch B)
         // - Class 1: 2 samples (1 batch A, 1 batch B)
-        data.y = vec![0, 0, 0, 0, 1, 1];
+        data.y = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0];
 
         let annotation_values = vec![
             "A".to_string(),
@@ -2651,7 +2655,7 @@ mod tests {
     fn test_cv_new_stratified_by_panic_on_missing_annotations() {
         let mut data = Data::test_with_these_features(&[0, 1, 2, 3]);
         data.sample_len = 5;
-        data.y = vec![0, 1, 0, 1, 0];
+        data.y = vec![0.0, 1.0, 0.0, 1.0, 0.0];
         data.sample_annotations = None;
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -2663,7 +2667,7 @@ mod tests {
     fn test_cv_new_stratified_by_panic_on_incomplete_annotation_line() {
         let mut data = Data::test_with_these_features(&[0, 1, 2, 3]);
         data.sample_len = 4;
-        data.y = vec![0, 1, 0, 1];
+        data.y = vec![0.0, 1.0, 0.0, 1.0];
 
         let mut sample_tags = HashMap::new();
         sample_tags.insert(0, vec!["ctrl".to_string()]);
