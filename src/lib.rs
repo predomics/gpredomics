@@ -662,7 +662,7 @@ pub fn run_training(
                 "Training using MCMC\n-----------------------------------------------------"
             );
             (collection, meta) = mcmc(data, param, running);
-            final_population = Population::new();
+            final_population = collection[collection.len() - 1].clone();
         }
         "aco" => {
             cinfo!(param.general.display_colorful, "Training using Ant Colony Optimization\n-----------------------------------------------------");

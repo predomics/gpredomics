@@ -123,39 +123,7 @@ impl Population {
     /// let display_str = population.display(&train_data, Some(&test_data), &params);
     /// ```
     pub fn display(&mut self, data: &Data, data_to_test: Option<&Data>, param: &Param) -> String {
-        if param.general.algo == "mcmc" {
-            let other_set = if data_to_test.is_some() {
-                "Test"
-            } else {
-                "Train"
-            };
-            let mut str = format!("Displaying bayesian model with the greatest log evidence. Metrics are shown in the following order: Train/{}.", other_set);
-
-            let (
-                train_auc,
-                train_best_threshold,
-                train_best_acc,
-                train_best_sens,
-                train_best_spec,
-                _,
-            ) = self.bayesian_compute_roc_and_metrics(&data);
-
-            str = if let Some(data_to_test) = data_to_test {
-                let (test_auc, test_best_acc, test_best_sens, test_best_spec) =
-                    self.bayesian_compute_metrics(&data_to_test, train_best_threshold);
-                format!("{}\n\nBayesian model {}:{} [n_st = {}] AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}", 
-                    str, self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(),
-                    train_auc, test_auc, train_best_acc, test_best_acc, train_best_sens, test_best_sens, train_best_spec, test_best_spec)
-            } else {
-                format!("{}\nBayesian model {}:{} [n_st = {}] AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}", 
-                    str, self.individuals[0].get_language(), self.individuals[0].get_data_type(), self.individuals.len(),
-                    train_auc, train_best_acc, train_best_sens, train_best_sens)
-            };
-
-            str = format!("{}\n\nThese metrics were calculated by optimizing the probability of decision (threshold={:.3} instead of 0.5)", str, train_best_threshold);
-            str = format!("{}\nNote: the number of iterations corresponds to the sum of the number of betas and feature coefficient variations, resulting in a number greater than n_iter-n_burn)", str);
-            format!("{}\nTo reproduce these results, relaunch this exact training with data to be predicted and/or export the MCMC trace with save_trace_outdir", str)
-        } else {
+        {
             let limit = if (self.individuals.len() as u32) < param.general.n_model_to_display
                 || param.general.n_model_to_display == 0
             {
