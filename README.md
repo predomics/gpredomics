@@ -69,13 +69,13 @@ score = Bacteroides + Faecalibacterium - Enterococcus
 
 | | Algorithm | Test AUC | Model Size (k) | Time | Type |
 |---|-----------|:-------:|:--------------:|:----:|------|
-| 🥇 | **Beam Search** | **0.947** | 8 | 0.4s | Systematic |
-| 🥈 | **Simulated Annealing** | 0.911 | 48 | 0.3s | Single-solution |
-| 🥉 | **LASSO / Elastic Net** | 0.882 | 70 | 0.1s | Direct optimization |
-| | Iterated Local Search | 0.813 | **4** | **0.05s** | Single-solution |
-| | Ant Colony Optimization | 0.802 | 52 | 7.1s | Population-based |
-| | Genetic Algorithm | 0.791 | 48 | 0.5s | Population-based |
-| | MCMC / Bayesian | 0.961 | 52 | 11s | Bayesian |
+| 🥇 | **Beam Search** | **0.947** | 8 | 0.5s | Systematic |
+| 🥈 | **LASSO / Elastic Net** | 0.882 | 70 | 0.1s | Direct optimization |
+| 🥉 | **Simulated Annealing** | 0.856 | 40 | 1s | Single-solution |
+| | Genetic Algorithm | 0.855 | 28 | 20s | Population, multi-language |
+| | Ant Colony Optimization | 0.853 | 55 | 15s | Population, constructive |
+| | Iterated Local Search | 0.813 | **22** | **0.1s** | Single-solution |
+| | MCMC / Bayesian | — | 10 | 11s | Bayesian (posterior) |
 
 > All models are human-readable: `score = species_A + species_B - species_C ≥ threshold`
 
@@ -106,10 +106,10 @@ score = Bacteroides + Faecalibacterium - Enterococcus
  │                    Individual (BTR model)                         │
  │           features: { species_A: +1, species_C: -1 }              │
  │                                                                   │
- │  ┌──────────────┐ ┌──────────┐ ┌───────────┐ ┌───────────────┐    │
+ │  ┌──────────────┐ ┌──────────┐ ┌──────────-─┐ ┌───────────────┐   │
  │  │   Feature    │ │  Voting  │ │ Importance │ │      GPU      │   │
  │  │  Selection   │ │   Jury   │ │   (MDA)    │ │    (wgpu)     │   │
- │  └──────────────┘ └──────────┘ └───────────┘ └───────────────┘    │
+ │  └──────────────┘ └──────────┘ └──────────-─┘ └───────────────┘   │
  └───────────────────────────────────────────────────────────────────┘
 ```
 
