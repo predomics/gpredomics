@@ -1263,31 +1263,86 @@ impl Data {
 
         let n = results.len();
         let n_f = n as f64;
-        let raw_nominal = results.iter().filter(|r| r.2 <= fdr_alpha).count();
+        let min_features = 10usize;
 
-        let mut threshold_idx: Option<usize> = None;
-        for i in (0..n).rev() {
-            let rank = (i + 1) as f64;
-            let threshold = (rank / n_f) * fdr_alpha;
-            if results[i].2 <= threshold {
-                threshold_idx = Some(i);
+        // Short-circuit: alpha=0 means discard everything, alpha>=1 means keep everything
+        if fdr_alpha == 0.0 {
+            info!("BH-FDR adjusted α=0.000: kept 0 / {} features", n);
+            return Vec::new();
+        }
+        if fdr_alpha >= 1.0 {
+            info!(
+                "BH-FDR adjusted α=1.000: kept all {} features (no filtering)",
+                n
+            );
+            return results;
+        }
+
+        // Adaptive FDR: if too few features pass, relax alpha progressively
+        let alphas_to_try = [fdr_alpha, 0.1, 0.2, 0.5];
+        let mut kept_results = Vec::new();
+        let mut used_alpha = fdr_alpha;
+
+        for &alpha in &alphas_to_try {
+            if alpha < fdr_alpha {
+                continue; // don't try stricter than requested
+            }
+
+            let mut threshold_idx: Option<usize> = None;
+            for i in (0..n).rev() {
+                let rank = (i + 1) as f64;
+                let threshold = (rank / n_f) * alpha;
+                if results[i].2 <= threshold {
+                    threshold_idx = Some(i);
+                    break;
+                }
+            }
+
+            let count = threshold_idx.map(|i| i + 1).unwrap_or(0);
+            if count >= min_features {
+                if let Some(idx) = threshold_idx {
+                    kept_results = results[..=idx].to_vec();
+                }
+                used_alpha = alpha;
                 break;
+            }
+
+            if alpha > fdr_alpha {
+                warn!(
+                    "BH-FDR at α={:.3} selected only {} features (< {}), relaxing...",
+                    alpha, count, min_features
+                );
             }
         }
 
-        if let Some(idx) = threshold_idx {
-            results.truncate(idx + 1);
-        } else {
-            results.clear();
+        // If still empty after all alphas, keep top min_features by raw p-value
+        if kept_results.is_empty() && !results.is_empty() {
+            let take = min_features.min(results.len());
+            kept_results = results[..take].to_vec();
+            warn!(
+                "BH-FDR: no features passed at any alpha, falling back to top {} by raw p-value",
+                take
+            );
         }
 
-        let kept = results.len();
-        debug!(
-            "BH-FDR ajusted α={:.3}: kept {} / {} features",
-            fdr_alpha, kept, raw_nominal
+        if used_alpha > fdr_alpha {
+            warn!(
+                "BH-FDR: relaxed α from {:.3} to {:.3} to keep {} features (minimum {})",
+                fdr_alpha,
+                used_alpha,
+                kept_results.len(),
+                min_features
+            );
+        }
+
+        info!(
+            "BH-FDR adjusted α={:.3}: kept {} / {} features",
+            used_alpha,
+            kept_results.len(),
+            n
         );
 
-        results
+        kept_results
     }
 
     /// Filters Data to keep only some samples (represented by a Vector of indices)
@@ -2668,7 +2723,8 @@ mod tests {
             (4, 0u8, 0.10),  // Rank 5: threshold = (5/5)*0.05 = 0.05
         ];
         let corrected = data.apply_fdr_correction(results, 0.05);
-        assert_eq!(corrected.len(), 4); // Rank i = Rank 4 -> Threshold = 0.04 -> only 0.10 rejected
+        // With adaptive FDR (min_features=10), only 5 features available → all kept after relaxation
+        assert_eq!(corrected.len(), 5);
     }
 
     #[test]
@@ -2693,17 +2749,18 @@ mod tests {
 
         // Beyond rank ~5: threshold grows, but p-values are too high
 
-        // We expect to keep only the truly significant ones
+        // With adaptive FDR: BH at alpha=0.05 keeps 5 truly significant features.
+        // Since 5 < min_features(10), alpha relaxes. At alpha=0.1, threshold at rank 10
+        // is (10/100)*0.1 = 0.01, which still only passes 5. At alpha=0.5, rank 10
+        // threshold is 0.05, passing ~5. Eventually falls back to top 10 by raw p-value.
         assert!(
-            corrected.len() <= 10,
-            "Should be conservative with alpha=0.05"
+            corrected.len() >= 5,
+            "Should keep at least the truly significant features"
         );
-        assert!(corrected.len() >= 1, "Should keep at least top features");
-
-        // Verify all kept features have low p-values
-        for (_, _, p_val) in &corrected {
-            assert!(*p_val <= 0.01, "Kept features should have p-value <= 0.01");
-        }
+        assert!(
+            corrected.len() <= 15,
+            "Should not keep too many noise features"
+        );
     }
 
     #[test]
@@ -2719,12 +2776,8 @@ mod tests {
         let corrected = data.apply_fdr_correction(results, 0.05);
 
         // Should sort: 0.001, 0.02, 0.05, 0.10
-        // Rank 1: 0.001 <= (1/4)*0.05 = 0.0125 ✓
-        // Rank 2: 0.02 <= (2/4)*0.05 = 0.025 ✓
-        // Rank 3: 0.05 <= (3/4)*0.05 = 0.0375 ✗
-        // Rank 4: 0.10 <= (4/4)*0.05 = 0.05 ✗
-
-        assert_eq!(corrected.len(), 2);
+        // With adaptive FDR (min_features=10), only 4 features → all kept after relaxation
+        assert_eq!(corrected.len(), 4);
     }
 
     #[test]
