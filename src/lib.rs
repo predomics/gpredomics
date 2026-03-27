@@ -99,7 +99,8 @@ use population::Population;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
+use param::FitFunction;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -293,7 +294,17 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
 
     // Voting
     if param.voting.vote {
-        exp.compute_voting();
+        if matches!(
+            param.general.fit,
+            FitFunction::spearman
+                | FitFunction::pearson
+                | FitFunction::rmse
+                | FitFunction::mutual_information
+        ) {
+            info!("Voting is not applicable for regression — skipping");
+        } else {
+            exp.compute_voting();
+        }
     } else {
         cinfo!(
             param.general.display_colorful,
@@ -447,7 +458,17 @@ pub fn run_on_data(
 
     // Voting
     if param.voting.vote && exp.parameters.general.algo != "mcmc" {
-        exp.compute_voting();
+        if matches!(
+            param.general.fit,
+            FitFunction::spearman
+                | FitFunction::pearson
+                | FitFunction::rmse
+                | FitFunction::mutual_information
+        ) {
+            info!("Voting is not applicable for regression — skipping");
+        } else {
+            exp.compute_voting();
+        }
     } else {
         cinfo!(
             param.general.display_colorful,
@@ -608,7 +629,17 @@ pub fn run_pop_and_data(
 
     // Voting
     if param.voting.vote && exp.parameters.general.algo != "mcmc" {
-        exp.compute_voting();
+        if matches!(
+            param.general.fit,
+            FitFunction::spearman
+                | FitFunction::pearson
+                | FitFunction::rmse
+                | FitFunction::mutual_information
+        ) {
+            info!("Voting is not applicable for regression — skipping");
+        } else {
+            exp.compute_voting();
+        }
     } else {
         cinfo!(
             param.general.display_colorful,

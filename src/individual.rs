@@ -5,6 +5,7 @@ use crate::param::FitFunction;
 use crate::utils::serde_json_hashmap_numeric;
 use crate::utils::{compute_auc_from_value, compute_roc_and_metrics_from_value};
 use crate::utils::{compute_metrics_from_value, generate_random_vector, shuffle_row};
+use crate::utils::{mutual_information, neg_rmse, pearson_correlation, spearman_correlation};
 use crate::Population;
 use log::{debug, error};
 use rand::seq::SliceRandom; // Provides the `choose_multiple` method
@@ -516,6 +517,239 @@ impl Individual {
                 )
             } else {
                 // Standard RATIO: Display /
+                format!(
+                    "{}\n{} {} / {} {}",
+                    metrics,
+                    second_line_first_part,
+                    positive_joined,
+                    negative_joined,
+                    second_line_second_part
+                )
+            }
+        } else {
+            format!(
+                "{}\n{} {:?} {}",
+                metrics, second_line_first_part, self, second_line_second_part
+            )
+        };
+
+        formatted_string
+    }
+
+    /// Generates a display string that is regression-aware.
+    ///
+    /// For regression fit functions (spearman, pearson, rmse, mutual_information), shows
+    /// the regression metric instead of AUC/accuracy/sensitivity/specificity.
+    /// For classification fit functions, delegates to the standard `display()` method.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The training data used for evaluation.
+    /// * `data_to_test` - Optional test data for additional evaluation.
+    /// * `algo` - The algorithm name string.
+    /// * `ci_alpha` - Confidence interval alpha for threshold CI display.
+    /// * `fit_function` - The fit function used for model evaluation.
+    pub fn display_with_fit(
+        &self,
+        data: &Data,
+        data_to_test: Option<&Data>,
+        algo: &String,
+        ci_alpha: f64,
+        fit_function: &FitFunction,
+    ) -> String {
+        let is_regression = matches!(
+            fit_function,
+            FitFunction::spearman
+                | FitFunction::pearson
+                | FitFunction::rmse
+                | FitFunction::mutual_information
+        );
+
+        if !is_regression {
+            return self.display(data, data_to_test, algo, ci_alpha);
+        }
+
+        let fit_name = format!("{:?}", fit_function);
+
+        let algo_str = match algo.as_str() {
+            "ga" => format!(" [gen:{}] ", self.epoch),
+            "beam" => " ".to_string(),
+            "mcmc" => format!(" [MCMC step: {}] ", self.epoch),
+            _ => " [unknown] ".to_string(),
+        };
+
+        let regression_fn: fn(&[f64], &[f64]) -> f64 = match fit_function {
+            FitFunction::spearman => spearman_correlation,
+            FitFunction::pearson => pearson_correlation,
+            FitFunction::rmse => neg_rmse,
+            FitFunction::mutual_information => mutual_information,
+            _ => unreachable!(),
+        };
+
+        let metrics = match data_to_test {
+            Some(test_data) => {
+                let test_scores = self.evaluate(test_data);
+                let test_fit = regression_fn(&test_scores, &test_data.y);
+                format!(
+                    "{}:{} [k={}]{}[fit:{:.3}] {} {:.3}/{:.3}",
+                    self.get_language(),
+                    self.get_data_type(),
+                    self.features.len(),
+                    algo_str,
+                    self.fit,
+                    fit_name,
+                    self.fit,
+                    test_fit
+                )
+            }
+            None => {
+                format!(
+                    "{}:{} [k={}]{}[fit:{:.3}] {} {:.3}",
+                    self.get_language(),
+                    self.get_data_type(),
+                    self.features.len(),
+                    algo_str,
+                    self.fit,
+                    fit_name,
+                    self.fit
+                )
+            }
+        };
+
+        // Sort features by index
+        let mut sorted_features: Vec<_> = self.features.iter().collect();
+        sorted_features.sort_by(|a, b| a.0.cmp(b.0));
+
+        let mut positive_features: Vec<_> = sorted_features
+            .iter()
+            .filter(|&&(_, &coef)| coef > 0)
+            .collect();
+        let mut negative_features: Vec<_> = sorted_features
+            .iter()
+            .filter(|&&(_, &coef)| coef < 0)
+            .collect();
+
+        positive_features.sort_by(|a, b| b.1.cmp(a.1));
+        negative_features.sort_by(|a, b| a.1.cmp(b.1));
+
+        let positive_str: Vec<String> = positive_features
+            .iter()
+            .enumerate()
+            .map(|(_i, &&(index, coef))| {
+                let mut str = format!("\x1b[96m{}\x1b[0m", data.features[*index]);
+                if self.data_type == PREVALENCE_TYPE {
+                    str = format!("{}⁰", str);
+                }
+                if self.language == POW2_LANG && !(*coef == 1_i8) && self.data_type != LOG_TYPE {
+                    str = format!("{}*{}", coef, str);
+                } else if self.language == POW2_LANG
+                    && !(*coef == 1_i8)
+                    && self.data_type == LOG_TYPE
+                {
+                    str = format!("{}^{}", str, coef);
+                }
+                str
+            })
+            .collect();
+
+        let negative_str: Vec<String> = negative_features
+            .iter()
+            .enumerate()
+            .map(|(_i, &&(index, coef))| {
+                let mut str = format!("\x1b[95m{}\x1b[0m", data.features[*index]);
+                if self.data_type == PREVALENCE_TYPE {
+                    str = format!("{}⁰", str);
+                }
+                if self.language == POW2_LANG && !(*coef == -1_i8) && self.data_type != LOG_TYPE {
+                    str = format!("{}*{}", coef.abs(), str);
+                } else if self.language == POW2_LANG
+                    && !(*coef == -1_i8)
+                    && self.data_type == LOG_TYPE
+                {
+                    str = format!("{}^{}", str, coef.abs());
+                }
+                str
+            })
+            .collect();
+
+        let mut negative_str_owned = negative_str.clone();
+        if self.language == RATIO_LANG && self.data_type != LOG_TYPE {
+            negative_str_owned.push(format!("{:2e}", self.epsilon));
+        }
+
+        let positive_str_final = if positive_str.is_empty() {
+            vec!["0".to_string()]
+        } else {
+            positive_str
+        };
+        let negative_str_final = if negative_str_owned.is_empty() {
+            vec!["0".to_string()]
+        } else {
+            negative_str_owned
+        };
+
+        let (positive_joined, negative_joined) = if self.data_type == LOG_TYPE {
+            let pos_str: Vec<String> = positive_str_final
+                .iter()
+                .map(|f| {
+                    if f != "0" {
+                        format!("{}⁺", f)
+                    } else {
+                        "1".to_string()
+                    }
+                })
+                .collect();
+            let neg_str: Vec<String> = negative_str_final
+                .iter()
+                .map(|f| {
+                    if f != "0" {
+                        format!("{}⁺", f)
+                    } else {
+                        "1".to_string()
+                    }
+                })
+                .collect();
+            (
+                format!("ln({})", pos_str.join(" × ")),
+                format!("ln({})", neg_str.join(" × ")),
+            )
+        } else {
+            (
+                format!("({})", positive_str_final.join(" + ")),
+                format!("({})", negative_str_final.join(" + ")),
+            )
+        };
+
+        // For regression, show "score =" instead of class-based threshold
+        let second_line_first_part = "score =".to_string();
+        let second_line_second_part = String::new();
+
+        let formatted_string = if self.language == BINARY_LANG {
+            format!(
+                "{}\n{} {} {}",
+                metrics, second_line_first_part, positive_joined, second_line_second_part
+            )
+        } else if self.language == TERNARY_LANG || self.language == POW2_LANG {
+            format!(
+                "{}\n{} {} - {} {}",
+                metrics,
+                second_line_first_part,
+                positive_joined,
+                negative_joined,
+                second_line_second_part
+            )
+        } else if self.language == RATIO_LANG {
+            if self.data_type == LOG_TYPE {
+                format!(
+                    "{}\n{} {} - {} - {} {}",
+                    metrics,
+                    second_line_first_part,
+                    positive_joined,
+                    negative_joined,
+                    self.epsilon,
+                    second_line_second_part
+                )
+            } else {
                 format!(
                     "{}\n{} {} / {} {}",
                     metrics,
