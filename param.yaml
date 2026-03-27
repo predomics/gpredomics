@@ -44,7 +44,7 @@ data:
   feature_minimal_prevalence_pct: 10          # Per class: features are retained if any class reaches this prevalence (percentage).
   feature_minimal_feature_value: 1e-4         # Features whose mean is below this value are discarded.
   feature_selection_method: wilcoxon          # Possible values are wilcoxon, student_t (Student's t-test), and bayesian_fisher. Wilcoxon is recommended in most cases.
-  feature_maximal_adj_pvalue: 1               # Features with a corrected p-value (BH) above this threshold will be removed.
+  feature_maximal_adj_pvalue: 1               # BH-FDR alpha. Features with adjusted p-value above this are removed. Adaptive: if < 10 features pass, alpha relaxes (0.1→0.2→0.5) with warnings. Set to 1.0 to keep all.
   feature_minimal_log_abs_bayes_factor: 2     # Features with a lower log absolute Bayes factor will be removed (Bayesian method only).
   
 cv:
