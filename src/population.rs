@@ -14,6 +14,7 @@ use crate::utils::{
     conf_inter_binomial_method, precompute_bootstrap_indices, PrecomputedBootstrap,
 };
 use crate::utils::{mad, mean_and_std, median};
+use crate::utils::{mutual_information, neg_rmse, pearson_correlation, spearman_correlation};
 use log::{error, info, warn};
 use rand::prelude::SliceRandom;
 use rand::RngCore;
@@ -141,48 +142,98 @@ impl Population {
 
             let fbm = self.select_best_population(0.05);
 
+            let is_regression = matches!(
+                param.general.fit,
+                FitFunction::spearman
+                    | FitFunction::pearson
+                    | FitFunction::rmse
+                    | FitFunction::mutual_information
+            );
+            let fit_name = format!("{:?}", param.general.fit);
+
             if !fbm.individuals.is_empty() {
-                let train_aucs: Vec<f64> = fbm.individuals.iter().map(|i| i.cls.auc).collect();
-                let train_accuracies: Vec<f64> =
-                    fbm.individuals.iter().map(|i| i.cls.accuracy).collect();
-                let train_sensitivities: Vec<f64> =
-                    fbm.individuals.iter().map(|i| i.cls.sensitivity).collect();
-                let train_specificities: Vec<f64> =
-                    fbm.individuals.iter().map(|i| i.cls.specificity).collect();
+                let fbm_text = if is_regression {
+                    // Regression mode: display the fit metric
+                    let train_fits: Vec<f64> = fbm.individuals.iter().map(|i| i.fit).collect();
+                    let (train_fit_mean, _) = mean_and_std(&train_fits);
 
-                let (train_auc_mean, _) = mean_and_std(&train_aucs);
-                let (train_acc_mean, _) = mean_and_std(&train_accuracies);
-                let (train_sens_mean, _) = mean_and_std(&train_sensitivities);
-                let (train_spec_mean, _) = mean_and_std(&train_specificities);
+                    if let Some(test_data) = data_to_test {
+                        let regression_fn: fn(&[f64], &[f64]) -> f64 = match param.general.fit {
+                            FitFunction::spearman => spearman_correlation,
+                            FitFunction::pearson => pearson_correlation,
+                            FitFunction::rmse => neg_rmse,
+                            FitFunction::mutual_information => mutual_information,
+                            _ => unreachable!(),
+                        };
+                        let test_fits: Vec<f64> = fbm
+                            .individuals
+                            .iter()
+                            .map(|i| {
+                                let scores = i.evaluate(test_data);
+                                regression_fn(&scores, &test_data.y)
+                            })
+                            .collect();
+                        let (test_fit_mean, _) = mean_and_std(&test_fits);
 
-                let fbm_text = if let Some(data_to_test) = data_to_test {
-                    let test_aucs: Vec<f64> = fbm
-                        .individuals
-                        .iter()
-                        .map(|i| i.compute_new_auc(data_to_test))
-                        .collect();
-                    let mut test_acc_vec = Vec::new();
-                    let mut test_sens_vec = Vec::new();
-                    let mut test_spec_vec = Vec::new();
-
-                    for individual in &fbm.individuals {
-                        let (acc, sens, spec, _, _) = individual.compute_metrics(data_to_test);
-                        test_acc_vec.push(acc);
-                        test_sens_vec.push(sens);
-                        test_spec_vec.push(spec);
+                        format!(
+                            "\n\x1b[1;33mFBM mean (n={}) - {} {:.3}/{:.3}\x1b[0m\n",
+                            fbm.individuals.len(),
+                            fit_name,
+                            train_fit_mean,
+                            test_fit_mean
+                        )
+                    } else {
+                        format!(
+                            "\n\x1b[1;33mFBM mean (n={}) - {} {:.3}\x1b[0m\n",
+                            fbm.individuals.len(),
+                            fit_name,
+                            train_fit_mean
+                        )
                     }
-
-                    let (test_auc_mean, _) = mean_and_std(&test_aucs);
-                    let (test_acc_mean, _) = mean_and_std(&test_acc_vec);
-                    let (test_sens_mean, _) = mean_and_std(&test_sens_vec);
-                    let (test_spec_mean, _) = mean_and_std(&test_spec_vec);
-
-                    format!("\n\x1b[1;33mFBM mean (n={}) - AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}\x1b[0m\n", 
-                        fbm.individuals.len(), train_auc_mean, test_auc_mean, train_acc_mean, test_acc_mean,
-                        train_sens_mean, test_sens_mean, train_spec_mean, test_spec_mean)
                 } else {
-                    format!("\n\x1b[1;33mFBM mean (n={}) - AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}\x1b[0m\n", 
-                        fbm.individuals.len(), train_auc_mean, train_acc_mean, train_sens_mean, train_spec_mean)
+                    // Classification mode: display AUC/accuracy/sensitivity/specificity
+                    let train_aucs: Vec<f64> = fbm.individuals.iter().map(|i| i.cls.auc).collect();
+                    let train_accuracies: Vec<f64> =
+                        fbm.individuals.iter().map(|i| i.cls.accuracy).collect();
+                    let train_sensitivities: Vec<f64> =
+                        fbm.individuals.iter().map(|i| i.cls.sensitivity).collect();
+                    let train_specificities: Vec<f64> =
+                        fbm.individuals.iter().map(|i| i.cls.specificity).collect();
+
+                    let (train_auc_mean, _) = mean_and_std(&train_aucs);
+                    let (train_acc_mean, _) = mean_and_std(&train_accuracies);
+                    let (train_sens_mean, _) = mean_and_std(&train_sensitivities);
+                    let (train_spec_mean, _) = mean_and_std(&train_specificities);
+
+                    if let Some(data_to_test) = data_to_test {
+                        let test_aucs: Vec<f64> = fbm
+                            .individuals
+                            .iter()
+                            .map(|i| i.compute_new_auc(data_to_test))
+                            .collect();
+                        let mut test_acc_vec = Vec::new();
+                        let mut test_sens_vec = Vec::new();
+                        let mut test_spec_vec = Vec::new();
+
+                        for individual in &fbm.individuals {
+                            let (acc, sens, spec, _, _) = individual.compute_metrics(data_to_test);
+                            test_acc_vec.push(acc);
+                            test_sens_vec.push(sens);
+                            test_spec_vec.push(spec);
+                        }
+
+                        let (test_auc_mean, _) = mean_and_std(&test_aucs);
+                        let (test_acc_mean, _) = mean_and_std(&test_acc_vec);
+                        let (test_sens_mean, _) = mean_and_std(&test_sens_vec);
+                        let (test_spec_mean, _) = mean_and_std(&test_spec_vec);
+
+                        format!("\n\x1b[1;33mFBM mean (n={}) - AUC {:.3}/{:.3} | accuracy {:.3}/{:.3} | sensitivity {:.3}/{:.3} | specificity {:.3}/{:.3}\x1b[0m\n",
+                            fbm.individuals.len(), train_auc_mean, test_auc_mean, train_acc_mean, test_acc_mean,
+                            train_sens_mean, test_sens_mean, train_spec_mean, test_spec_mean)
+                    } else {
+                        format!("\n\x1b[1;33mFBM mean (n={}) - AUC {:.3} | accuracy {:.3} | sensitivity {:.3} | specificity {:.3}\x1b[0m\n",
+                            fbm.individuals.len(), train_auc_mean, train_acc_mean, train_sens_mean, train_spec_mean)
+                    }
                 };
 
                 str = format!("{}{}", str, fbm_text);
@@ -201,11 +252,12 @@ impl Population {
             };
 
             for i in 0..limit as usize {
-                let model_display = self.individuals[i].display(
+                let model_display = self.individuals[i].display_with_fit(
                     data,
                     data_to_test,
                     &param.general.algo,
                     param.general.threshold_ci_alpha,
+                    &param.general.fit,
                 );
 
                 let model_text = format!("\x1b[1;93m#{:?}\x1b[0m", i + 1);

@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use log::info;
+use log::{info, warn};
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 
 /// Cross-validation dataset implementation for machine learning workflows.
@@ -42,19 +43,33 @@ impl CV {
     /// * `folds` - Number of validation folds to create
     /// * `rng` - Random number generator for stratified sampling
     pub fn new(data: &Data, folds: usize, rng: &mut ChaCha8Rng) -> CV {
-        let (indices_class1, indices_class0) = utils::stratify_indices_by_class(&data.y);
+        // Detect regression mode: if y has more than 3 unique values, use random splitting
+        let unique_y: HashSet<u64> = data.y.iter().map(|v| v.to_bits()).collect();
+        let is_regression = unique_y.len() > 3;
 
-        let indices_class0_folds =
-            utils::split_into_balanced_random_chunks(indices_class0, folds, rng);
-        let indices_class1_folds =
-            utils::split_into_balanced_random_chunks(indices_class1, folds, rng);
+        let validation_folds: Vec<Data> = if is_regression {
+            warn!(
+                "Continuous y detected ({} unique values) — using random (non-stratified) CV splitting",
+                unique_y.len()
+            );
+            let all_indices: Vec<usize> = (0..data.sample_len).collect();
+            let all_folds = utils::split_into_balanced_random_chunks(all_indices, folds, rng);
+            all_folds.into_iter().map(|i| data.subset(i)).collect()
+        } else {
+            let (indices_class1, indices_class0) = utils::stratify_indices_by_class(&data.y);
 
-        let validation_folds: Vec<Data> = indices_class0_folds
-            .into_iter()
-            .zip(indices_class1_folds.into_iter())
-            .map(|(i1, i2)| i1.into_iter().chain(i2).collect::<Vec<usize>>())
-            .map(|i| data.subset(i))
-            .collect();
+            let indices_class0_folds =
+                utils::split_into_balanced_random_chunks(indices_class0, folds, rng);
+            let indices_class1_folds =
+                utils::split_into_balanced_random_chunks(indices_class1, folds, rng);
+
+            indices_class0_folds
+                .into_iter()
+                .zip(indices_class1_folds.into_iter())
+                .map(|(i1, i2)| i1.into_iter().chain(i2).collect::<Vec<usize>>())
+                .map(|i| data.subset(i))
+                .collect()
+        };
 
         let mut training_sets: Vec<Data> = Vec::new();
         for i in 0..folds {
