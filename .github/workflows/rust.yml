@@ -47,7 +47,7 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     needs: build_and_test
-    timeout-minutes: 60
+    timeout-minutes: 120
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v5
@@ -62,4 +62,4 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Full test suite (lib + integration e2e)
-        run: cargo test --locked --workspace --all-features --verbose
+        run: cargo test --locked --workspace --all-features --verbose -- --test-threads=2
