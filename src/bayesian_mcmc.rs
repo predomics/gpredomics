@@ -1570,29 +1570,29 @@ pub fn mcmc(
         );
     }
 
-    // Build population with both the BTR model and MCMC models
-    let mut pop: Population = mcmc_result.population;
+    // Keep MCMC population pure (for bayesian_compute_roc_and_metrics)
+    let mcmc_pop = mcmc_result.population.clone();
     mcmc_result.population = Population::new();
-    pop.individuals.insert(0, btr_model); // BTR model first
 
-    // Evaluate classification metrics for all models
-    if !pop.individuals.is_empty() {
-        info!("Evaluating models as classifiers...");
-        pop.fit(&mut data, &mut None, &None, &None, param);
-        pop = pop.sort();
-        pop.compute_hash();
+    // Build separate BTR population for standard display
+    let mut btr_pop = Population::new();
+    btr_pop.individuals.push(btr_model);
+    btr_pop.fit(&mut data, &mut None, &None, &None, param);
+    btr_pop = btr_pop.sort();
+    btr_pop.compute_hash();
 
-        if let Some(best) = pop.individuals.first() {
-            info!(
-                "Best model: AUC={:.4}, accuracy={:.4}, sensitivity={:.4}, specificity={:.4}, k={}, lang={}",
-                best.cls.auc, best.cls.accuracy, best.cls.sensitivity, best.cls.specificity,
-                best.k, best.get_language()
-            );
-        }
+    if let Some(best) = btr_pop.individuals.first() {
+        info!(
+            "Best BTR model: AUC={:.4}, accuracy={:.4}, sensitivity={:.4}, specificity={:.4}, k={}, lang={}",
+            best.cls.auc, best.cls.accuracy, best.cls.sensitivity, best.cls.specificity,
+            best.k, best.get_language()
+        );
     }
 
+    // Return: collection[0] = MCMC population (for Bayesian evaluation),
+    //         collection[1] = BTR population (for standard display via final_population)
     (
-        vec![pop],
+        vec![mcmc_pop, btr_pop],
         Some(ExperimentMetadata::MCMC { trace: mcmc_result }),
     )
 }
