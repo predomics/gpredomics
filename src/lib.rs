@@ -105,6 +105,74 @@ use param::FitFunction;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+/// Loads training and (optionally) test data from file paths in parameters.
+///
+/// This is used by the grid runner to load data once and reuse it across
+/// multiple parameter combinations. The holdout split is NOT performed here
+/// (it depends on the seed, which may vary across grid runs) — `run_on_data`
+/// handles that.
+///
+/// # Returns
+///
+/// `(train_data, Option<test_data>)` — ready to pass to `run_on_data`.
+pub fn load_data_from_params(param: &Param) -> (Data, Option<Data>) {
+    let mut data = Data::new();
+    if let Err(e) = data.load_data(
+        &param.data.X,
+        &param.data.y,
+        param.data.features_in_rows,
+    ) {
+        error!("Failed to load data: {}", e);
+        panic!("Failed to load data: {}", e);
+    }
+    data.set_classes(param.data.classes.clone());
+    if param.data.inverse_classes {
+        data.inverse_classes();
+    }
+
+    if !param.data.feature_annotations.is_empty() {
+        match data.load_feature_annotation(&param.data.feature_annotations) {
+            Ok(fa) => data.feature_annotations = Some(fa),
+            Err(e) => warn!(
+                "Could not load feature annotations '{}': {}",
+                param.data.feature_annotations, e
+            ),
+        }
+    }
+
+    if !param.data.sample_annotations.is_empty() {
+        match data.load_sample_annotation(&param.data.sample_annotations) {
+            Ok(sa) => data.sample_annotations = Some(sa),
+            Err(e) => warn!(
+                "Could not load sample annotations '{}': {}",
+                param.data.sample_annotations, e
+            ),
+        }
+    }
+
+    let mut test_data: Option<Data> = None;
+    if !param.data.Xtest.is_empty() && !param.data.ytest.is_empty() {
+        debug!("Loading test data...");
+        let mut td = Data::new();
+        let _ = td.load_data(
+            &param.data.Xtest,
+            &param.data.ytest,
+            param.data.features_in_rows,
+        );
+        td.set_classes(param.data.classes.clone());
+        if param.data.inverse_classes {
+            td.inverse_classes();
+        }
+        if data.check_compatibility(&td) {
+            test_data = Some(td);
+        } else {
+            warn!("Test data is not compatible with training data. Ignoring test data.");
+        }
+    }
+
+    (data, test_data)
+}
+
 /// Executes a complete training experiment from parameter configuration.
 ///
 /// # Arguments

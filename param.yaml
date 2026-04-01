@@ -160,3 +160,16 @@ gpu:
   memory_policy: Strict                       # [Strict: panic if limits are not available | Adaptive: adapt if limits are not available | Performance: use all available GPU memory regardless of limits]
   max_total_memory_mb: 256                    # Limit in MB defining the maximum amount of GPU memory used by all buffers.
   max_buffer_size_mb: 128                     # Limit in MB defining the maximum amount of GPU memory used by a single buffer.
+
+# ── Grid search (optional) ────────────────────────────────────────────
+# Uncomment the block below to run a parameter grid.
+# Data is loaded once; every combination of values is run serially.
+# Each axis specifies a dotted path (section.parameter) and a list of values.
+# The Cartesian product of all axes is computed (e.g., 3 × 2 = 6 runs).
+# See docs/grid.md for details.
+#
+# grid:
+#   - path: "general.k_penalty"
+#     values: [0.0001, 0.001, 0.01]
+#   - path: "ga.population_size"
+#     values: [1000, 5000]

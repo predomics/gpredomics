@@ -1,7 +1,7 @@
 use crate::data::PreselectionMethod;
 use crate::experiment::ImportanceAggregation;
 use crate::{beam::BeamMethod, voting::VotingMethod};
-use log::warn;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
@@ -946,6 +946,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "gpu",
         "importance",
         "experimental",
+        "grid",
     ]
     .iter()
     .cloned()
@@ -1569,4 +1570,208 @@ fn mcmc_p0_default() -> f64 {
 }
 fn mcmc_n_chains_default() -> usize {
     1
+}
+
+// ── Grid parameter batching ──────────────────────────────────────────
+
+/// A single axis in the grid: a dotted path (e.g. "ga.population_size") and the
+/// list of values to sweep.
+#[derive(Debug, Deserialize)]
+struct GridAxis {
+    path: String,
+    values: Vec<serde_yaml::Value>,
+}
+
+/// Sets a value inside a nested `serde_yaml::Value` at a dotted path
+/// (e.g. "ga.population_size"). Returns an error if any intermediate segment is
+/// not a mapping.
+fn set_yaml_path(
+    root: &mut serde_yaml::Value,
+    path: &str,
+    value: &serde_yaml::Value,
+) -> Result<(), String> {
+    let segments: Vec<&str> = path.split('.').collect();
+    let mut current = root;
+
+    for (i, seg) in segments.iter().enumerate() {
+        if i == segments.len() - 1 {
+            // Last segment: set the value
+            if let Some(map) = current.as_mapping_mut() {
+                let key = serde_yaml::Value::String(seg.to_string());
+                map.insert(key, value.clone());
+                return Ok(());
+            } else {
+                return Err(format!(
+                    "Cannot set '{}': parent of '{}' is not a mapping",
+                    path, seg
+                ));
+            }
+        } else {
+            // Intermediate segment: descend into mapping (create if absent)
+            let key = serde_yaml::Value::String(seg.to_string());
+            if current.as_mapping().is_none() {
+                return Err(format!(
+                    "Cannot traverse '{}': segment '{}' is not a mapping",
+                    path, seg
+                ));
+            }
+            let map = current.as_mapping_mut().unwrap();
+            if !map.contains_key(&key) {
+                map.insert(key.clone(), serde_yaml::Value::Mapping(Default::default()));
+            }
+            current = map.get_mut(&key).unwrap();
+        }
+    }
+
+    Err(format!("Empty path"))
+}
+
+/// Computes the Cartesian product of grid axes, producing one `Vec<(path, value)>`
+/// per combination.
+fn cartesian_product(axes: &[GridAxis]) -> Vec<Vec<(&str, &serde_yaml::Value)>> {
+    let mut combos: Vec<Vec<(&str, &serde_yaml::Value)>> = vec![vec![]];
+    for axis in axes {
+        let mut new_combos = Vec::new();
+        for combo in &combos {
+            for val in &axis.values {
+                let mut extended = combo.clone();
+                extended.push((&axis.path, val));
+                new_combos.push(extended);
+            }
+        }
+        combos = new_combos;
+    }
+    combos
+}
+
+/// Formats one grid combination as a human-readable string for logging.
+fn format_grid_combo(combo: &[(&str, &serde_yaml::Value)]) -> String {
+    combo
+        .iter()
+        .map(|(path, val)| {
+            let v = match val {
+                serde_yaml::Value::Number(n) => format!("{}", n),
+                serde_yaml::Value::String(s) => s.clone(),
+                serde_yaml::Value::Bool(b) => format!("{}", b),
+                other => format!("{:?}", other),
+            };
+            format!("{}={}", path, v)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Result of grid expansion: the parameter sets plus metadata for the grid CSV.
+pub struct GridResult {
+    /// One `Param` per grid combination (or a single one if no grid).
+    pub params: Vec<Param>,
+    /// Column headers for the grid CSV (the axis paths). Empty if no grid.
+    pub axis_names: Vec<String>,
+    /// One row per combination: the string representation of each axis value.
+    /// `rows[i][j]` is the value for combination `i`, axis `j`. Empty if no grid.
+    pub rows: Vec<Vec<String>>,
+}
+
+/// Formats a `serde_yaml::Value` as a compact string for CSV / logging.
+fn yaml_value_to_string(val: &serde_yaml::Value) -> String {
+    match val {
+        serde_yaml::Value::Number(n) => format!("{}", n),
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Bool(b) => format!("{}", b),
+        other => format!("{:?}", other),
+    }
+}
+
+/// Loads a YAML parameter file and expands the optional `grid` section into
+/// a `GridResult`. If no `grid` section is present, returns a single `Param`
+/// with empty grid metadata.
+///
+/// # YAML format
+///
+/// ```yaml
+/// grid:
+///   - path: "ga.population_size"
+///     values: [1000, 5000, 10000]
+///   - path: "general.k_penalty"
+///     values: [0.0001, 0.001]
+/// ```
+///
+/// The Cartesian product of all axes is computed and each combination yields an
+/// independent `Param` that can be run serially while sharing loaded data.
+pub fn get_grid(param_file: String) -> Result<GridResult, Box<dyn Error>> {
+    let yaml_content = std::fs::read_to_string(&param_file)?;
+    let mut yaml_value: serde_yaml::Value = serde_yaml::from_str(&yaml_content)?;
+
+    // Check for unknown parameters (grid section is already whitelisted)
+    if let Err(e) = check_unknown_params(&yaml_value) {
+        return Err(e.into());
+    }
+
+    // Extract the grid section if present
+    let grid_axes: Vec<GridAxis> = if let Some(map) = yaml_value.as_mapping_mut() {
+        let grid_key = serde_yaml::Value::String("grid".to_string());
+        if let Some(grid_val) = map.remove(&grid_key) {
+            serde_yaml::from_value(grid_val)?
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+
+    if grid_axes.is_empty() {
+        // No grid: behave like get()
+        let mut config: Param = serde_yaml::from_value(yaml_value)?;
+        validate(&mut config)?;
+        return Ok(GridResult {
+            params: vec![config],
+            axis_names: vec![],
+            rows: vec![],
+        });
+    }
+
+    // Log grid summary
+    let total: usize = grid_axes.iter().map(|a| a.values.len()).product();
+    info!(
+        "Grid search: {} axes, {} combinations",
+        grid_axes.len(),
+        total
+    );
+    for axis in &grid_axes {
+        info!("  {} → {} values", axis.path, axis.values.len());
+    }
+
+    let axis_names: Vec<String> = grid_axes.iter().map(|a| a.path.clone()).collect();
+    let combos = cartesian_product(&grid_axes);
+    let mut params = Vec::with_capacity(combos.len());
+    let mut rows = Vec::with_capacity(combos.len());
+
+    for (i, combo) in combos.iter().enumerate() {
+        let mut patched = yaml_value.clone();
+        let mut row = Vec::with_capacity(combo.len());
+        for (path, val) in combo {
+            set_yaml_path(&mut patched, path, val).map_err(|e| {
+                format!("Grid combination {}: {}", i + 1, e)
+            })?;
+            row.push(yaml_value_to_string(val));
+        }
+        let mut config: Param = serde_yaml::from_value(patched).map_err(|e| {
+            format!(
+                "Grid combination {} ({}): {}",
+                i + 1,
+                format_grid_combo(combo),
+                e
+            )
+        })?;
+        config.tag = format!("grid_{}in{}", i + 1, combos.len());
+        validate(&mut config)?;
+        params.push(config);
+        rows.push(row);
+    }
+
+    Ok(GridResult {
+        params,
+        axis_names,
+        rows,
+    })
 }

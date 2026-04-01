@@ -1,5 +1,6 @@
 use chrono::Local;
 use clap::Parser;
+use csv;
 use flexi_logger::{FileSpec, Logger, WriteMode};
 use gpredomics::experiment::Experiment;
 use gpredomics::{cinfo, param};
@@ -39,32 +40,36 @@ fn main() {
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
     println!("Loading configuration from: {}", args.config);
-    let mut param = param::get(args.config).unwrap();
+    let grid_result = param::get_grid(args.config).unwrap();
+
+    let mut params = grid_result.params;
 
     if args.csv_report {
-        param.general.csv_report = true;
+        for p in &mut params {
+            p.general.csv_report = true;
+        }
     }
 
-    // Initialize the logger
-    let logger = if !param.general.log_base.is_empty() {
-        Logger::try_with_str(&param.general.log_level) // Set log level (e.g., "info")
+    // Initialize the logger (using first param for log config)
+    let logger = if !params[0].general.log_base.is_empty() {
+        Logger::try_with_str(&params[0].general.log_level)
             .unwrap()
             .log_to_file(
                 FileSpec::default()
-                    .basename(&param.general.log_base) // Logs go into the "logs" directory
-                    .suffix(&param.general.log_suffix) // Use the ".log" file extension
-                    .discriminant(&timestamp), // Add timestamp to each log file
+                    .basename(&params[0].general.log_base)
+                    .suffix(&params[0].general.log_suffix)
+                    .discriminant(&timestamp),
             )
-            .write_mode(WriteMode::BufferAndFlush) // Control file write buffering
-            .format_for_files(custom_format) // Custom format for the log file
-            .format_for_stderr(custom_format) // Same format for the console
+            .write_mode(WriteMode::BufferAndFlush)
+            .format_for_files(custom_format)
+            .format_for_stderr(custom_format)
             .start()
             .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e))
     } else {
-        Logger::try_with_str(&param.general.log_level) // Set the log level (e.g., "info")
+        Logger::try_with_str(&params[0].general.log_level)
             .unwrap()
-            .write_mode(WriteMode::BufferAndFlush) // Use buffering for smoother output
-            .start() // Start the logger
+            .write_mode(WriteMode::BufferAndFlush)
+            .start()
             .unwrap_or_else(|e| panic!("Logger initialization failed with {}", e))
     };
 
@@ -107,20 +112,15 @@ fn main() {
         }
     }
 
-    cinfo!(
-        param.general.display_colorful,
-        "\x1b[2;97m{:?}\x1b[0m",
-        &param
-    );
+    let is_grid = params.len() > 1;
 
     let running = Arc::new(AtomicBool::new(true));
-    let running_clone = Arc::clone(&running);
     let running_clone_for_signal = Arc::clone(&running);
     let mut signals =
         Signals::new([SIGTERM, SIGHUP, SIGINT]).expect("Failed to set up signal handler");
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(param.general.thread_number as usize)
+        .num_threads(params[0].general.thread_number as usize)
         .build_global()
         .expect("Rayon global pool already set");
 
@@ -167,41 +167,129 @@ fn main() {
         eprintln!("{}", info);
     }));
 
-    let thread_param = param.clone();
-    let handle = thread::spawn(move || gpredomics::run(&thread_param, running_clone));
+    if is_grid {
+        // Grid mode: load data once, run each combination serially
+        info!("Grid mode: loading data once for {} runs", params.len());
+        let (data, test_data) = gpredomics::load_data_from_params(&params[0]);
 
-    let exp = match handle.join() {
-        Ok(exp) => exp,
-        Err(panic_info) => {
-            // Extract panic message for clean display
-            let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
-                s.clone()
-            } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                s.to_string()
-            } else {
-                "Unknown error".to_string()
+        // Write grid.csv describing each combination
+        let grid_csv_path = format!("{}_grid.csv", timestamp);
+        {
+            let mut wtr = csv::Writer::from_path(&grid_csv_path)
+                .expect("Failed to create grid CSV");
+            let mut header = vec!["run".to_string(), "tag".to_string()];
+            header.extend(grid_result.axis_names.iter().cloned());
+            wtr.write_record(&header).expect("Failed to write grid CSV header");
+            for (i, row) in grid_result.rows.iter().enumerate() {
+                let mut record = vec![format!("{}", i + 1), params[i].tag.clone()];
+                record.extend(row.iter().cloned());
+                wtr.write_record(&record).expect("Failed to write grid CSV row");
+            }
+            wtr.flush().expect("Failed to flush grid CSV");
+        }
+        info!("Grid index written to {}", grid_csv_path);
+
+        for (i, p) in params.iter().enumerate() {
+            if !running.load(Ordering::Relaxed) {
+                info!("Grid interrupted by signal after {}/{} runs", i, params.len());
+                break;
+            }
+
+            info!(
+                "━━━ Grid run {}/{} [{}] ━━━",
+                i + 1,
+                params.len(),
+                p.tag
+            );
+            cinfo!(p.general.display_colorful, "\x1b[2;97m{:?}\x1b[0m", &p);
+
+            let run_running = Arc::clone(&running);
+            let run_data = data.clone();
+            let run_test = test_data.clone();
+            let run_param = p.clone();
+            let handle = thread::spawn(move || {
+                gpredomics::run_on_data(run_data, run_test, &run_param, run_running)
+            });
+
+            let exp = match handle.join() {
+                Ok(exp) => exp,
+                Err(panic_info) => {
+                    let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else {
+                        "Unknown error".to_string()
+                    };
+                    error!("Grid run {}/{} failed: {}", i + 1, params.len(), msg);
+                    continue;
+                }
             };
-            error!("Execution failed: {}", msg);
-            logger.flush();
-            std::process::exit(1);
+
+            cinfo!(p.general.display_colorful, "{}", exp.display_results());
+
+            if p.general.csv_report {
+                let csv_path = format!("{}_{}_csvr.csv", timestamp, p.tag);
+                if let Err(e) = exp.export_csv_report(&csv_path) {
+                    error!("Failed to export CSV report: {}", e);
+                } else {
+                    info!("CSV report exported to {}", csv_path);
+                }
+            }
+
+            if p.general.save_exp != *"" {
+                info!("Saving experiment...");
+                exp.save_auto(format!("{}_{}_{}", timestamp, p.tag, &p.general.save_exp))
+                    .expect("Error while exporting experiment");
+            }
         }
-    };
 
-    cinfo!(param.general.display_colorful, "{}", exp.display_results());
+        info!("Grid search complete ({} runs)", params.len());
+    } else {
+        // Single run (no grid)
+        let param = &params[0];
+        cinfo!(
+            param.general.display_colorful,
+            "\x1b[2;97m{:?}\x1b[0m",
+            param
+        );
 
-    if param.general.csv_report {
-        let csv_path = format!("{}_csvr.csv", timestamp);
-        if let Err(e) = exp.export_csv_report(&csv_path) {
-            error!("Failed to export CSV report: {}", e);
-        } else {
-            info!("CSV report exported to {}", csv_path);
+        let running_clone = Arc::clone(&running);
+        let thread_param = param.clone();
+        let handle = thread::spawn(move || gpredomics::run(&thread_param, running_clone));
+
+        let exp = match handle.join() {
+            Ok(exp) => exp,
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else {
+                    "Unknown error".to_string()
+                };
+                error!("Execution failed: {}", msg);
+                logger.flush();
+                std::process::exit(1);
+            }
+        };
+
+        cinfo!(param.general.display_colorful, "{}", exp.display_results());
+
+        if param.general.csv_report {
+            let csv_path = format!("{}_csvr.csv", timestamp);
+            if let Err(e) = exp.export_csv_report(&csv_path) {
+                error!("Failed to export CSV report: {}", e);
+            } else {
+                info!("CSV report exported to {}", csv_path);
+            }
         }
-    }
 
-    if param.general.save_exp != *"" {
-        info!("Saving experiment...");
-        exp.save_auto(format!("{}_{}", timestamp, &param.general.save_exp))
-            .expect("Error while exporting experiment");
+        if param.general.save_exp != *"" {
+            info!("Saving experiment...");
+            exp.save_auto(format!("{}_{}", timestamp, &param.general.save_exp))
+                .expect("Error while exporting experiment");
+        }
     }
 
     logger.flush();
