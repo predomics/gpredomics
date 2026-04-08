@@ -384,7 +384,7 @@ pub fn iterative_evolution(
         if epoch > 0 && epoch % 10 == 0 {
             if let Some(td) = test_data.as_ref() {
                 let best = &pop.individuals[0];
-                let quality_line = format!("QUALITY test_auc={:.6}", best.compute_new_auc(td));
+                let quality_line = format!("QUALITY train_auc={:.6} test_auc={:.6}", best.cls.auc, best.compute_new_auc(td));
                 info!("{}", quality_line);
                 print!("{}\n", quality_line);
                 let _ = std::io::stdout().flush();

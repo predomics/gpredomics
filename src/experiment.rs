@@ -581,7 +581,8 @@ impl Experiment {
             if let Some(best) = final_pop.individuals.first() {
                 let test_auc = self.test_data.as_ref().map(|d| best.compute_new_auc(d));
                 if let Some(t) = test_auc {
-                    text.push_str(&format!("QUALITY test_auc={:.6}\n", t));
+                    let train_auc = best.cls.auc;
+                    text.push_str(&format!("QUALITY train_auc={:.6} test_auc={:.6}\n", train_auc, t));
                     let _ = std::io::stdout().flush();
                 }
             }
