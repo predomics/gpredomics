@@ -197,16 +197,7 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
     }
 
-    // Launch training
-    let (collections, final_population, cv_folds_ids, meta) = if param.general.cv {
-        run_cv_training(&data, &param, running)
-    } else {
-        let (collection, final_population, meta) =
-            run_training(&mut data, &mut None, &param, running);
-        (vec![collection], final_population, None, meta)
-    };
-
-    // Loading test data
+    // Load Xtest/ytest before training so quality can be reported per epoch
     if test_data.is_none() && (!param.data.Xtest.is_empty() && !param.data.ytest.is_empty()) {
         debug!("Loading test data...");
         let mut td = Data::new();
@@ -222,12 +213,19 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         if param.general.algo == "mcmc" {
             td = td.remove_class(2.0);
         }
-        if data.check_compatibility(&td) {
-            test_data = Some(td);
-        } else {
-            warn!("Test data is not compatible with training data: classes or features differ. Ignoring test data.");
-        }
+        // Compatibility check done after feature selection — store unconditionally here,
+        // run_training will receive it and ga() uses it only for AUC reporting (read-only)
+        test_data = Some(td);
     }
+
+    // Launch training
+    let (collections, final_population, cv_folds_ids, meta) = if param.general.cv {
+        run_cv_training(&data, &param, running)
+    } else {
+        let (collection, final_population, meta) =
+            run_training(&mut data, &mut test_data, &mut None, &param, running);
+        (vec![collection], final_population, None, meta)
+    };
 
     // Build experiment
     let git_hash = option_env!("GPREDOMICS_GIT_SHA").unwrap_or("unknown");
@@ -383,7 +381,7 @@ pub fn run_on_data(
         run_cv_training(&data, &param, running)
     } else {
         let (collection, final_population, meta) =
-            run_training(&mut data, &mut None, &param, running);
+            run_training(&mut data, &mut test_data, &mut None, &param, running);
         (vec![collection], final_population, None, meta)
     };
 
@@ -554,7 +552,7 @@ pub fn run_pop_and_data(
         panic!("Cross-validation with initial population is not currently supported.");
     } else {
         let (collection, final_population, meta) =
-            run_training(&mut data, initial_pop, &param, running);
+            run_training(&mut data, &mut test_data, initial_pop, &param, running);
         (vec![collection], final_population, None, meta)
     };
 
@@ -666,6 +664,7 @@ pub fn run_pop_and_data(
 /// * Optional experiment metadata
 pub fn run_training(
     data: &mut Data,
+    test_data: &mut Option<Data>,
     initial_pop: &mut Option<Population>,
     param: &Param,
     running: Arc<AtomicBool>,
@@ -676,7 +675,7 @@ pub fn run_training(
     match param.general.algo.as_str() {
         "ga" => {
             cinfo!(param.general.display_colorful, "Training using Genetic Algorithm\n-----------------------------------------------------");
-            (collection, meta) = (ga(data, &mut None, initial_pop, &param, running), None);
+            (collection, meta) = (ga(data, test_data, initial_pop, &param, running), None);
             final_population = collection[collection.len() - 1].clone()
         }
         "beam" => {

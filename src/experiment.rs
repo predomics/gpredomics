@@ -2,6 +2,7 @@ use crate::bayesian_mcmc::MCMCAnalysisTrace;
 use crate::cinfo;
 use crate::cv::CV;
 use crate::data::Data;
+use std::io::Write;
 use crate::param::Param;
 use crate::population::Population;
 use crate::utils::display_feature_importance_terminal;
@@ -572,6 +573,17 @@ impl Experiment {
                     ));
                 }
                 _ => {}
+            }
+        }
+
+        // Structured quality line for scitq quality scoring (parseable by regex)
+        if let Some(ref final_pop) = self.final_population {
+            if let Some(best) = final_pop.individuals.first() {
+                let test_auc = self.test_data.as_ref().map(|d| best.compute_new_auc(d));
+                if let Some(t) = test_auc {
+                    text.push_str(&format!("QUALITY test_auc={:.6}\n", t));
+                    let _ = std::io::stdout().flush();
+                }
             }
         }
 
