@@ -46,10 +46,13 @@ Each model is additionally characterized by a data type:
 | `raw`       | Raw data            | $L + U + F \geq \text{threshold}$      | $\sum_i C_i F_i \geq \text{threshold}$                    | $\frac{\sum_{i \in pos} C_i F_i}{\sum_{j \in neg} \lvert C_j \rvert F_j + \epsilon} \geq \text{threshold}$   |
 | `prev`      | Binarized data      | $L^0 + U^0 + F^0 \geq \text{threshold}$ | $\sum_i C_i \mathbb{I}(F_i > \epsilon) \geq \text{threshold}$ | $\frac{\sum_{i \in pos} C_i \mathbb{I}(F_i > \epsilon)}{\sum_{j \in neg} \lvert C_j \rvert \mathbb{I}(F_j > \epsilon) + \epsilon} \geq \text{threshold}$ |
 | `log`       | Natural log of data | $\ln(L × U × F) \geq \text{threshold}$  | $\sum_i C_i (\ln F_i - \ln \epsilon) \geq \text{threshold}$ | $\sum_{i \in pos} |C_i| \ln\left(\frac{F_i}{\epsilon}\right) - \sum_{j \in neg} |C_j| \ln\left(\frac{F_j}{\epsilon}\right) - \epsilon \geq \text{threshold}$ $ |
+| `zscore`    | Standardized (z-score) | $\tilde{L} + \tilde{U} + \tilde{F} \geq \text{threshold}$ | $\sum_i C_i \tilde{F_i} \geq \text{threshold}$ where $\tilde{F_i} = \frac{F_i - \mu_i}{\sigma_i}$ | $\frac{\sum_{i \in pos} C_i \tilde{F_i}}{\sum_{j \in neg} \lvert C_j \rvert \tilde{F_j} + \epsilon} \geq \text{threshold}$ |
 
 Here, $F_i$ represents Features and $C_i$ their coefficients.
 
 $\epsilon$ is a small positive constant used to avoid division by zero or logarithm of zero. Its default value is 1e-5 (0.00001), configurable via `datatype_epsilon` in the YAML configuration.
+
+For the `zscore` data type, each feature is standardized using **training-data statistics** (mean $\mu_i$ and standard deviation $\sigma_i$ computed on the training set). These statistics are automatically propagated to test data to avoid data leakage. Features with zero variance are assigned $\sigma = 1$ to prevent division by zero. Aliases accepted in config: `zscore`, `z`, `standardized`.
 
 ## Struct layout
 
@@ -62,7 +65,7 @@ An `Individual` contains the model definition, a universal fitness score, and ne
 | `features`   | `BTreeMap<usize, i8>`         | Feature indices mapped to their coefficients. Uses `BTreeMap` (not `HashMap`) for deterministic iteration order. |
 | `k`          | `usize`                       | Number of variables used in the model.                          |
 | `language`   | `u8`                          | Language of the model (bin, ter, ratio, pow2).                  |
-| `data_type`  | `u8`                          | Data type of the model (raw, prev, log).                        |
+| `data_type`  | `u8`                          | Data type of the model (raw, prev, log, zscore).                        |
 | `epsilon`    | `f64`                         | Epsilon value used during score calculation.                    |
 | `fit`        | `f64`                         | Universal penalized objective (see [Fitness](#fitness) below).  |
 | `cls`        | `ClassificationMetrics`       | Nested classification metrics (see below).                      |

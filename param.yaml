@@ -8,8 +8,8 @@ general:
   thread_number: 8                            # The number of threads used in feature selection and fit computation.
   gpu: false                                  # Should Gpredomics use the GPU? (GA and beam only)
   language: bin,ratio,pow2,ter                # Possible values are ter, bin, ratio, pow2. See README.md for details. A comma-separated list (no spaces) is accepted; the initial population will be split among the listed languages.
-  data_type: raw,prev,log                     # Possible values are raw, prev, log. See README.md for details. A comma-separated list is accepted.
-  epsilon: 1e-5                               # This is only useful for data_type 'prevalence' (where it is a threshold) or 'log' (where it replaces values below the threshold).
+  data_type: raw,prev,log                     # Possible values: raw, prev, log, zscore. See docs/individual.md. Comma-separated list accepted. zscore standardizes features using training mean/std (propagated to test).
+  epsilon: 1e-5                               # Used for data_type 'prev' (threshold) and 'log' (floor for values below threshold). Not used for 'zscore'.
   fit: auc                                    # Possible values are auc, specificity, sensitivity, mcc, f1_score, g_mean (classification). See README.md for details.
   k_penalty: 0.0001                           # This penalty is derived from the fit function and multiplied by k (the number of variables used in the model).
   fr_penalty: 0.0                             # Used only when fit is specificity or sensitivity. Subtract (1 - symmetrical_metrics) × fr_penalty from the fit during threshold optimization.
