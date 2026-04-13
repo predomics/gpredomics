@@ -146,6 +146,8 @@ pub const RAW_TYPE: u8 = 0;
 pub const PREVALENCE_TYPE: u8 = 1;
 /// Log data type
 pub const LOG_TYPE: u8 = 2;
+/// Z-score (standardized) data type — (x - mean) / std per feature
+pub const ZSCORE_TYPE: u8 = 3;
 
 /// Default minimum epsilon value for ratio calculations
 pub const DEFAULT_MINIMUM: f64 = f64::MIN_POSITIVE;
@@ -206,6 +208,7 @@ pub fn data_type(data_type_string: &str) -> u8 {
         "raw" => RAW_TYPE,
         "prevalence" | "prev" => PREVALENCE_TYPE,
         "log" => LOG_TYPE,
+        "zscore" | "z" | "standardized" => ZSCORE_TYPE,
         other => panic!("Unrecognized data type {}", other),
     }
 }
@@ -1025,6 +1028,9 @@ impl Individual {
     /// let scores = individual.evaluate(&data);
     /// ```
     pub fn evaluate(&self, d: &Data) -> Vec<f64> {
+        if self.data_type == ZSCORE_TYPE {
+            return self.evaluate_zscore(&d.X, d.sample_len, &d.feature_means, &d.feature_stds);
+        }
         self.evaluate_from_features(&d.X, d.sample_len)
     }
 
@@ -1301,6 +1307,86 @@ impl Individual {
             }
         }
 
+        score
+    }
+
+    /// Evaluates the Individual using z-score standardized feature values.
+    /// Applies `(x - mean) / std` per feature using the provided train stats.
+    ///
+    /// # Arguments
+    ///
+    /// * `X` - Feature matrix
+    /// * `sample_len` - Number of samples
+    /// * `feature_means` - Per-feature mean from training data
+    /// * `feature_stds` - Per-feature std from training data
+    fn evaluate_zscore(
+        &self,
+        X: &HashMap<(usize, usize), f64>,
+        sample_len: usize,
+        feature_means: &HashMap<usize, f64>,
+        feature_stds: &HashMap<usize, f64>,
+    ) -> Vec<f64> {
+        if feature_means.is_empty() || feature_stds.is_empty() {
+            panic!(
+                "evaluate_zscore requires feature_means and feature_stds to be computed. \
+                 Call data.compute_zscore_stats() before evaluation."
+            );
+        }
+
+        let mut score = vec![0.0; sample_len];
+
+        if self.language == RATIO_LANG {
+            let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
+            for (&feature_index, &coef) in &self.features {
+                let mean = *feature_means.get(&feature_index).unwrap_or(&0.0);
+                let std = *feature_stds.get(&feature_index).unwrap_or(&1.0);
+                let part = if coef > 0 { 0 } else { 1 };
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    r[sample][part] += (v - mean) / std;
+                }
+            }
+            for sample in 0..sample_len {
+                score[sample] = r[sample][0] / (r[sample][1] + self.epsilon);
+            }
+        } else if self.language == MCMC_GENERIC_LANG {
+            let betas = self
+                .betas
+                .as_ref()
+                .expect("MCMC Individuals must have betas coefficeints");
+            let mut pos_sums = vec![0.0; sample_len];
+            let mut neg_sums = vec![0.0; sample_len];
+            for (&feature_index, &coef) in &self.features {
+                let mean = *feature_means.get(&feature_index).unwrap_or(&0.0);
+                let std = *feature_stds.get(&feature_index).unwrap_or(&1.0);
+                for sample in 0..sample_len {
+                    let v = (*X.get(&(sample, feature_index)).unwrap_or(&0.0) - mean) / std;
+                    match coef {
+                        1 => pos_sums[sample] += v,
+                        -1 => neg_sums[sample] += v,
+                        _ => {}
+                    }
+                }
+            }
+            score = pos_sums
+                .into_iter()
+                .zip(neg_sums.into_iter())
+                .map(|(pos, neg)| {
+                    let z = pos * betas.a + neg * betas.b + betas.c;
+                    logistic(z)
+                })
+                .collect();
+        } else {
+            for (&feature_index, &coef) in &self.features {
+                let mean = *feature_means.get(&feature_index).unwrap_or(&0.0);
+                let std = *feature_stds.get(&feature_index).unwrap_or(&1.0);
+                let x_coef = coef as f64;
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    score[sample] += ((v - mean) / std) * x_coef;
+                }
+            }
+        }
         score
     }
 
@@ -2479,6 +2565,7 @@ impl Individual {
             RAW_TYPE => "Raw",
             PREVALENCE_TYPE => "Prevalence",
             LOG_TYPE => "Log",
+            ZSCORE_TYPE => "ZScore",
             _ => "Unknown",
         }
     }
@@ -3223,6 +3310,110 @@ mod tests {
             vec![2.0 * 1.0 + 3.0 * 0.0, 4.0 * 1.0 + 5.0 * 0.0],
             "bad calculation for raw data scores with bin language"
         );
+    }
+
+    #[test]
+    fn test_zscore_data_type_parsing() {
+        assert_eq!(data_type("zscore"), ZSCORE_TYPE);
+        assert_eq!(data_type("ZSCORE"), ZSCORE_TYPE);
+        assert_eq!(data_type("z"), ZSCORE_TYPE);
+        assert_eq!(data_type("standardized"), ZSCORE_TYPE);
+    }
+
+    #[test]
+    fn test_evaluate_zscore_ternary() {
+        // 2 samples, 2 features
+        // Feature 0: values [2.0, 4.0], mean=3.0, std=1.0
+        // Feature 1: values [3.0, 5.0], mean=4.0, std=1.0
+        // Z-scores:
+        //   Sample 0: f0 = (2-3)/1 = -1.0, f1 = (3-4)/1 = -1.0
+        //   Sample 1: f0 = (4-3)/1 = +1.0, f1 = (5-4)/1 = +1.0
+        // Model: +f0 - f1
+        //   Sample 0: (-1.0) * 1 + (-1.0) * -1 = -1 + 1 = 0.0
+        //   Sample 1: (+1.0) * 1 + (+1.0) * -1 = 1 - 1 = 0.0
+        let mut ind = Individual::test();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.data_type = ZSCORE_TYPE;
+        ind.language = TERNARY_LANG;
+
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 2.0);
+        X.insert((0, 1), 3.0);
+        X.insert((1, 0), 4.0);
+        X.insert((1, 1), 5.0);
+
+        let mut means = HashMap::new();
+        means.insert(0, 3.0);
+        means.insert(1, 4.0);
+        let mut stds = HashMap::new();
+        stds.insert(0, 1.0);
+        stds.insert(1, 1.0);
+
+        let scores = ind.evaluate_zscore(&X, 2, &means, &stds);
+        assert!((scores[0] - 0.0).abs() < 1e-9, "sample 0 should be 0.0");
+        assert!((scores[1] - 0.0).abs() < 1e-9, "sample 1 should be 0.0");
+    }
+
+    #[test]
+    fn test_compute_zscore_stats_and_evaluate() {
+        // End-to-end: create a Data, compute stats, evaluate with zscore
+        let mut data = Data::new();
+        data.feature_len = 2;
+        data.sample_len = 3;
+        data.X.insert((0, 0), 1.0); // sample 0, feature 0
+        data.X.insert((1, 0), 2.0); // sample 1, feature 0
+        data.X.insert((2, 0), 3.0); // sample 2, feature 0
+        data.X.insert((0, 1), 10.0);
+        data.X.insert((1, 1), 20.0);
+        data.X.insert((2, 1), 30.0);
+        data.y = vec![0.0, 1.0, 0.0];
+
+        data.compute_zscore_stats();
+
+        // Feature 0: mean=2, var=2/3, std≈0.8165
+        let mean0 = data.feature_means[&0];
+        let std0 = data.feature_stds[&0];
+        assert!((mean0 - 2.0).abs() < 1e-9);
+        assert!((std0 - (2.0_f64 / 3.0).sqrt()).abs() < 1e-9);
+
+        // Feature 1: mean=20, var=200/3, std≈8.165
+        let mean1 = data.feature_means[&1];
+        let std1 = data.feature_stds[&1];
+        assert!((mean1 - 20.0).abs() < 1e-9);
+        assert!((std1 - (200.0_f64 / 3.0).sqrt()).abs() < 1e-9);
+
+        // Evaluate a simple model: +f0 (binary, just feature 0 with coef 1)
+        // Z-scores of feature 0: [(-1)/0.8165, 0, 1/0.8165]
+        let mut ind = Individual::new();
+        ind.features.insert(0, 1);
+        ind.data_type = ZSCORE_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.k = 1;
+
+        let scores = ind.evaluate(&data);
+        assert_eq!(scores.len(), 3);
+        // Sum of all z-scores should be approximately 0 (mean-centered)
+        let sum: f64 = scores.iter().sum();
+        assert!(sum.abs() < 1e-9, "z-scores should sum to ~0, got {}", sum);
+    }
+
+    #[test]
+    fn test_copy_zscore_stats_from_train_to_test() {
+        let mut train = Data::new();
+        train.feature_len = 1;
+        train.sample_len = 3;
+        train.X.insert((0, 0), 1.0);
+        train.X.insert((1, 0), 2.0);
+        train.X.insert((2, 0), 3.0);
+        train.compute_zscore_stats();
+
+        let mut test = Data::new();
+        test.feature_len = 1;
+        test.sample_len = 2;
+        test.copy_zscore_stats_from(&train);
+
+        assert_eq!(test.feature_means[&0], 2.0);
+        assert!((test.feature_stds[&0] - (2.0_f64 / 3.0).sqrt()).abs() < 1e-9);
     }
 
     #[test]

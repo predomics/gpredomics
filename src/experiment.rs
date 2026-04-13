@@ -2,7 +2,6 @@ use crate::bayesian_mcmc::MCMCAnalysisTrace;
 use crate::cinfo;
 use crate::cv::CV;
 use crate::data::Data;
-use std::io::Write;
 use crate::param::Param;
 use crate::population::Population;
 use crate::utils::display_feature_importance_terminal;
@@ -11,6 +10,7 @@ use log::{debug, error, info, warn};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 //-----------------------------------------------------------------------------
 // Importance structures and methods
@@ -582,7 +582,10 @@ impl Experiment {
                 let test_auc = self.test_data.as_ref().map(|d| best.compute_new_auc(d));
                 if let Some(t) = test_auc {
                     let train_auc = best.cls.auc;
-                    text.push_str(&format!("QUALITY train_auc={:.6} test_auc={:.6}\n", train_auc, t));
+                    text.push_str(&format!(
+                        "QUALITY train_auc={:.6} test_auc={:.6}\n",
+                        train_auc, t
+                    ));
                     let _ = std::io::stdout().flush();
                 }
             }

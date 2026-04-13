@@ -2578,6 +2578,8 @@ mod tests {
             sample_len: num_samples,
             feature_class: HashMap::new(),
             feature_significance: HashMap::new(),
+            feature_means: HashMap::new(),
+            feature_stds: HashMap::new(),
             features: (0..num_features)
                 .map(|i| format!("feature_{}", i))
                 .collect(),

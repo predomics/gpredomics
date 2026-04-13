@@ -218,6 +218,18 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         test_data = Some(td);
     }
 
+    // Pre-compute z-score stats on training data and propagate to test
+    // (must happen BEFORE training so test_data evaluation works during training)
+    let needs_zscore = param.general.data_type.contains("zscore")
+        || param.general.data_type.contains("standardized")
+        || param.general.data_type.split(',').any(|s| s.trim() == "z");
+    if needs_zscore {
+        data.compute_zscore_stats();
+        if let Some(ref mut td) = test_data {
+            td.copy_zscore_stats_from(&data);
+        }
+    }
+
     // Launch training
     let (collections, final_population, cv_folds_ids, meta) = if param.general.cv {
         run_cv_training(&data, &param, running)
@@ -374,6 +386,17 @@ pub fn run_on_data(
         && param.data.holdout_ratio == 0.0
     {
         warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
+    }
+
+    // Pre-compute z-score stats on training data and propagate to test
+    let needs_zscore = param.general.data_type.contains("zscore")
+        || param.general.data_type.contains("standardized")
+        || param.general.data_type.split(',').any(|s| s.trim() == "z");
+    if needs_zscore {
+        data.compute_zscore_stats();
+        if let Some(ref mut td) = test_data {
+            td.copy_zscore_stats_from(&data);
+        }
     }
 
     // Launch training
@@ -545,6 +568,17 @@ pub fn run_pop_and_data(
         && param.data.holdout_ratio == 0.0
     {
         warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
+    }
+
+    // Pre-compute z-score stats on training data and propagate to test
+    let needs_zscore = param.general.data_type.contains("zscore")
+        || param.general.data_type.contains("standardized")
+        || param.general.data_type.split(',').any(|s| s.trim() == "z");
+    if needs_zscore {
+        data.compute_zscore_stats();
+        if let Some(ref mut td) = test_data {
+            td.copy_zscore_stats_from(&data);
+        }
     }
 
     // Launch training

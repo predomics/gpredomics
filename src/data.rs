@@ -73,6 +73,13 @@ pub struct Data {
     #[serde(default)]
     pub feature_significance: HashMap<usize, f64>,
 
+    /// Per-feature mean (for z-score data type). Computed on training data, propagated to test.
+    #[serde(default)]
+    pub feature_means: HashMap<usize, f64>,
+    /// Per-feature standard deviation (for z-score data type). Computed on training data, propagated to test.
+    #[serde(default)]
+    pub feature_stds: HashMap<usize, f64>,
+
     /// Sample real classes
     pub y: Vec<f64>,
     /// Sample names
@@ -101,6 +108,8 @@ impl Data {
             samples: Vec::new(),
             feature_class: HashMap::new(),
             feature_significance: HashMap::new(),
+            feature_means: HashMap::new(),
+            feature_stds: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 0,
             sample_len: 0,
@@ -1212,6 +1221,16 @@ impl Data {
 
         info!("{} features selected", self.feature_selection.len());
 
+        // If data_type includes zscore, compute per-feature mean/std stats on training data.
+        // These are propagated to test data later (via copy_zscore_stats_from).
+        if param.general.data_type.contains("zscore")
+            || param.general.data_type.contains("standardized")
+            || param.general.data_type.split(',').any(|s| s.trim() == "z")
+        {
+            info!("Computing z-score statistics (mean, std) on training data...");
+            self.compute_zscore_stats();
+        }
+
         if self.feature_len > 10000 {
             warn!("Large dataset. Removing non-selected features from memory to speed up...");
 
@@ -1395,6 +1414,8 @@ impl Data {
             samples: samples.iter().map(|i| self.samples[*i].clone()).collect(),
             feature_class: HashMap::new(),
             feature_significance: self.feature_significance.clone(),
+            feature_means: self.feature_means.clone(),
+            feature_stds: self.feature_stds.clone(),
             feature_selection: self.feature_selection.clone(), // Inherit feature selection from parent
             feature_len: self.feature_len,
             sample_len: samples.len(),
@@ -1402,6 +1423,43 @@ impl Data {
             feature_annotations: self.feature_annotations.clone(),
             sample_annotations,
         }
+    }
+
+    /// Computes per-feature mean and standard deviation for all selected features.
+    /// Used for z-score (standardization) data type. Stats are stored in
+    /// `feature_means` and `feature_stds` for later propagation to test data.
+    ///
+    /// Missing values (not present in X) are treated as 0.0.
+    /// Features with std == 0 (constant) get std = 1.0 to avoid division by zero.
+    pub fn compute_zscore_stats(&mut self) {
+        self.feature_means.clear();
+        self.feature_stds.clear();
+        if self.sample_len == 0 {
+            return;
+        }
+        let n = self.sample_len as f64;
+        // Iterate over all features (not just selected) so we support mixed data types
+        for feature_idx in 0..self.feature_len {
+            let mut sum = 0.0_f64;
+            let mut sum_sq = 0.0_f64;
+            for sample_idx in 0..self.sample_len {
+                let v = *self.X.get(&(sample_idx, feature_idx)).unwrap_or(&0.0);
+                sum += v;
+                sum_sq += v * v;
+            }
+            let mean = sum / n;
+            let variance = (sum_sq / n) - (mean * mean);
+            let std = if variance > 0.0 { variance.sqrt() } else { 1.0 };
+            self.feature_means.insert(feature_idx, mean);
+            self.feature_stds.insert(feature_idx, std);
+        }
+    }
+
+    /// Copies z-score stats from another Data object (typically the training set).
+    /// This is essential to avoid data leakage: test data must use train mean/std.
+    pub fn copy_zscore_stats_from(&mut self, other: &Data) {
+        self.feature_means = other.feature_means.clone();
+        self.feature_stds = other.feature_stds.clone();
     }
 
     /// Clones the Data object with a new feature matrix X.
@@ -1421,6 +1479,8 @@ impl Data {
             samples: self.samples.clone(),
             feature_class: self.feature_class.clone(),
             feature_significance: self.feature_significance.clone(),
+            feature_means: self.feature_means.clone(),
+            feature_stds: self.feature_stds.clone(),
             feature_selection: self.feature_selection.clone(),
             feature_len: self.feature_len,
             sample_len: self.sample_len,
@@ -1798,6 +1858,8 @@ mod tests {
                 ],
                 feature_class,
                 feature_significance: HashMap::new(),
+                feature_means: HashMap::new(),
+                feature_stds: HashMap::new(),
                 feature_selection: vec![0, 1],
                 feature_len: 2,
                 sample_len: 6,
@@ -1838,6 +1900,8 @@ mod tests {
                 sample_len: num_samples,
                 feature_class: HashMap::new(),
                 feature_significance: HashMap::new(),
+                feature_means: HashMap::new(),
+                feature_stds: HashMap::new(),
                 features: (0..num_features)
                     .map(|i| format!("feature_{}", i))
                     .collect(),
@@ -1887,6 +1951,8 @@ mod tests {
                 sample_len: num_samples,
                 feature_class: HashMap::new(),
                 feature_significance: HashMap::new(),
+                feature_means: HashMap::new(),
+                feature_stds: HashMap::new(),
                 features: (0..num_features)
                     .map(|i| format!("feature_{}", i))
                     .collect(),
@@ -1977,6 +2043,8 @@ mod tests {
                 ],
                 feature_class,
                 feature_significance: HashMap::new(),
+                feature_means: HashMap::new(),
+                feature_stds: HashMap::new(),
                 feature_selection: vec![0, 1],
                 feature_len: 2,
                 sample_len: 10,
@@ -2022,6 +2090,8 @@ mod tests {
                 ],
                 feature_class,
                 feature_significance: HashMap::new(),
+                feature_means: HashMap::new(),
+                feature_stds: HashMap::new(),
                 feature_selection: vec![0, 1],
                 feature_len: 2,
                 sample_len: 5,
@@ -2067,6 +2137,8 @@ mod tests {
                 ],
                 feature_class,
                 feature_significance: HashMap::new(),
+                feature_means: HashMap::new(),
+                feature_stds: HashMap::new(),
                 feature_selection: vec![0, 1],
                 feature_len: 2,
                 sample_len: 5,
@@ -2435,6 +2507,8 @@ mod tests {
             samples: vec!["sample1".to_string(), "sample2".to_string()],
             feature_class: HashMap::new(),
             feature_significance: HashMap::new(),
+            feature_means: HashMap::new(),
+            feature_stds: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 1,
             sample_len: 2,
@@ -2450,6 +2524,8 @@ mod tests {
             samples: vec!["sample3".to_string(), "sample4".to_string()],
             feature_class: HashMap::new(),
             feature_significance: HashMap::new(),
+            feature_means: HashMap::new(),
+            feature_stds: HashMap::new(),
             feature_selection: Vec::new(),
             feature_len: 1,
             sample_len: 2,

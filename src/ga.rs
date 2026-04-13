@@ -1,7 +1,6 @@
 use crate::cinfo;
 use crate::cv::CV;
 use crate::data::Data;
-use std::io::Write;
 use crate::gpu::GpuAssay;
 use crate::individual::Individual;
 use crate::individual::{self, RATIO_LANG, TERNARY_LANG};
@@ -16,6 +15,7 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::cmp::min;
 use std::collections::HashMap;
+use std::io::Write;
 use std::mem;
 use std::time::Instant;
 
@@ -147,7 +147,15 @@ pub fn ga(
         "{}",
         display_epoch_legend(param)
     );
-    let populations = iterative_evolution(&base_pop, data, _test_data.as_ref(), &gpu_assay, param, running, &mut rng);
+    let populations = iterative_evolution(
+        &base_pop,
+        data,
+        _test_data.as_ref(),
+        &gpu_assay,
+        param,
+        running,
+        &mut rng,
+    );
 
     let elapsed = time.elapsed();
     info!(
@@ -384,7 +392,11 @@ pub fn iterative_evolution(
         if epoch > 0 && epoch % 10 == 0 {
             if let Some(td) = test_data.as_ref() {
                 let best = &pop.individuals[0];
-                let quality_line = format!("QUALITY train_auc={:.6} test_auc={:.6}", best.cls.auc, best.compute_new_auc(td));
+                let quality_line = format!(
+                    "QUALITY train_auc={:.6} test_auc={:.6}",
+                    best.cls.auc,
+                    best.compute_new_auc(td)
+                );
                 info!("{}", quality_line);
                 print!("{}\n", quality_line);
                 let _ = std::io::stdout().flush();
