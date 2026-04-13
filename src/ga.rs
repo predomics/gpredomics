@@ -15,6 +15,7 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::cmp::min;
 use std::collections::HashMap;
+use std::io::Write;
 use std::mem;
 use std::time::Instant;
 
@@ -146,7 +147,15 @@ pub fn ga(
         "{}",
         display_epoch_legend(param)
     );
-    let populations = iterative_evolution(&base_pop, data, &gpu_assay, param, running, &mut rng);
+    let populations = iterative_evolution(
+        &base_pop,
+        data,
+        _test_data.as_ref(),
+        &gpu_assay,
+        param,
+        running,
+        &mut rng,
+    );
 
     let elapsed = time.elapsed();
     info!(
@@ -268,6 +277,7 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
 pub fn iterative_evolution(
     base_pop: &Population,
     data: &mut Data,
+    test_data: Option<&Data>,
     gpu_assay: &Option<GpuAssay>,
     param: &Param,
     running: Arc<AtomicBool>,
@@ -375,6 +385,23 @@ pub fn iterative_evolution(
             "{}",
             display_epoch(&pop, param, epoch)
         );
+
+        // Periodic quality reporting for scitq live monitoring (every 10 epochs)
+        // print! → stdout (captured by scitq); info! → log file (visible locally)
+        // Explicit flush needed: stdout is block-buffered in Docker pipes
+        if epoch > 0 && epoch % 10 == 0 {
+            if let Some(td) = test_data.as_ref() {
+                let best = &pop.individuals[0];
+                let quality_line = format!(
+                    "QUALITY train_auc={:.6} test_auc={:.6}",
+                    best.cls.auc,
+                    best.compute_new_auc(td)
+                );
+                info!("{}", quality_line);
+                print!("{}\n", quality_line);
+                let _ = std::io::stdout().flush();
+            }
+        }
 
         // Stop critera
         let mut need_to_break = false;
