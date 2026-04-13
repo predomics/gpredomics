@@ -229,6 +229,13 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
         }
     }
 
+    // Propagate z-score stats from training to test data (avoid data leakage)
+    if let Some(ref mut td) = test_data {
+        if !data.feature_means.is_empty() {
+            td.copy_zscore_stats_from(&data);
+        }
+    }
+
     // Build experiment
     let git_hash = option_env!("GPREDOMICS_GIT_SHA").unwrap_or("unknown");
     let gpredomics_version = format!("{}#{}", env!("CARGO_PKG_VERSION"), git_hash);
@@ -391,6 +398,13 @@ pub fn run_on_data(
     if test_data.is_some() && !data.check_compatibility(test_data.as_ref().unwrap()) {
         warn!("Test data is not compatible with training data: classes or features differ. Ignoring test data.");
         test_data = None;
+    }
+
+    // Propagate z-score stats from training to test data (avoid data leakage)
+    if let Some(ref mut td) = test_data {
+        if !data.feature_means.is_empty() {
+            td.copy_zscore_stats_from(&data);
+        }
     }
 
     // Build experiment
@@ -562,6 +576,13 @@ pub fn run_pop_and_data(
     if test_data.is_some() && !data.check_compatibility(test_data.as_ref().unwrap()) {
         warn!("Test data is not compatible with training data: classes or features differ. Ignoring test data.");
         test_data = None;
+    }
+
+    // Propagate z-score stats from training to test data (avoid data leakage)
+    if let Some(ref mut td) = test_data {
+        if !data.feature_means.is_empty() {
+            td.copy_zscore_stats_from(&data);
+        }
     }
 
     // Build experiment
