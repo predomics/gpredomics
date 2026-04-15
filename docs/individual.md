@@ -47,12 +47,18 @@ Each model is additionally characterized by a data type:
 | `prev`      | Binarized data      | $L^0 + U^0 + F^0 \geq \text{threshold}$ | $\sum_i C_i \mathbb{I}(F_i > \epsilon) \geq \text{threshold}$ | $\frac{\sum_{i \in pos} C_i \mathbb{I}(F_i > \epsilon)}{\sum_{j \in neg} \lvert C_j \rvert \mathbb{I}(F_j > \epsilon) + \epsilon} \geq \text{threshold}$ |
 | `log`       | Natural log of data | $\ln(L × U × F) \geq \text{threshold}$  | $\sum_i C_i (\ln F_i - \ln \epsilon) \geq \text{threshold}$ | $\sum_{i \in pos} |C_i| \ln\left(\frac{F_i}{\epsilon}\right) - \sum_{j \in neg} |C_j| \ln\left(\frac{F_j}{\epsilon}\right) - \epsilon \geq \text{threshold}$ $ |
 | `zscore`    | Standardized (z-score) | $\tilde{L} + \tilde{U} + \tilde{F} \geq \text{threshold}$ | $\sum_i C_i \tilde{F_i} \geq \text{threshold}$ where $\tilde{F_i} = \frac{F_i - \mu_i}{\sigma_i}$ | $\frac{\sum_{i \in pos} C_i \tilde{F_i}}{\sum_{j \in neg} \lvert C_j \rvert \tilde{F_j} + \epsilon} \geq \text{threshold}$ |
+| `tanh_prev` | Smooth prevalence   | $\text{tanh\_prev}(L) + \text{tanh\_prev}(U) + \text{tanh\_prev}(F) \geq \text{threshold}$ | $\sum_i C_i \tanh(F_i / \epsilon) \geq \text{threshold}$ | $\frac{\sum_{i \in pos} C_i \tanh(F_i / \epsilon)}{\sum_{j \in neg} \lvert C_j \rvert \tanh(F_j / \epsilon) + \epsilon} \geq \text{threshold}$ |
+| `log1p`     | Zero-safe log       | $\text{log1p}(L) + \text{log1p}(U) + \text{log1p}(F) \geq \text{threshold}$ | $\sum_i C_i \ln(1 + F_i / \epsilon) \geq \text{threshold}$ | $\frac{\sum_{i \in pos} C_i \ln(1 + F_i / \epsilon)}{\sum_{j \in neg} \lvert C_j \rvert \ln(1 + F_j / \epsilon) + \epsilon} \geq \text{threshold}$ |
 
 Here, $F_i$ represents Features and $C_i$ their coefficients.
 
-$\epsilon$ is a small positive constant used to avoid division by zero or logarithm of zero. Its default value is 1e-5 (0.00001), configurable via `datatype_epsilon` in the YAML configuration.
+$\epsilon$ is a small positive constant used to avoid division by zero or logarithm of zero. For `prev` and `log` it defaults to 1e-5 (0.00001), configurable via `data_type_epsilon` in the YAML configuration.
 
 For the `zscore` data type, each feature is standardized using **training-data statistics** (mean $\mu_i$ and standard deviation $\sigma_i$ computed on the training set). These statistics are automatically propagated to test data to avoid data leakage. Features with zero variance are assigned $\sigma = 1$ to prevent division by zero. Aliases accepted in config: `zscore`, `z`, `standardized`.
+
+The `tanh_prev` data type replaces the hard $\mathbb{I}(F_i > \epsilon)$ step of `prev` with a smooth saturation $\tanh(F_i / \epsilon)$, which ranges in $[0, 1]$ for non-negative abundances. At $F_i = \epsilon$ the transform returns $\tanh(1) \approx 0.762$ — the feature is "mostly present but not fully saturated". Aliases accepted in config: `tanh_prev`, `tanh`. Unlike `prev` and `log`, this type **requires** `data_type_epsilon` to be set explicitly in the YAML: the right value depends on the profiler and sequencing depth (e.g. ~1e-4 is a typical "reliably detected" threshold for shotgun metagenomics), and there is no safe default.
+
+The `log1p` data type replaces $\ln(F_i / \epsilon)$ with $\ln(1 + F_i / \epsilon)$, which is well-defined at $F_i = 0$ (returning 0 rather than diverging to $-\infty$). For $F_i \gg \epsilon$ the transform is asymptotically equivalent to `log`, so it behaves as a drop-in replacement above the noise floor. Like `tanh_prev`, this type **requires** `data_type_epsilon` to be set explicitly — no safe default. Note that unlike `log`, the `ratio` language with `log1p` renders as an ordinary ratio of sums: the identity $\ln(a) + \ln(b) = \ln(a \cdot b)$ does not hold for $\ln(1 + \cdot)$.
 
 ## Struct layout
 
@@ -65,7 +71,7 @@ An `Individual` contains the model definition, a universal fitness score, and ne
 | `features`   | `BTreeMap<usize, i8>`         | Feature indices mapped to their coefficients. Uses `BTreeMap` (not `HashMap`) for deterministic iteration order. |
 | `k`          | `usize`                       | Number of variables used in the model.                          |
 | `language`   | `u8`                          | Language of the model (bin, ter, ratio, pow2).                  |
-| `data_type`  | `u8`                          | Data type of the model (raw, prev, log, zscore).                        |
+| `data_type`  | `u8`                          | Data type of the model (raw, prev, log, zscore, tanh_prev, log1p).      |
 | `epsilon`    | `f64`                         | Epsilon value used during score calculation.                    |
 | `fit`        | `f64`                         | Universal penalized objective (see [Fitness](#fitness) below).  |
 | `cls`        | `ClassificationMetrics`       | Nested classification metrics (see below).                      |

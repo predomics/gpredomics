@@ -172,7 +172,7 @@ pub struct General {
     pub language: String,
     #[serde(default = "data_type_default")]
     pub data_type: String,
-    #[serde(default = "data_type_epsilon_default")]
+    #[serde(default = "data_type_epsilon_default", alias = "epsilon")]
     pub data_type_epsilon: f64,
     #[serde(default = "one_default")]
     pub thread_number: usize,
@@ -1040,8 +1040,48 @@ pub fn get(param_file: String) -> Result<Param, Box<dyn Error>> {
         return Err(e.into());
     }
 
+    // Detect whether `general.data_type_epsilon` was explicitly set in the
+    // YAML. This distinction matters because the new `tanh_prev` and `log1p`
+    // data types require the user to set it based on their profiler and
+    // sequencing depth — no silent default is acceptable for those.
+    // Accept the legacy `epsilon` alias as well.
+    let epsilon_explicit = yaml_value
+        .as_mapping()
+        .and_then(|m| m.get(&serde_yaml::Value::String("general".to_string())))
+        .and_then(|g| g.as_mapping())
+        .map(|g| {
+            g.contains_key(&serde_yaml::Value::String("data_type_epsilon".to_string()))
+                || g.contains_key(&serde_yaml::Value::String("epsilon".to_string()))
+        })
+        .unwrap_or(false);
+
     // Now deserialize into the Param struct from the same content
     let mut config: Param = serde_yaml::from_str(&yaml_content)?;
+
+    // Check: tanh_prev and log1p require an explicitly set data_type_epsilon.
+    let needs_explicit_epsilon = config
+        .general
+        .data_type
+        .split(',')
+        .any(|s| matches!(s.trim(), "tanh_prev" | "tanh" | "log1p"));
+    if needs_explicit_epsilon && !epsilon_explicit {
+        return Err(format!(
+            "data_type contains `tanh_prev` or `log1p`, which require an explicit \
+             `general.data_type_epsilon` in {}. The appropriate value depends on \
+             your profiler and sequencing depth (e.g. 1e-4 for a standard \
+             metagenomic profiler) — there is no safe default.",
+            param_file
+        )
+        .into());
+    }
+    if needs_explicit_epsilon && config.general.data_type_epsilon <= 0.0 {
+        return Err(format!(
+            "data_type_epsilon must be > 0 when data_type contains `tanh_prev` \
+             or `log1p`; got {}",
+            config.general.data_type_epsilon
+        )
+        .into());
+    }
 
     let _ = validate(&mut config)?;
 
@@ -1558,6 +1598,174 @@ mod tests {
         param.ga.k_min = 0;
         param.ga.k_max = 0;
         assert!(validate(&mut param).is_ok());
+    }
+
+    // ── tanh_prev / log1p require explicit data_type_epsilon ──────────
+
+    fn write_yaml(content: &str) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f
+    }
+
+    #[test]
+    fn test_get_tanh_prev_requires_explicit_epsilon() {
+        let yaml = r#"
+general:
+  algo: ga
+  data_type: tanh_prev
+data:
+  X: "x.tsv"
+  y: "y.tsv"
+"#;
+        let f = write_yaml(yaml);
+        let result = get(f.path().to_str().unwrap().to_string());
+        assert!(
+            result.is_err(),
+            "tanh_prev without explicit data_type_epsilon must error"
+        );
+        let msg = result.err().unwrap().to_string();
+        assert!(
+            msg.contains("tanh_prev") || msg.contains("log1p"),
+            "error message should name the offending types, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("data_type_epsilon"),
+            "error message should name data_type_epsilon, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_get_log1p_requires_explicit_epsilon() {
+        let yaml = r#"
+general:
+  algo: ga
+  data_type: log1p
+data:
+  X: "x.tsv"
+  y: "y.tsv"
+"#;
+        let f = write_yaml(yaml);
+        let result = get(f.path().to_str().unwrap().to_string());
+        assert!(
+            result.is_err(),
+            "log1p without explicit data_type_epsilon must error"
+        );
+    }
+
+    #[test]
+    fn test_get_mixed_types_require_epsilon() {
+        // Even with raw in the mix, tanh_prev still requires explicit epsilon
+        let yaml = r#"
+general:
+  algo: ga
+  data_type: raw,tanh_prev
+data:
+  X: "x.tsv"
+  y: "y.tsv"
+"#;
+        let f = write_yaml(yaml);
+        assert!(
+            get(f.path().to_str().unwrap().to_string()).is_err(),
+            "mixing raw with tanh_prev still requires explicit epsilon"
+        );
+    }
+
+    #[test]
+    fn test_get_log_keeps_default_epsilon() {
+        // Backward compatibility: plain log without epsilon still works
+        let yaml = r#"
+general:
+  algo: ga
+  data_type: log
+data:
+  X: "x.tsv"
+  y: "y.tsv"
+"#;
+        let f = write_yaml(yaml);
+        let result = get(f.path().to_str().unwrap().to_string());
+        assert!(
+            result.is_ok(),
+            "log without explicit epsilon must still work (back-compat): {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_get_tanh_prev_with_explicit_epsilon() {
+        let yaml = r#"
+general:
+  algo: ga
+  data_type: tanh_prev
+  data_type_epsilon: 1e-4
+data:
+  X: "x.tsv"
+  y: "y.tsv"
+"#;
+        let f = write_yaml(yaml);
+        let result = get(f.path().to_str().unwrap().to_string());
+        assert!(
+            result.is_ok(),
+            "tanh_prev with explicit epsilon must succeed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().general.data_type_epsilon, 1e-4);
+    }
+
+    #[test]
+    fn test_get_log1p_with_explicit_epsilon() {
+        let yaml = r#"
+general:
+  algo: ga
+  data_type: log1p
+  data_type_epsilon: 1e-5
+data:
+  X: "x.tsv"
+  y: "y.tsv"
+"#;
+        let f = write_yaml(yaml);
+        let result = get(f.path().to_str().unwrap().to_string());
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn test_get_tanh_prev_rejects_zero_epsilon() {
+        let yaml = r#"
+general:
+  algo: ga
+  data_type: tanh_prev
+  data_type_epsilon: 0.0
+data:
+  X: "x.tsv"
+  y: "y.tsv"
+"#;
+        let f = write_yaml(yaml);
+        let result = get(f.path().to_str().unwrap().to_string());
+        assert!(
+            result.is_err(),
+            "data_type_epsilon = 0 must be rejected for tanh_prev"
+        );
+    }
+
+    #[test]
+    fn test_get_log1p_rejects_negative_epsilon() {
+        let yaml = r#"
+general:
+  algo: ga
+  data_type: log1p
+  data_type_epsilon: -1.0
+data:
+  X: "x.tsv"
+  y: "y.tsv"
+"#;
+        let f = write_yaml(yaml);
+        assert!(
+            get(f.path().to_str().unwrap().to_string()).is_err(),
+            "negative data_type_epsilon must be rejected for log1p"
+        );
     }
 }
 

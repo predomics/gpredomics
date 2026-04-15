@@ -148,6 +148,10 @@ pub const PREVALENCE_TYPE: u8 = 1;
 pub const LOG_TYPE: u8 = 2;
 /// Z-score (standardized) data type — (x - mean) / std per feature
 pub const ZSCORE_TYPE: u8 = 3;
+/// Smooth prevalence: tanh(x / x_ref) where x_ref = self.epsilon. Range [0, 1] for x ≥ 0.
+pub const TANH_PREV_TYPE: u8 = 4;
+/// Zero-safe log: ln(1 + x / x_ref) where x_ref = self.epsilon. Equals 0 at x = 0, no epsilon hack.
+pub const LOG1P_TYPE: u8 = 5;
 
 /// Default minimum epsilon value for ratio calculations
 pub const DEFAULT_MINIMUM: f64 = f64::MIN_POSITIVE;
@@ -204,11 +208,13 @@ pub fn language_name(lang: u8) -> &'static str {
 /// assert_eq!(dtype, 0);
 /// ```
 pub fn data_type(data_type_string: &str) -> u8 {
-    match data_type_string.to_lowercase().as_str() {
+    match data_type_string.trim().to_lowercase().as_str() {
         "raw" => RAW_TYPE,
         "prevalence" | "prev" => PREVALENCE_TYPE,
         "log" => LOG_TYPE,
         "zscore" | "z" | "standardized" => ZSCORE_TYPE,
+        "tanh_prev" | "tanh" => TANH_PREV_TYPE,
+        "log1p" => LOG1P_TYPE,
         other => panic!("Unrecognized data type {}", other),
     }
 }
@@ -391,6 +397,12 @@ impl Individual {
                 if self.data_type == PREVALENCE_TYPE {
                     str = format!("{}⁰", str);
                 }
+                if self.data_type == TANH_PREV_TYPE {
+                    str = format!("tanh_prev({})", str);
+                }
+                if self.data_type == LOG1P_TYPE {
+                    str = format!("log1p({})", str);
+                }
                 if self.language == POW2_LANG && !(*coef == 1_i8) && self.data_type != LOG_TYPE {
                     str = format!("{}*{}", coef, str);
                 } else if self.language == POW2_LANG
@@ -412,6 +424,12 @@ impl Individual {
 
                 if self.data_type == PREVALENCE_TYPE {
                     str = format!("{}⁰", str);
+                }
+                if self.data_type == TANH_PREV_TYPE {
+                    str = format!("tanh_prev({})", str);
+                }
+                if self.data_type == LOG1P_TYPE {
+                    str = format!("log1p({})", str);
                 }
                 if self.language == POW2_LANG && !(*coef == -1_i8) && self.data_type != LOG_TYPE {
                     str = format!("{}*{}", coef.abs(), str);
@@ -1068,6 +1086,8 @@ impl Individual {
             RAW_TYPE => self.evaluate_raw(X, sample_len),
             PREVALENCE_TYPE => self.evaluate_prevalence(X, sample_len),
             LOG_TYPE => self.evaluate_log(X, sample_len),
+            TANH_PREV_TYPE => self.evaluate_tanh_prev(X, sample_len),
+            LOG1P_TYPE => self.evaluate_log1p(X, sample_len),
             other => panic!("Unknown data-type {}", other),
         }
     }
@@ -1303,6 +1323,145 @@ impl Individual {
                     if let Some(val) = X.get(&(sample, feature_index)) {
                         score[sample] += (val / self.epsilon).ln() * x_coef;
                     }
+                }
+            }
+        }
+
+        score
+    }
+
+    /// Evaluates the Individual using the smooth prevalence transform
+    /// `tanh(x / self.epsilon)`.
+    ///
+    /// This is an alternative to `evaluate_prevalence` that replaces the hard
+    /// `x > ε` step with a smooth transition, while still bounding each
+    /// per-feature contribution to [0, 1] for non-negative `x`. Missing values
+    /// in `X` are treated as `0`, yielding `tanh(0) = 0` — the same behavior
+    /// as `evaluate_prevalence`.
+    ///
+    /// `self.epsilon` plays the role of `x_ref`: at `x = epsilon` the transform
+    /// returns `tanh(1) ≈ 0.762`.
+    fn evaluate_tanh_prev(
+        &self,
+        X: &HashMap<(usize, usize), f64>,
+        sample_len: usize,
+    ) -> Vec<f64> {
+        let mut score = vec![0.0; sample_len];
+        let eps = self.epsilon;
+
+        if self.language == RATIO_LANG {
+            let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
+            for (&feature_index, &coef) in &self.features {
+                let part = if coef > 0 { 0 } else { 1 };
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    r[sample][part] += (v / eps).tanh();
+                }
+            }
+            for sample in 0..sample_len {
+                score[sample] = r[sample][0] / (r[sample][1] + eps);
+            }
+        } else if self.language == MCMC_GENERIC_LANG {
+            let betas = self
+                .betas
+                .as_ref()
+                .expect("MCMC Individuals must have betas coefficients");
+            let mut pos_sums = vec![0.0; sample_len];
+            let mut neg_sums = vec![0.0; sample_len];
+            for (&feature_index, &coef) in &self.features {
+                for sample in 0..sample_len {
+                    let v = (*X.get(&(sample, feature_index)).unwrap_or(&0.0) / eps).tanh();
+                    match coef {
+                        1 => pos_sums[sample] += v,
+                        -1 => neg_sums[sample] += v,
+                        _ => {}
+                    }
+                }
+            }
+            score = pos_sums
+                .into_iter()
+                .zip(neg_sums.into_iter())
+                .map(|(pos, neg)| {
+                    let z = pos * betas.a + neg * betas.b + betas.c;
+                    logistic(z)
+                })
+                .collect();
+        } else {
+            for (&feature_index, &coef) in &self.features {
+                let x_coef = coef as f64;
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    score[sample] += (v / eps).tanh() * x_coef;
+                }
+            }
+        }
+
+        score
+    }
+
+    /// Evaluates the Individual using the zero-safe log transform
+    /// `ln(1 + x / self.epsilon)`.
+    ///
+    /// Unlike `evaluate_log`, this transform is well-defined at `x = 0`
+    /// (returning 0 rather than diverging to `-∞`). For `x >> self.epsilon`
+    /// the result is asymptotically equivalent to `evaluate_log`'s
+    /// `ln(x / epsilon)`. Missing values in `X` are treated as `0`.
+    ///
+    /// Unlike `evaluate_log + RATIO_LANG`, the `RATIO_LANG` branch here uses
+    /// an ordinary ratio of sums: `log1p` does not satisfy
+    /// `log1p(a) + log1p(b) = log1p(a·b)`, so the "difference of logs = log of
+    /// ratio" identity used by `evaluate_log` does not apply.
+    fn evaluate_log1p(
+        &self,
+        X: &HashMap<(usize, usize), f64>,
+        sample_len: usize,
+    ) -> Vec<f64> {
+        let mut score = vec![0.0; sample_len];
+        let eps = self.epsilon;
+
+        if self.language == RATIO_LANG {
+            let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
+            for (&feature_index, &coef) in &self.features {
+                let part = if coef > 0 { 0 } else { 1 };
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    r[sample][part] += (v / eps).ln_1p();
+                }
+            }
+            for sample in 0..sample_len {
+                score[sample] = r[sample][0] / (r[sample][1] + eps);
+            }
+        } else if self.language == MCMC_GENERIC_LANG {
+            let betas = self
+                .betas
+                .as_ref()
+                .expect("MCMC Individuals must have betas coefficients");
+            let mut pos_sums = vec![0.0; sample_len];
+            let mut neg_sums = vec![0.0; sample_len];
+            for (&feature_index, &coef) in &self.features {
+                for sample in 0..sample_len {
+                    let v = (*X.get(&(sample, feature_index)).unwrap_or(&0.0) / eps).ln_1p();
+                    match coef {
+                        1 => pos_sums[sample] += v,
+                        -1 => neg_sums[sample] += v,
+                        _ => {}
+                    }
+                }
+            }
+            score = pos_sums
+                .into_iter()
+                .zip(neg_sums.into_iter())
+                .map(|(pos, neg)| {
+                    let z = pos * betas.a + neg * betas.b + betas.c;
+                    logistic(z)
+                })
+                .collect();
+        } else {
+            for (&feature_index, &coef) in &self.features {
+                let x_coef = coef as f64;
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    score[sample] += (v / eps).ln_1p() * x_coef;
                 }
             }
         }
@@ -3614,6 +3773,423 @@ mod tests {
             ],
             "X missing value should be interpreted as coefficient 0"
         );
+    }
+
+    // ── tests for evaluate_tanh_prev ──────────────────────────────────────
+    #[test]
+    fn test_tanh_prev_data_type_parsing() {
+        assert_eq!(
+            data_type("tanh_prev"),
+            TANH_PREV_TYPE,
+            "'tanh_prev' misinterpreted"
+        );
+        assert_eq!(data_type("tanh"), TANH_PREV_TYPE, "'tanh' misinterpreted");
+        assert_eq!(data_type("TANH"), TANH_PREV_TYPE, "'TANH' misinterpreted");
+        assert_eq!(
+            data_type(" tanh_prev "),
+            TANH_PREV_TYPE,
+            "'tanh_prev' with whitespace should be accepted"
+        );
+    }
+
+    #[test]
+    fn test_log1p_data_type_parsing() {
+        assert_eq!(data_type("log1p"), LOG1P_TYPE, "'log1p' misinterpreted");
+        assert_eq!(data_type("LOG1P"), LOG1P_TYPE, "'LOG1P' misinterpreted");
+        assert_eq!(
+            data_type(" log1p "),
+            LOG1P_TYPE,
+            "'log1p' with whitespace should be accepted"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized data type")]
+    fn test_typo_tnh_still_panics() {
+        data_type("tnh");
+    }
+
+    #[test]
+    fn test_evaluate_tanh_prev_weighted_score() {
+        let mut ind: Individual = Individual::test();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.data_type = TANH_PREV_TYPE;
+        ind.epsilon = 1e-4;
+
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 1e-5); // 0.1 * epsilon
+        X.insert((0, 1), 1e-4); // 1.0 * epsilon
+        X.insert((1, 0), 5e-5); // 0.5 * epsilon
+        X.insert((1, 1), 1e-3); // 10.0 * epsilon
+
+        let eps = ind.epsilon;
+
+        ind.language = RATIO_LANG;
+        assert_eq!(
+            ind.evaluate_tanh_prev(&X, 2),
+            vec![
+                (1e-5_f64 / eps).tanh() / ((1e-4_f64 / eps).tanh() + eps),
+                (5e-5_f64 / eps).tanh() / ((1e-3_f64 / eps).tanh() + eps),
+            ],
+            "bad calculation for tanh_prev data scores with ratio language"
+        );
+        ind.language = TERNARY_LANG;
+        assert_eq!(
+            ind.evaluate_tanh_prev(&X, 2),
+            vec![
+                (1e-5_f64 / eps).tanh() * 1.0 + (1e-4_f64 / eps).tanh() * -1.0,
+                (5e-5_f64 / eps).tanh() * 1.0 + (1e-3_f64 / eps).tanh() * -1.0,
+            ],
+            "bad calculation for tanh_prev data scores with ter language"
+        );
+        ind.features = vec![(0, 2), (1, -4)].into_iter().collect();
+        ind.language = POW2_LANG;
+        assert_eq!(
+            ind.evaluate_tanh_prev(&X, 2),
+            vec![
+                (1e-5_f64 / eps).tanh() * 2.0 + (1e-4_f64 / eps).tanh() * -4.0,
+                (5e-5_f64 / eps).tanh() * 2.0 + (1e-3_f64 / eps).tanh() * -4.0,
+            ],
+            "bad calculation for tanh_prev data scores with pow2 language"
+        );
+        ind.features = vec![(0, 1), (1, 0)].into_iter().collect();
+        ind.language = BINARY_LANG;
+        assert_eq!(
+            ind.evaluate_tanh_prev(&X, 2),
+            vec![
+                (1e-5_f64 / eps).tanh() * 1.0 + (1e-4_f64 / eps).tanh() * 0.0,
+                (5e-5_f64 / eps).tanh() * 1.0 + (1e-3_f64 / eps).tanh() * 0.0,
+            ],
+            "bad calculation for tanh_prev data scores with bin language"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_tanh_prev_mcmc_generic() {
+        use crate::bayesian_mcmc::Betas;
+        let mut ind: Individual = Individual::test();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.data_type = TANH_PREV_TYPE;
+        ind.language = MCMC_GENERIC_LANG;
+        ind.epsilon = 1e-4;
+        ind.betas = Some(Betas::new(2.0, -1.0, 0.25));
+
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 1e-4);
+        X.insert((0, 1), 5e-5);
+
+        let eps = ind.epsilon;
+        let pos = (1e-4_f64 / eps).tanh();
+        let neg = (5e-5_f64 / eps).tanh();
+        let z = pos * 2.0 + neg * -1.0 + 0.25;
+        let expected = logistic(z);
+
+        let scores = ind.evaluate_tanh_prev(&X, 1);
+        assert_eq!(scores.len(), 1);
+        assert!(
+            (scores[0] - expected).abs() < 1e-12,
+            "tanh_prev + MCMC generic: got {}, expected {}",
+            scores[0],
+            expected
+        );
+    }
+
+    #[test]
+    fn test_evaluate_tanh_prev_zero_or_more_sample_len() {
+        let mut ind = Individual::test();
+        ind.data_type = TANH_PREV_TYPE;
+        ind.epsilon = 1e-4;
+        let X: HashMap<(usize, usize), f64> = HashMap::new();
+        let scores = ind.evaluate_tanh_prev(&X, 0);
+        assert!(scores.is_empty(), "score should be empty when sample_len=0");
+        let scores = ind.evaluate_tanh_prev(&X, 10);
+        assert_eq!(
+            scores,
+            vec![0.0; 10],
+            "samples outside the range should all score 0.0"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_tanh_prev_missing_values() {
+        let mut ind = Individual::test();
+        ind.data_type = TANH_PREV_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.epsilon = 1e-4;
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 1e-4);
+        // missing value for (0, 1) -> treated as 0, tanh(0)=0
+        X.insert((1, 0), 2e-4);
+        X.insert((1, 1), 1e-4);
+
+        let eps = ind.epsilon;
+        let scores = ind.evaluate_tanh_prev(&X, 2);
+        assert_eq!(
+            scores,
+            vec![
+                (1e-4_f64 / eps).tanh() * 1.0, // missing (0,1) -> tanh(0)*(-1) = 0
+                (2e-4_f64 / eps).tanh() * 1.0 + (1e-4_f64 / eps).tanh() * -1.0,
+            ],
+            "missing X value should give tanh(0) = 0 contribution"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_tanh_prev_zero_is_zero() {
+        // Sanity: every feature at exactly 0 -> score is exactly 0
+        let mut ind = Individual::test();
+        ind.data_type = TANH_PREV_TYPE;
+        ind.epsilon = 1e-4;
+        ind.features = vec![(0, 1), (1, 1), (2, -1)].into_iter().collect();
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        for s in 0..3 {
+            for f in 0..3 {
+                X.insert((s, f), 0.0);
+            }
+        }
+        ind.language = BINARY_LANG;
+        assert_eq!(ind.evaluate_tanh_prev(&X, 3), vec![0.0, 0.0, 0.0]);
+        ind.language = TERNARY_LANG;
+        assert_eq!(ind.evaluate_tanh_prev(&X, 3), vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_evaluate_dispatches_tanh_prev() {
+        // evaluate() must route TANH_PREV_TYPE to evaluate_tanh_prev, not
+        // silently fall through to raw / log / prev.
+        let mut data = Data::new();
+        data.feature_len = 1;
+        data.sample_len = 2;
+        data.X.insert((0, 0), 1e-4);
+        data.X.insert((1, 0), 1e-5);
+
+        let mut ind = Individual::new();
+        ind.features.insert(0, 1);
+        ind.data_type = TANH_PREV_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.epsilon = 1e-4;
+        ind.k = 1;
+
+        let scores = ind.evaluate(&data);
+        assert_eq!(scores.len(), 2);
+        let expected = vec![1.0_f64.tanh(), 0.1_f64.tanh()];
+        assert!((scores[0] - expected[0]).abs() < 1e-12);
+        assert!((scores[1] - expected[1]).abs() < 1e-12);
+    }
+
+    // ── tests for evaluate_log1p ──────────────────────────────────────────
+    #[test]
+    fn test_evaluate_log1p_weighted_score() {
+        let mut ind: Individual = Individual::test();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.data_type = LOG1P_TYPE;
+        ind.epsilon = 1e-5;
+
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 0.1);
+        X.insert((0, 1), 0.75);
+        X.insert((1, 0), 0.3);
+        X.insert((1, 1), 0.9);
+
+        let eps = ind.epsilon;
+
+        // RATIO branch must use ordinary ratio-of-sums, NOT the ln() identity
+        // trick used by LOG_TYPE.
+        ind.language = RATIO_LANG;
+        assert_eq!(
+            ind.evaluate_log1p(&X, 2),
+            vec![
+                (0.1_f64 / eps).ln_1p() / ((0.75_f64 / eps).ln_1p() + eps),
+                (0.3_f64 / eps).ln_1p() / ((0.9_f64 / eps).ln_1p() + eps),
+            ],
+            "bad calculation for log1p data scores with ratio language"
+        );
+        ind.language = TERNARY_LANG;
+        assert_eq!(
+            ind.evaluate_log1p(&X, 2),
+            vec![
+                (0.1_f64 / eps).ln_1p() * 1.0 + (0.75_f64 / eps).ln_1p() * -1.0,
+                (0.3_f64 / eps).ln_1p() * 1.0 + (0.9_f64 / eps).ln_1p() * -1.0,
+            ],
+            "bad calculation for log1p data scores with ter language"
+        );
+        ind.features = vec![(0, 2), (1, -4)].into_iter().collect();
+        ind.language = POW2_LANG;
+        assert_eq!(
+            ind.evaluate_log1p(&X, 2),
+            vec![
+                (0.1_f64 / eps).ln_1p() * 2.0 + (0.75_f64 / eps).ln_1p() * -4.0,
+                (0.3_f64 / eps).ln_1p() * 2.0 + (0.9_f64 / eps).ln_1p() * -4.0,
+            ],
+            "bad calculation for log1p data scores with pow2 language"
+        );
+        ind.features = vec![(0, 1), (1, 0)].into_iter().collect();
+        ind.language = BINARY_LANG;
+        assert_eq!(
+            ind.evaluate_log1p(&X, 2),
+            vec![
+                (0.1_f64 / eps).ln_1p() * 1.0 + (0.75_f64 / eps).ln_1p() * 0.0,
+                (0.3_f64 / eps).ln_1p() * 1.0 + (0.9_f64 / eps).ln_1p() * 0.0,
+            ],
+            "bad calculation for log1p data scores with bin language"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_log1p_mcmc_generic() {
+        use crate::bayesian_mcmc::Betas;
+        let mut ind: Individual = Individual::test();
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        ind.data_type = LOG1P_TYPE;
+        ind.language = MCMC_GENERIC_LANG;
+        ind.epsilon = 1e-5;
+        ind.betas = Some(Betas::new(1.5, -0.5, 0.1));
+
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 1e-4);
+        X.insert((0, 1), 1e-5);
+
+        let eps = ind.epsilon;
+        let pos = (1e-4_f64 / eps).ln_1p();
+        let neg = (1e-5_f64 / eps).ln_1p();
+        let z = pos * 1.5 + neg * -0.5 + 0.1;
+        let expected = logistic(z);
+
+        let scores = ind.evaluate_log1p(&X, 1);
+        assert_eq!(scores.len(), 1);
+        assert!(
+            (scores[0] - expected).abs() < 1e-12,
+            "log1p + MCMC generic: got {}, expected {}",
+            scores[0],
+            expected
+        );
+    }
+
+    #[test]
+    fn test_evaluate_log1p_zero_or_more_sample_len() {
+        let mut ind = Individual::test();
+        ind.data_type = LOG1P_TYPE;
+        ind.epsilon = 1e-5;
+        let X: HashMap<(usize, usize), f64> = HashMap::new();
+        let scores = ind.evaluate_log1p(&X, 0);
+        assert!(scores.is_empty(), "score should be empty when sample_len=0");
+        let scores = ind.evaluate_log1p(&X, 10);
+        assert_eq!(
+            scores,
+            vec![0.0; 10],
+            "samples outside the range should all score 0.0"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_log1p_missing_values() {
+        let mut ind = Individual::test();
+        ind.data_type = LOG1P_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.epsilon = 1e-5;
+        ind.features = vec![(0, 1), (1, -1)].into_iter().collect();
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 0.1);
+        // missing (0, 1) -> treated as 0 -> ln_1p(0) = 0
+        X.insert((1, 0), 0.3);
+        X.insert((1, 1), 0.9);
+
+        let eps = ind.epsilon;
+        assert_eq!(
+            ind.evaluate_log1p(&X, 2),
+            vec![
+                (0.1_f64 / eps).ln_1p() * 1.0, // missing -> +0
+                (0.3_f64 / eps).ln_1p() * 1.0 + (0.9_f64 / eps).ln_1p() * -1.0,
+            ],
+            "missing X value should give ln_1p(0) = 0 contribution"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_log1p_zero_is_zero() {
+        // The whole point of log1p: x = 0 must give a finite 0, not -inf.
+        let mut ind = Individual::test();
+        ind.data_type = LOG1P_TYPE;
+        ind.epsilon = 1e-5;
+        ind.features = vec![(0, 1), (1, 1), (2, -1)].into_iter().collect();
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        for s in 0..3 {
+            for f in 0..3 {
+                X.insert((s, f), 0.0);
+            }
+        }
+        ind.language = BINARY_LANG;
+        let scores = ind.evaluate_log1p(&X, 3);
+        assert_eq!(scores, vec![0.0, 0.0, 0.0]);
+        for s in &scores {
+            assert!(s.is_finite(), "log1p must never produce -inf at x = 0");
+        }
+        ind.language = TERNARY_LANG;
+        let scores = ind.evaluate_log1p(&X, 3);
+        assert_eq!(scores, vec![0.0, 0.0, 0.0]);
+        for s in &scores {
+            assert!(s.is_finite(), "log1p must never produce -inf at x = 0");
+        }
+    }
+
+    #[test]
+    fn test_evaluate_log1p_matches_log_for_large_x() {
+        // For x >> epsilon, log1p(x/eps) ≈ ln(x/eps) = existing LOG_TYPE.
+        // We compare two identically configured individuals that differ only
+        // in data_type. With x = 0.1 and eps = 1e-5, x/eps = 1e4, so:
+        //   log1p(1e4) = ln(1e4 + 1) = 9.21044036...
+        //   ln(1e4)    = ln(1e4)     = 9.21034037...
+        // Difference ≈ 1e-4; we allow 1e-3 relative tolerance.
+        let mut X: HashMap<(usize, usize), f64> = HashMap::new();
+        X.insert((0, 0), 0.1);
+
+        let mut ind_log = Individual::test();
+        ind_log.features = vec![(0, 1)].into_iter().collect();
+        ind_log.data_type = LOG_TYPE;
+        ind_log.language = BINARY_LANG;
+        ind_log.epsilon = 1e-5;
+
+        let mut ind_log1p = Individual::test();
+        ind_log1p.features = vec![(0, 1)].into_iter().collect();
+        ind_log1p.data_type = LOG1P_TYPE;
+        ind_log1p.language = BINARY_LANG;
+        ind_log1p.epsilon = 1e-5;
+
+        let s_log = ind_log.evaluate_log(&X, 1);
+        let s_log1p = ind_log1p.evaluate_log1p(&X, 1);
+
+        let rel = ((s_log1p[0] - s_log[0]) / s_log[0]).abs();
+        assert!(
+            rel < 1e-3,
+            "log1p should agree with log for x >> eps: log1p={}, log={}, rel={}",
+            s_log1p[0],
+            s_log[0],
+            rel
+        );
+    }
+
+    #[test]
+    fn test_evaluate_dispatches_log1p() {
+        // evaluate() must route LOG1P_TYPE to evaluate_log1p.
+        let mut data = Data::new();
+        data.feature_len = 1;
+        data.sample_len = 2;
+        data.X.insert((0, 0), 1e-4);
+        data.X.insert((1, 0), 0.0); // zero — must not blow up
+
+        let mut ind = Individual::new();
+        ind.features.insert(0, 1);
+        ind.data_type = LOG1P_TYPE;
+        ind.language = TERNARY_LANG;
+        ind.epsilon = 1e-5;
+        ind.k = 1;
+
+        let scores = ind.evaluate(&data);
+        assert_eq!(scores.len(), 2);
+        assert!(scores[0].is_finite());
+        assert!(scores[1].is_finite());
+        assert_eq!(scores[1], 0.0, "log1p at x = 0 must be exactly 0");
     }
 
     // tests for auc
@@ -6392,6 +6968,75 @@ mod tests {
         // Format is "rejection rate X.XXX/Y.YYY" for train/test
         let rejection_count = display.matches("rejection rate").count();
         assert_eq!(rejection_count, 1, "Should have one rejection rate line");
+    }
+
+    #[test]
+    fn test_display_tanh_prev_wraps_feature_names() {
+        let mut ind = Individual::test2();
+        ind.data_type = TANH_PREV_TYPE;
+        ind.epsilon = 1e-4;
+        ind.language = TERNARY_LANG;
+
+        let data = Data::test2();
+        let display = ind.display(&data, None, &"ga".to_string(), 0.05);
+
+        assert!(
+            display.contains("tanh_prev("),
+            "display should wrap features in tanh_prev(...), got:\n{}",
+            display
+        );
+        assert!(
+            !display.contains("log1p("),
+            "display should not contain log1p( for tanh_prev type, got:\n{}",
+            display
+        );
+    }
+
+    #[test]
+    fn test_display_log1p_wraps_feature_names() {
+        let mut ind = Individual::test2();
+        ind.data_type = LOG1P_TYPE;
+        ind.epsilon = 1e-5;
+        ind.language = TERNARY_LANG;
+
+        let data = Data::test2();
+        let display = ind.display(&data, None, &"ga".to_string(), 0.05);
+
+        assert!(
+            display.contains("log1p("),
+            "display should wrap features in log1p(...), got:\n{}",
+            display
+        );
+        // Must NOT use the LOG_TYPE 'ln(...)' product display trick
+        assert!(
+            !display.contains("ln("),
+            "log1p display must not use the LOG_TYPE ln() product trick, got:\n{}",
+            display
+        );
+    }
+
+    #[test]
+    fn test_display_log1p_ratio_is_plain_ratio() {
+        // RATIO_LANG + LOG1P_TYPE must render as an ordinary ratio of sums,
+        // NOT as "ln(...) - ln(...)" like LOG_TYPE + RATIO_LANG does.
+        let mut ind = Individual::test2();
+        ind.data_type = LOG1P_TYPE;
+        ind.epsilon = 1e-5;
+        ind.language = RATIO_LANG;
+
+        let data = Data::test2();
+        let display = ind.display(&data, None, &"ga".to_string(), 0.05);
+
+        assert!(
+            display.contains("log1p("),
+            "ratio+log1p display should wrap features in log1p(), got:\n{}",
+            display
+        );
+        assert!(
+            display.contains(" / "),
+            "ratio+log1p display should use a '/' separator (ratio of sums), got:\n{}",
+            display
+        );
     }
 
     #[test]
