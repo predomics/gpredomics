@@ -84,6 +84,7 @@ ga_elite_pct,\
 ga_random_pct,\
 ga_mut_children_pct,\
 ga_mut_features_pct,\
+ga_mut_non_null_chance_pct,\
 beam_method,\
 beam_k_start,\
 beam_k_stop,\
@@ -219,6 +220,7 @@ fn param_columns(p: &Param) -> Vec<String> {
         fmt_f64(p.ga.select_random_pct),
         fmt_f64(p.ga.mutated_children_pct),
         fmt_f64(p.ga.mutated_features_pct),
+        fmt_f64(p.ga.mutation_non_null_chance_pct),
         // Beam params
         format!("{:?}", p.beam.method),
         p.beam.k_start.to_string(),
@@ -245,6 +247,14 @@ fn param_columns(p: &Param) -> Vec<String> {
     ]
 }
 
+fn csv_quote(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
 /// Assembles a full CSV row
 fn build_row(
     section: &str,
@@ -261,7 +271,7 @@ fn build_row(
     cols.push(n_models.to_string());
     cols.push(fmt_f64(exec_time));
     cols.extend_from_slice(params);
-    cols.join(",")
+    cols.iter().map(|s| csv_quote(s)).collect::<Vec<_>>().join(",")
 }
 
 /// Builds metrics columns for a single individual (22 columns: model_k through test_rejection_rate)
