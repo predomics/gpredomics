@@ -271,7 +271,10 @@ fn build_row(
     cols.push(n_models.to_string());
     cols.push(fmt_f64(exec_time));
     cols.extend_from_slice(params);
-    cols.iter().map(|s| csv_quote(s)).collect::<Vec<_>>().join(",")
+    cols.iter()
+        .map(|s| csv_quote(s))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Builds metrics columns for a single individual (22 columns: model_k through test_rejection_rate)
