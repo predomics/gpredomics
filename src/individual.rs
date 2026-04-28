@@ -1034,6 +1034,20 @@ impl Individual {
         self.evaluate_from_features(&d.X, d.sample_len)
     }
 
+    /// Like [`evaluate`], but uses an override feature matrix `x` in place of `d.X`
+    /// while still drawing zscore stats (`feature_means` / `feature_stds`) from `d`.
+    ///
+    /// Used by MDA permutation importance, which permutes a single feature column
+    /// in a clone of `d.X` and re-evaluates without touching the rest of `Data`.
+    /// Calling [`evaluate_from_features`] directly would panic for `ZSCORE_TYPE`
+    /// because it has no access to the per-feature stats.
+    pub fn evaluate_with_x(&self, d: &Data, x: &HashMap<(usize, usize), f64>) -> Vec<f64> {
+        if self.data_type == ZSCORE_TYPE {
+            return self.evaluate_zscore(x, d.sample_len, &d.feature_means, &d.feature_stds);
+        }
+        self.evaluate_from_features(x, d.sample_len)
+    }
+
     /// Evaluates the Individual using provided feature matrix and sample length
     ///
     /// # Arguments
@@ -2257,7 +2271,7 @@ impl Individual {
                         feature_idx,
                         &mut permutation_rng,
                     );
-                    let scores = self.evaluate_from_features(&x_permuted, data.sample_len);
+                    let scores = self.evaluate_with_x(data, &x_permuted);
                     let permuted_auc = compute_auc_from_value(&scores, &data.y);
                     permuted_auc_sum += permuted_auc;
 
@@ -4227,6 +4241,37 @@ mod tests {
                 (imp1.importance - imp2.importance).abs() < 1e-12,
                 "Same seeds must yield identical results for feature {}",
                 imp1.feature_idx
+            );
+        }
+    }
+
+    #[test]
+    fn test_compute_mda_feature_importance_works_with_zscore_data_type() {
+        // Regression: MDA used to call evaluate_from_features() directly, which
+        // panics for ZSCORE_TYPE because per-feature stats live on Data, not on
+        // the bare X matrix. Now it routes through evaluate_with_x().
+        let mut individual = Individual::specific_test(&[1, 2]);
+        individual.data_type = ZSCORE_TYPE;
+
+        let mut data = Data::specific_test(40, 4);
+        data.compute_zscore_stats();
+
+        let features_to_process = vec![1, 2];
+        let feature_seeds = generate_feature_seeds(&features_to_process, 5, 7);
+
+        let result = individual.compute_mda_feature_importance(
+            &data,
+            5,
+            &features_to_process,
+            &feature_seeds,
+        );
+
+        assert_eq!(result.importances.len(), features_to_process.len());
+        for imp in &result.importances {
+            assert!(
+                imp.importance.is_finite(),
+                "MDA importance must be finite under ZSCORE_TYPE, got {}",
+                imp.importance
             );
         }
     }
