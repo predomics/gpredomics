@@ -110,6 +110,9 @@ pub struct Individual {
     pub data_type: u8,
     /// Epsilon value used during score calculation
     pub epsilon: f64,
+    /// Minimum feature value used as shift anchor for LOG_SHIFT_TYPE
+    #[serde(default)]
+    pub x_min: f64,
 
     /// Fit value of the model (penalized objective — universal across task types)
     pub fit: f64,
@@ -152,6 +155,8 @@ pub const ZSCORE_TYPE: u8 = 3;
 pub const TANH_PREV_TYPE: u8 = 4;
 /// Zero-safe log: ln(1 + x / x_ref) where x_ref = self.epsilon. Equals 0 at x = 0, no epsilon hack.
 pub const LOG1P_TYPE: u8 = 5;
+/// Shifted log: ln(x + ε) − ln(x_min + ε). Zero at x = x_min, negative below, positive above.
+pub const LOG_SHIFT_TYPE: u8 = 6;
 
 /// Default minimum epsilon value for ratio calculations
 pub const DEFAULT_MINIMUM: f64 = f64::MIN_POSITIVE;
@@ -215,6 +220,7 @@ pub fn data_type(data_type_string: &str) -> u8 {
         "zscore" | "z" | "standardized" => ZSCORE_TYPE,
         "tanh_prev" | "tanh" => TANH_PREV_TYPE,
         "log1p" => LOG1P_TYPE,
+        "log_shift" => LOG_SHIFT_TYPE,
         other => panic!("Unrecognized data type {}", other),
     }
 }
@@ -240,6 +246,7 @@ impl Individual {
             data_type: RAW_TYPE,
             hash: 0,
             epsilon: DEFAULT_MINIMUM,
+            x_min: 0.0,
             parents: None,
             betas: None,
         }
@@ -935,6 +942,7 @@ impl Individual {
         i.language = main_parent.language;
         i.data_type = main_parent.data_type;
         i.epsilon = main_parent.epsilon;
+        i.x_min = main_parent.x_min;
         i
     }
 
@@ -1088,6 +1096,7 @@ impl Individual {
             LOG_TYPE => self.evaluate_log(X, sample_len),
             TANH_PREV_TYPE => self.evaluate_tanh_prev(X, sample_len),
             LOG1P_TYPE => self.evaluate_log1p(X, sample_len),
+            LOG_SHIFT_TYPE => self.evaluate_log_shift(X, sample_len),
             other => panic!("Unknown data-type {}", other),
         }
     }
@@ -1462,6 +1471,71 @@ impl Individual {
                 for sample in 0..sample_len {
                     let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
                     score[sample] += (v / eps).ln_1p() * x_coef;
+                }
+            }
+        }
+
+        score
+    }
+
+    /// Evaluates the Individual using the shifted log transform
+    /// `ln(x + ε) − ln(x_min + ε)` where `ε = self.epsilon` and `x_min = self.x_min`.
+    ///
+    /// Score is 0 when x = x_min (at the detection threshold), negative when x < x_min,
+    /// and positive when x > x_min. Missing values are treated as 0, yielding `ln(ε) − ln(x_min + ε)`.
+    fn evaluate_log_shift(
+        &self,
+        X: &HashMap<(usize, usize), f64>,
+        sample_len: usize,
+    ) -> Vec<f64> {
+        let mut score = vec![0.0; sample_len];
+        let eps = self.epsilon;
+        let shift = (self.x_min + eps).ln();
+
+        if self.language == RATIO_LANG {
+            let mut r: Vec<Vec<f64>> = vec![vec![0.0, 0.0]; sample_len];
+            for (&feature_index, &coef) in &self.features {
+                let part = if coef > 0 { 0 } else { 1 };
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    r[sample][part] += (v + eps).ln() - shift;
+                }
+            }
+            for sample in 0..sample_len {
+                score[sample] = r[sample][0] / (r[sample][1] + eps);
+            }
+        } else if self.language == MCMC_GENERIC_LANG {
+            let betas = self
+                .betas
+                .as_ref()
+                .expect("MCMC Individuals must have betas coefficients");
+            let mut pos_sums = vec![0.0; sample_len];
+            let mut neg_sums = vec![0.0; sample_len];
+            for (&feature_index, &coef) in &self.features {
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    let transformed = (v + eps).ln() - shift;
+                    match coef {
+                        1 => pos_sums[sample] += transformed,
+                        -1 => neg_sums[sample] += transformed,
+                        _ => {}
+                    }
+                }
+            }
+            score = pos_sums
+                .into_iter()
+                .zip(neg_sums.into_iter())
+                .map(|(pos, neg)| {
+                    let z = pos * betas.a + neg * betas.b + betas.c;
+                    logistic(z)
+                })
+                .collect();
+        } else {
+            for (&feature_index, &coef) in &self.features {
+                let x_coef = coef as f64;
+                for sample in 0..sample_len {
+                    let v = *X.get(&(sample, feature_index)).unwrap_or(&0.0);
+                    score[sample] += ((v + eps).ln() - shift) * x_coef;
                 }
             }
         }
@@ -2725,6 +2799,9 @@ impl Individual {
             PREVALENCE_TYPE => "Prevalence",
             LOG_TYPE => "Log",
             ZSCORE_TYPE => "ZScore",
+            TANH_PREV_TYPE => "TanhPrev",
+            LOG1P_TYPE => "Log1p",
+            LOG_SHIFT_TYPE => "LogShift",
             _ => "Unknown",
         }
     }
@@ -3120,6 +3197,7 @@ mod tests {
                 data_type: 0,
                 hash: 0,
                 epsilon: f64::MIN_POSITIVE,
+                x_min: 0.0,
                 parents: None,
                 betas: None,
                 cls: ClassificationMetrics {
@@ -3149,6 +3227,7 @@ mod tests {
                 data_type: 0,
                 hash: 0,
                 epsilon: f64::MIN_POSITIVE,
+                x_min: 0.0,
                 parents: None,
                 betas: None,
                 cls: ClassificationMetrics {
@@ -3182,6 +3261,7 @@ mod tests {
                 data_type: RAW_TYPE,
                 hash: 0x123456789abcdef0,
                 epsilon: DEFAULT_MINIMUM,
+                x_min: 0.0,
                 parents: None,
                 betas: None,
                 cls: ClassificationMetrics {
@@ -3223,6 +3303,7 @@ mod tests {
                 data_type,
                 hash: 0,
                 epsilon: 0.0,
+                x_min: 0.0,
                 parents: None,
                 betas: None,
                 cls: ClassificationMetrics::default(),
@@ -3250,6 +3331,7 @@ mod tests {
                 data_type: RAW_TYPE,
                 hash: 0x123456789abcdef0,
                 epsilon: DEFAULT_MINIMUM,
+                x_min: 0.0,
                 parents: None,
                 betas: None,
                 cls: ClassificationMetrics {
@@ -3288,6 +3370,7 @@ mod tests {
                 data_type: RAW_TYPE,
                 hash: 0x123456789abcdef0,
                 epsilon: DEFAULT_MINIMUM,
+                x_min: 0.0,
                 parents: None,
                 betas: None,
                 cls: ClassificationMetrics {
@@ -5030,6 +5113,7 @@ mod tests {
             data_type: RAW_TYPE,
             hash: 0x123456789abcdef0,
             epsilon: DEFAULT_MINIMUM,
+            x_min: 0.0,
             parents: None,
             betas: None,
             cls: ClassificationMetrics {

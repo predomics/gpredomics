@@ -194,6 +194,7 @@ fn construct_solution(
     language: u8,
     data_type: u8,
     epsilon: f64,
+    x_min: f64,
     k: usize,
     threshold_ci: bool,
     rng: &mut ChaCha8Rng,
@@ -269,6 +270,7 @@ fn construct_solution(
     ind.language = language;
     ind.data_type = data_type;
     ind.epsilon = epsilon;
+    ind.x_min = x_min;
     if language == individual::RATIO_LANG {
         ind.cls.threshold = 1.0;
     }
@@ -477,6 +479,7 @@ pub fn aco(
                     lang,
                     dt,
                     param.general.data_type_epsilon,
+                    param.data.feature_minimal_feature_value,
                     k,
                     threshold_ci,
                     &mut ant_rng,

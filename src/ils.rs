@@ -142,6 +142,7 @@ pub fn ils(
         false,
         &mut rng,
     );
+    current.x_min = param.data.feature_minimal_feature_value;
 
     // Evaluate initial solution
     let scores = current.evaluate(data);

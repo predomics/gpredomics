@@ -169,6 +169,7 @@ pub fn sa(
         false,
         &mut rng,
     );
+    current.x_min = param.data.feature_minimal_feature_value;
 
     // Evaluate initial solution
     let mut pop = Population {

@@ -142,11 +142,13 @@ fn coefficients_to_individual(
     language: u8,
     data_type: u8,
     epsilon: f64,
+    x_min: f64,
 ) -> Individual {
     let mut ind = Individual::new();
     ind.language = language;
     ind.data_type = data_type;
     ind.epsilon = epsilon;
+    ind.x_min = x_min;
 
     for (j, &feat_idx) in feature_selection.iter().enumerate() {
         if j >= w.len() {
@@ -279,6 +281,7 @@ pub fn lasso(
             language,
             data_type,
             param.general.data_type_epsilon,
+            param.data.feature_minimal_feature_value,
         );
 
         if ind.k == 0 {
@@ -434,7 +437,7 @@ mod tests {
     fn test_coefficients_to_individual() {
         let w = vec![0.5, 0.0, -0.3, 0.0, 0.8];
         let fs = vec![10, 20, 30, 40, 50];
-        let ind = coefficients_to_individual(&w, &fs, individual::TERNARY_LANG, 0, 1e-5);
+        let ind = coefficients_to_individual(&w, &fs, individual::TERNARY_LANG, 0, 1e-5, 0.0);
         assert_eq!(ind.k, 3); // features 10, 30, 50
         assert_eq!(*ind.features.get(&10).unwrap(), 1);
         assert_eq!(*ind.features.get(&30).unwrap(), -1);

@@ -1891,6 +1891,7 @@ mod tests {
                     data_type: (i % 3) as u8,
                     hash: i as u64,
                     epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
+                    x_min: 0.0,
                     parents: None,
                     betas: None,
                 };
@@ -1946,6 +1947,7 @@ mod tests {
                     data_type: RAW_TYPE,
                     hash: i as u64,
                     epsilon: DEFAULT_MINIMUM,
+                    x_min: 0.0,
                     parents: None,
                     betas: None,
                 });
@@ -2364,6 +2366,7 @@ mod tests {
             data_type: 0,
             hash: 0,
             epsilon: f64::MIN_POSITIVE,
+            x_min: 0.0,
             parents: None,
             betas: None,
         };
@@ -2391,6 +2394,7 @@ mod tests {
             data_type: 0,
             hash: 0,
             epsilon: f64::MIN_POSITIVE,
+            x_min: 0.0,
             parents: None,
             betas: None,
         };

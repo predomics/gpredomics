@@ -218,6 +218,9 @@ pub fn generate_pop(data: &Data, param: &Param, rng: &mut ChaCha8Rng) -> Populat
                     prior_weight,
                     rng,
                 );
+                for ind in &mut sub_pop.individuals {
+                    ind.x_min = param.data.feature_minimal_feature_value;
+                }
 
                 debug!(
                     "generated for {} {}...",

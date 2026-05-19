@@ -649,6 +649,7 @@ pub fn generate_individual(data: &Data, language: u8, data_type: u8, param: &Par
     ind.language = language;
     ind.data_type = data_type;
     ind.epsilon = param.general.data_type_epsilon;
+    ind.x_min = param.data.feature_minimal_feature_value;
     if param.general.threshold_ci_n_bootstrap > 0 {
         ind.cls.threshold_ci = Some(ThresholdCI {
             lower: 0.0,
@@ -1425,6 +1426,7 @@ mod tests {
             data_type: 0,
             hash: 0,
             epsilon: f64::MIN_POSITIVE,
+            x_min: 0.0,
             parents: None,
             betas: None,
         }
@@ -1539,6 +1541,7 @@ mod tests {
             data_type: 0,
             hash: 0,
             epsilon: f64::MIN_POSITIVE,
+            x_min: 0.0,
             parents: None,
             betas: None,
         }
