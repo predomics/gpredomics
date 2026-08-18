@@ -1,6 +1,7 @@
 use crate::cinfo;
 use crate::cv::CV;
 use crate::data::Data;
+use crate::data::PreselectionMethod;
 use crate::gpu::GpuAssay;
 use crate::individual::data_type;
 use crate::individual::language;
@@ -243,12 +244,17 @@ fn pop_from_combinations(
     expected_k: usize,
     param: &Param,
 ) -> Population {
+    // POW2 is accepted here. Beam enumerates FEATURE COMBINATIONS, not coefficient
+    // magnitudes — generate_individual only ever assigns +/-1 — so a pow2 model
+    // produced by beam uses the 2^0 subset of the pow2 coefficient space and is
+    // numerically identical to the ternary model over the same features. It is
+    // still a valid pow2 individual, and emitting it lets beam feed pipelines
+    // that are pow2 throughout. Use ga to search the wider pow2 coefficient space.
     let languages: Vec<u8> = param
         .general
         .language
         .split(",")
         .map(language)
-        .filter(|x| *x != POW2_LANG)
         .collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
 
@@ -274,7 +280,10 @@ fn pop_from_combinations(
                     let has_negative = tmp_ind.features.values().any(|&coef| coef < 0);
                     let has_positive = tmp_ind.features.values().any(|&coef| coef > 0);
 
-                    if tmp_ind.language == TERNARY_LANG {
+                    if tmp_ind.language == TERNARY_LANG || tmp_ind.language == POW2_LANG {
+                        // At +/-1 coefficients pow2 and ternary span the same models,
+                        // so the same reductions apply: all-positive collapses to
+                        // binary, all-negative is not equivalent to binary.
                         if !has_negative && has_positive {
                             // TERNARY with only positive features → convert to BINARY
                             tmp_ind.features.retain(|_, &mut coeff| coeff > 0);
@@ -758,6 +767,7 @@ pub fn generate_pop(data: &Data, param: &Param) -> Population {
     let pattern_ind = generate_individual(&data, TERNARY_LANG, RAW_TYPE, &param);
     let mut pop =
         pop_from_combinations(combinations.clone(), pattern_ind, param.beam.k_start, param);
+    add_pow2_ranked_variants(&mut pop, data, param);
 
     debug!("{} individuals generated", pop.individuals.len());
 
@@ -836,6 +846,13 @@ pub fn iterative_growth(
     //Grow!
     loop {
         epoch += 1;
+
+        // An empty population here means the previous epoch produced nothing
+        // usable; stop cleanly rather than indexing individuals[0].
+        if pop.individuals.is_empty() {
+            warn!("Beam: population became empty at epoch {}, stopping growth", epoch);
+            break;
+        }
 
         // Stop the loop to avoid a panic! if previous generation has not k features
         if epoch != 1 && pop.individuals[0].k < epoch - 2 {
@@ -1012,6 +1029,7 @@ pub fn grow(
     );
 
     let mut new_pop = pop_from_combinations(combinations, pattern_ind, epoch, param);
+    add_pow2_ranked_variants(&mut new_pop, data, param);
 
     // Fit new population - reuse GPU assays
     if let Some(ref cv) = cv {
@@ -1024,6 +1042,123 @@ pub fn grow(
 
     new_pop = new_pop.sort();
     new_pop
+}
+
+/// Steepest POW2 magnitude ladder tried by `add_pow2_ranked_variants`.
+///
+/// Coefficients are i8 and magnitudes are clamped at 2^6 = 64, so steepness
+/// beyond this saturates for every realistic k and adds only duplicates. Raise
+/// it if the winning steepness is ever found sitting at the cap.
+const MAX_STEEPNESS: u32 = 3;
+
+/// How many individuals one combination can expand into.
+///
+/// A POW2 combination yields the flat individual plus up to MAX_STEEPNESS
+/// ranked variants. GPU buffers are sized from max_nb_of_models, so they have
+/// to allow for this or the score copy overruns the buffer at run time.
+fn pow2_expansion_factor(param: &Param) -> usize {
+    let has_pow2 = param
+        .general
+        .language
+        .split(",")
+        .map(language)
+        .any(|l| l == POW2_LANG);
+    if has_pow2 {
+        1 + MAX_STEEPNESS as usize
+    } else {
+        1
+    }
+}
+
+/// Adds importance-ranked POW2 variants alongside the flat ones.
+///
+/// Beam builds every individual with +/-1 coefficients, so a POW2 model it
+/// produces is numerically identical to the ternary model over the same
+/// features — the pow2 language is wasted. RdL's proposal was to let the
+/// magnitude fall by one rank as features are added.
+///
+/// Order of addition is not recoverable here: `combine_with_best` sorts each
+/// combination and dedups through a HashSet, so a feature set is canonical and
+/// the path that produced it is gone (deliberately — otherwise the same set
+/// would appear once per ordering). The rationale behind the proposal survives
+/// though: "the most important variables are taken first". So the rungs are
+/// assigned by the preselection statistic, which is order-independent and gives
+/// the same answer the addition order was standing in for.
+///
+/// Rather than assume any particular decay, a FAMILY of candidates is emitted for
+/// every combination and the existing fitness comparison picks. Steepness `s`
+/// gives rank `r` the magnitude 2^(s*(k-1-r)): s=0 is flat (+/-1), s=1 drops one
+/// rung per rank, s=2 drops two, and so on. Steeper ladders saturate against the
+/// 2^6 cap and so produce TIED magnitudes at the top — e.g. k=6 at s=2 gives
+/// (64,64,64,16,4,1) — which is how the tie-vs-strict-ladder question gets
+/// probed without a separate candidate type. Profiles that collide after
+/// clamping are deduplicated, which bounds the expansion on its own.
+fn add_pow2_ranked_variants(pop: &mut Population, data: &Data, param: &Param) {
+    // wilcoxon and student_t store a p-value (lower = stronger); bayesian_fisher
+    // stores a log absolute Bayes factor (higher = stronger)
+    let higher_is_stronger = matches!(
+        param.data.feature_selection_method,
+        PreselectionMethod::bayesian_fisher
+    );
+
+    let mut variants: Vec<Individual> = vec![];
+    for ind in pop.individuals.iter() {
+        if ind.language != POW2_LANG || ind.features.len() < 2 {
+            continue;
+        }
+        let mut ranked: Vec<(usize, i8)> = ind
+            .features
+            .iter()
+            .map(|(&idx, &coef)| (idx, coef))
+            .collect();
+        ranked.sort_by(|a, b| {
+            let sa = data.feature_significance.get(&a.0).copied().unwrap_or(f64::MAX);
+            let sb = data.feature_significance.get(&b.0).copied().unwrap_or(f64::MAX);
+            if higher_is_stronger {
+                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
+
+        // Only the RATIOS between coefficients matter: the score is compared with
+        // a fitted threshold, so scaling every coefficient rescales the threshold
+        // and classifies identically. Each ladder is therefore anchored at the
+        // bottom (weakest feature = 1) rather than at some chosen maximum.
+        // Capped at 2^6 = 64 so the i8 coefficients cannot overflow.
+        let k = ranked.len();
+        let mut seen_profiles: Vec<Vec<i8>> = vec![vec![1; k]]; // flat already exists
+        for steepness in 1..=MAX_STEEPNESS {
+            let magnitudes: Vec<i8> = (0..k)
+                .map(|rank| {
+                    let exponent =
+                        std::cmp::min(steepness * (k - 1 - rank) as u32, 6);
+                    2_i32.pow(exponent) as i8
+                })
+                .collect();
+            if seen_profiles.contains(&magnitudes) {
+                continue; // clamping collapsed this onto a profile already emitted
+            }
+            seen_profiles.push(magnitudes.clone());
+
+            let mut variant = ind.clone();
+            variant.features = ranked
+                .iter()
+                .enumerate()
+                .map(|(rank, &(idx, coef))| {
+                    let magnitude = magnitudes[rank];
+                    (idx, if coef < 0 { -magnitude } else { magnitude })
+                })
+                .collect();
+            variant.compute_hash();
+            variants.push(variant);
+        }
+    }
+
+    if !variants.is_empty() {
+        debug!("{} importance-ranked POW2 variants added", variants.len());
+        pop.individuals.extend(variants);
+    }
 }
 
 /// Generate new combinations Mk + 1 feature_to_keep for next step.
@@ -1292,10 +1427,14 @@ fn get_gpu_assay(data: &Data, param: &Param) -> Option<GpuAssay> {
         .language
         .split(",")
         .map(language)
-        .filter(|x| *x != POW2_LANG)
+        // pow2 counts here: beam now emits pow2 individuals, so excluding it
+        // would under-size the GPU buffer for the models actually produced.
         .collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
-    let lang_data_combinations = languages.len() * data_types.len();
+    // Each pow2 combination expands into a flat individual plus its ranked
+    // variants, so the buffer must hold that many scores per combination.
+    let lang_data_combinations =
+        languages.len() * data_types.len() * pow2_expansion_factor(param);
 
     let gpu_assay = if param.general.gpu {
         let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;
@@ -1355,10 +1494,14 @@ fn create_gpu_assays_for_folds_beam(
         .language
         .split(",")
         .map(language)
-        .filter(|x| *x != POW2_LANG)
+        // pow2 counts here: beam now emits pow2 individuals, so excluding it
+        // would under-size the GPU buffer for the models actually produced.
         .collect();
     let data_types: Vec<u8> = param.general.data_type.split(",").map(data_type).collect();
-    let lang_data_combinations = languages.len() * data_types.len();
+    // Each pow2 combination expands into a flat individual plus its ranked
+    // variants, so the buffer must hold that many scores per combination.
+    let lang_data_combinations =
+        languages.len() * data_types.len() * pow2_expansion_factor(param);
 
     cv.validation_folds.iter().enumerate().map(|(idx, fold)| {
         let buffer_binding_size = GpuAssay::get_max_buffer_size(&param.gpu) as usize;

@@ -510,7 +510,16 @@ impl Population {
                 };
                 match param.general.fit {
                     FitFunction::auc => {
-                        if param.general.keep_trace || param.general.bias_penalty != 0.0 {
+                        // With fit=auc only the AUC is needed for the fitness, so the
+                        // remaining metrics are computed lazily. They ARE needed when
+                        // voting is enabled: jury selection filters experts on
+                        // min_perf, which reads sensitivity and specificity, and the
+                        // specialized weighting reads them too. Without this the whole
+                        // FBM is silently discarded (every expert scores 0.0/0.0).
+                        if param.general.keep_trace
+                            || param.general.bias_penalty != 0.0
+                            || param.voting.vote
+                        {
                             if let Some(ref mut threshold_ci) = i.cls.threshold_ci {
                                 (
                                     i.cls.auc,
