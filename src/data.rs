@@ -137,6 +137,88 @@ impl Data {
             && self.classes == other.classes
     }
 
+    /// Re-indexes this dataset's features to follow `reference`'s feature order.
+    ///
+    /// Models address features by index, so data evaluated with a model trained on
+    /// `reference` must use exactly the same feature indices. Features are matched
+    /// by name: features of `reference` absent here are left at zero, features
+    /// unknown to `reference` are dropped. Per-feature training statistics
+    /// (selection, significance, z-score stats) are not carried over; z-score stats
+    /// are propagated separately with `copy_zscore_stats_from`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the two datasets share no feature, or when this
+    /// dataset has duplicated feature names.
+    pub fn align_features_to(&self, reference: &Data) -> Result<Data, String> {
+        if self.features == reference.features {
+            return Ok(self.clone());
+        }
+        let index: HashMap<&str, usize> = reference
+            .features
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.as_str(), i))
+            .collect();
+        let mut seen: HashMap<&str, usize> = HashMap::new();
+        for f in &self.features {
+            *seen.entry(f.as_str()).or_insert(0) += 1;
+        }
+        if let Some((dup, _)) = seen.iter().find(|(_, &n)| n > 1) {
+            return Err(format!("duplicated feature name '{}'", dup));
+        }
+        let mapping: Vec<Option<usize>> = self
+            .features
+            .iter()
+            .map(|f| index.get(f.as_str()).copied())
+            .collect();
+        let shared = mapping.iter().filter(|m| m.is_some()).count();
+        if shared == 0 {
+            return Err("no feature in common with the training data".to_string());
+        }
+
+        let missing: Vec<&str> = reference
+            .features
+            .iter()
+            .filter(|f| !seen.contains_key(f.as_str()))
+            .map(|f| f.as_str())
+            .collect();
+        let extra = self.feature_len - shared;
+        if !missing.is_empty() {
+            warn!(
+                "{} of {} training features are absent from this dataset and are treated as 0 (e.g. {})",
+                missing.len(),
+                reference.feature_len,
+                missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+        if extra > 0 {
+            warn!(
+                "{} features unknown to the training data are ignored",
+                extra
+            );
+        }
+        if missing.is_empty() && extra == 0 {
+            info!("Features re-ordered by name to follow the training data");
+        }
+
+        let X = self
+            .X
+            .iter()
+            .filter_map(|(&(s, f), &v)| mapping[f].map(|nf| ((s, nf), v)))
+            .collect();
+        let mut aligned = self.clone_with_new_x(X);
+        aligned.features = reference.features.clone();
+        aligned.feature_len = reference.feature_len;
+        aligned.feature_annotations = reference.feature_annotations.clone();
+        aligned.feature_selection = Vec::new();
+        aligned.feature_class = HashMap::new();
+        aligned.feature_significance = HashMap::new();
+        aligned.feature_means = HashMap::new();
+        aligned.feature_stds = HashMap::new();
+        Ok(aligned)
+    }
+
     /// Loads data from `X.tsv` and `y.tsv` files.
     ///
     /// # Arguments
@@ -4192,5 +4274,57 @@ mod tests {
 
         std::fs::remove_file(temp_x).unwrap();
         std::fs::remove_file(temp_y).unwrap();
+    }
+
+    fn named(features: &[&str], rows: &[(usize, usize, f64)]) -> Data {
+        let mut d = Data::new();
+        d.features = features.iter().map(|f| f.to_string()).collect();
+        d.feature_len = features.len();
+        d.samples = vec!["s0".to_string(), "s1".to_string()];
+        d.sample_len = 2;
+        d.y = vec![0.0, 1.0];
+        d.X = rows.iter().map(|&(s, f, v)| ((s, f), v)).collect();
+        d
+    }
+
+    #[test]
+    fn test_align_features_reorders_by_name() {
+        let train = named(&["a", "b", "c"], &[]);
+        // same features, other order: c, a, b
+        let test = named(&["c", "a", "b"], &[(0, 0, 3.0), (0, 1, 1.0), (1, 2, 2.0)]);
+        let aligned = test.align_features_to(&train).unwrap();
+        assert_eq!(aligned.features, train.features);
+        assert_eq!(aligned.X.get(&(0, 0)), Some(&1.0)); // a
+        assert_eq!(aligned.X.get(&(1, 1)), Some(&2.0)); // b
+        assert_eq!(aligned.X.get(&(0, 2)), Some(&3.0)); // c
+        assert_eq!(aligned.X.len(), 3);
+        assert!(train.check_compatibility(&aligned));
+    }
+
+    #[test]
+    fn test_align_features_missing_are_zero_and_extra_dropped() {
+        let train = named(&["a", "b", "c"], &[]);
+        // "b" absent, "z" unknown to the training data
+        let test = named(&["z", "c", "a"], &[(0, 0, 9.0), (0, 1, 3.0), (1, 2, 1.0)]);
+        let aligned = test.align_features_to(&train).unwrap();
+        assert_eq!(aligned.feature_len, 3);
+        assert_eq!(aligned.X.get(&(1, 0)), Some(&1.0)); // a
+        assert_eq!(aligned.X.get(&(0, 2)), Some(&3.0)); // c
+        assert!(aligned.X.keys().all(|&(_, f)| f != 1)); // b stays 0
+        assert_eq!(aligned.X.len(), 2); // z dropped
+    }
+
+    #[test]
+    fn test_align_features_identical_is_unchanged() {
+        let train = named(&["a", "b"], &[(0, 0, 1.0)]);
+        let test = named(&["a", "b"], &[(1, 1, 2.0)]);
+        assert_eq!(test.align_features_to(&train).unwrap(), test);
+    }
+
+    #[test]
+    fn test_align_features_errors() {
+        let train = named(&["a", "b"], &[]);
+        assert!(named(&["x", "y"], &[]).align_features_to(&train).is_err());
+        assert!(named(&["a", "a"], &[]).align_features_to(&train).is_err());
     }
 }

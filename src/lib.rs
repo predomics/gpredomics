@@ -201,11 +201,19 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     if test_data.is_none() && (!param.data.Xtest.is_empty() && !param.data.ytest.is_empty()) {
         debug!("Loading test data...");
         let mut td = Data::new();
-        let _ = td.load_data(
+        if let Err(e) = td.load_data(
             &param.data.Xtest,
             &param.data.ytest,
             param.data.features_in_rows,
-        );
+        ) {
+            error!("Failed to load test data: {}", e);
+            panic!("Failed to load test data: {}", e);
+        }
+        // Models address features by index: match test features to training ones by name
+        td = td.align_features_to(&data).unwrap_or_else(|e| {
+            error!("Test data cannot be used: {}", e);
+            panic!("Test data cannot be used: {}", e);
+        });
         td.set_classes(param.data.classes.clone());
         if param.data.inverse_classes {
             td.inverse_classes();
@@ -325,6 +333,19 @@ pub fn run(param: &Param, running: Arc<AtomicBool>) -> Experiment {
     exp
 }
 
+/// Aligns a caller-provided test set to the training features by name
+/// (see [`Data::align_features_to`]). A test set that cannot be aligned is
+/// dropped with an error log rather than evaluated on the wrong features.
+fn align_test_data(test_data: Option<Data>, train: &Data) -> Option<Data> {
+    test_data.and_then(|td| match td.align_features_to(train) {
+        Ok(aligned) => Some(aligned),
+        Err(e) => {
+            error!("Test data ignored: {}", e);
+            None
+        }
+    })
+}
+
 /// Executes training on pre-loaded data structures.
 ///
 /// # Arguments
@@ -387,6 +408,9 @@ pub fn run_on_data(
     {
         warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
     }
+
+    // Models address features by index: match test features to training ones by name
+    test_data = align_test_data(test_data, &data);
 
     // Pre-compute z-score stats on training data and propagate to test
     let needs_zscore = param.general.data_type.contains("zscore")
@@ -569,6 +593,9 @@ pub fn run_pop_and_data(
     {
         warn!("No test data (Xtest/ytest) provided and holdout_ratio is set to 0.");
     }
+
+    // Models address features by index: match test features to training ones by name
+    test_data = align_test_data(test_data, &data);
 
     // Pre-compute z-score stats on training data and propagate to test
     let needs_zscore = param.general.data_type.contains("zscore")
