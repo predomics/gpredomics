@@ -632,8 +632,14 @@ impl Experiment {
             new_data.inverse_classes();
         }
 
-        if self.train_data.check_compatibility(&new_data) == false {
-            panic!("New test data to evaluate is not compatible with train data");
+        // Models address features by index: match the new features to the training ones by name
+        new_data = new_data
+            .align_features_to(&self.train_data)
+            .unwrap_or_else(|e| panic!("New data cannot be evaluated: {}", e));
+        new_data.copy_zscore_stats_from(&self.train_data);
+
+        if !self.train_data.check_compatibility(&new_data) {
+            panic!("New test data to evaluate is not compatible with train data (classes differ)");
         }
 
         let display_param = self.parameters.clone();
