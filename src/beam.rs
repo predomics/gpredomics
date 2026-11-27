@@ -7,10 +7,12 @@ use crate::individual::language;
 use crate::individual::Individual;
 use crate::individual::ThresholdCI;
 use crate::individual::BINARY_LANG;
+use crate::individual::BINARY_OR_LANG;
 use crate::individual::POW2_LANG;
 use crate::individual::RATIO_LANG;
 use crate::individual::RAW_TYPE;
 use crate::individual::TERNARY_LANG;
+use crate::individual::{base_language, is_or_language, or_language};
 use crate::param::Param;
 use crate::population::Population;
 use crate::utils::{display_epoch, display_epoch_legend};
@@ -258,9 +260,14 @@ fn pop_from_combinations(
     for combination in &features_combination {
         for language in &languages {
             for data_type in &data_types {
+                // OR languages follow the rules of their base language, then store singleton clauses
+                let is_or = is_or_language(*language);
+                let mut base = base_language(*language);
+                let binary_requested =
+                    languages.contains(&if is_or { BINARY_OR_LANG } else { BINARY_LANG });
+
                 let mut tmp_ind = pattern_ind.clone();
 
-                tmp_ind.language = *language;
                 tmp_ind.data_type = *data_type;
                 tmp_ind.features = combination
                     .iter()
@@ -274,19 +281,19 @@ fn pop_from_combinations(
                     let has_negative = tmp_ind.features.values().any(|&coef| coef < 0);
                     let has_positive = tmp_ind.features.values().any(|&coef| coef > 0);
 
-                    if tmp_ind.language == TERNARY_LANG {
+                    if base == TERNARY_LANG {
                         if !has_negative && has_positive {
                             // TERNARY with only positive features → convert to BINARY
                             tmp_ind.features.retain(|_, &mut coeff| coeff > 0);
-                            if !languages.contains(&BINARY_LANG) {
+                            if !binary_requested {
                                 ter_converted_count += 1;
                             }
-                            tmp_ind.language = BINARY_LANG;
+                            base = BINARY_LANG;
                         } else if !has_positive {
                             // TERNARY with only negative features → reject (not equivalent to BINARY)
                             skip_model = true;
                         }
-                    } else if tmp_ind.language == RATIO_LANG {
+                    } else if base == RATIO_LANG {
                         // RATIO requires BOTH positive AND negative features
                         if !has_positive || !has_negative {
                             skip_model = true;
@@ -294,26 +301,26 @@ fn pop_from_combinations(
                     }
                 } else if expected_k == 1 {
                     // For k==1, converts ratio to ternary/binary to keep mathematical consistency
-                    if tmp_ind.language == RATIO_LANG {
+                    if base == RATIO_LANG {
                         ratio_converted_count += 1;
                         if tmp_ind.features.values().all(|&coef| coef > 0) {
-                            tmp_ind.language = BINARY_LANG;
+                            base = BINARY_LANG;
                         } else if tmp_ind.features.values().all(|&coef| coef < 0) {
-                            tmp_ind.language = TERNARY_LANG;
+                            base = TERNARY_LANG;
                         }
-                    } else if tmp_ind.language == TERNARY_LANG {
+                    } else if base == TERNARY_LANG {
                         // For k==1, converts ternary to binary (only positive features)
                         if tmp_ind.features.values().all(|&coef| coef > 0) {
-                            if !languages.contains(&BINARY_LANG) {
+                            if !binary_requested {
                                 ter_converted_count += 1;
                             }
-                            tmp_ind.language = BINARY_LANG;
+                            base = BINARY_LANG;
                         }
                     }
                 }
 
                 // Remove -1 for Binary Individual
-                if tmp_ind.language == BINARY_LANG {
+                if base == BINARY_LANG {
                     tmp_ind.features = tmp_ind
                         .features
                         .into_iter()
@@ -321,7 +328,13 @@ fn pop_from_combinations(
                         .collect();
                 }
 
+                tmp_ind.language = if is_or { or_language(base) } else { base };
                 tmp_ind.k = tmp_ind.features.len();
+                if is_or {
+                    tmp_ind.set_singleton_clauses();
+                } else {
+                    tmp_ind.clauses = None;
+                }
 
                 // Add individual if valid and has expected number of features
                 if !skip_model && tmp_ind.k == expected_k {
@@ -888,6 +901,7 @@ pub fn iterative_growth(
             "Kept {:?} individuals from the best models",
             best_pop.individuals.len()
         );
+        let best_pop = ensure_parent_feature_coverage(best_pop, &pop, data.feature_selection.len());
 
         // Generate new population based on best one - reuse GPU assays
         last_pop = pop;
@@ -948,6 +962,56 @@ pub fn iterative_growth(
     populations
 }
 
+/// Minimum number of distinct features the parents of a level must cover (when the data has
+/// that many selected features) for the next level to have enough combinations to choose from.
+pub const MIN_PARENT_FEATURES: usize = 10;
+
+/// Extends the parents of a level, in fitness order, until they cover at least
+/// [`MIN_PARENT_FEATURES`] distinct features (or every one of the `n_selected` features).
+///
+/// A percentage-based selection on a small level (for example 10% of the 21 singletons of a
+/// dataset with 21 selected features) keeps so few parents, hence so few features, that the next
+/// level has one or two candidate combinations, often rejected by the sign rules of the language:
+/// Beam then stops with no result. Populations whose parents already cover enough features are
+/// returned unchanged, so the usual runs are not affected.
+pub fn ensure_parent_feature_coverage(
+    mut best_pop: Population,
+    pop: &Population,
+    n_selected: usize,
+) -> Population {
+    let target = MIN_PARENT_FEATURES.min(n_selected);
+    let mut covered: HashSet<usize> = best_pop
+        .individuals
+        .iter()
+        .flat_map(|ind| ind.features.keys().copied())
+        .collect();
+    if covered.len() >= target {
+        return best_pop;
+    }
+    let kept: HashSet<u64> = best_pop.individuals.iter().map(|ind| ind.hash).collect();
+    let before = best_pop.individuals.len();
+    for ind in pop.individuals.iter() {
+        if covered.len() >= target {
+            break;
+        }
+        if kept.contains(&ind.hash) {
+            continue;
+        }
+        covered.extend(ind.features.keys().copied());
+        best_pop.individuals.push(ind.clone());
+    }
+    if best_pop.individuals.len() > before {
+        debug!(
+            "Extended the parents from {} to {} models so that they cover {} features (minimum {})",
+            before,
+            best_pop.individuals.len(),
+            covered.len(),
+            target
+        );
+    }
+    best_pop
+}
+
 /// Grows a new population from the best models of the previous generation.
 ///
 /// # Arguments
@@ -980,7 +1044,12 @@ pub fn grow(
     let features_to_keep = if param.beam.best_models_criterion > 1.0 {
         // Check if RATIO language is used - requires special balanced selection
         // Avoid RATIO balanced selection at k=1->2 as it produce empty individuals
-        let languages: Vec<u8> = param.general.language.split(",").map(language).collect();
+        let languages: Vec<u8> = param
+            .general
+            .language
+            .split(",")
+            .map(|l| base_language(language(l)))
+            .collect();
         if languages.contains(&RATIO_LANG) && epoch > 2 {
             // Use R-like approach with 1% threshold and balanced pos/neg selection
             select_features_for_ratio(&best_pop, 1.0, 10.0, best_pop.individuals.len())
@@ -992,12 +1061,19 @@ pub fn grow(
         select_features_from_best(&best_pop)
     };
 
+    // OR languages: children that group the new feature into an existing clause (or open a new one)
+    let or_children = if uses_or_language(param) {
+        grow_or(&best_pop, &features_to_keep, data, epoch, param)
+    } else {
+        vec![]
+    };
+
     let combinations = match param.beam.method {
         BeamMethod::LimitedExhaustive => combine(features_to_keep, epoch, data, param),
         BeamMethod::ParallelForward => increment(best_pop, features_to_keep, param),
     };
 
-    if combinations.is_empty() {
+    if combinations.is_empty() && or_children.is_empty() {
         debug!(
             "No valid combinations for k={}; returning empty population...",
             epoch
@@ -1011,6 +1087,16 @@ pub fn grow(
     );
 
     let mut new_pop = pop_from_combinations(combinations, pattern_ind, epoch, param);
+
+    if !or_children.is_empty() {
+        debug!("{} clause (OR) models generated", or_children.len());
+        new_pop.individuals.extend(or_children);
+        let clones = new_pop.remove_clone();
+        debug!(
+            "{} duplicated models removed after merging OR models",
+            clones
+        );
+    }
 
     // Fit new population - reuse GPU assays
     if let Some(ref cv) = cv {
@@ -1077,6 +1163,159 @@ pub fn increment(
     combine_with_best(best_combinations.clone(), &features_to_keep)
 }
 
+/// Returns true when at least one OR (clause) language is requested in `general.language`.
+fn uses_or_language(param: &Param) -> bool {
+    param
+        .general
+        .language
+        .split(",")
+        .any(|l| is_or_language(language(l)))
+}
+
+/// Coefficient of a feature from its class association (1 for class 1, -1 for class 0).
+fn feature_coefficient(data: &Data, feature: usize) -> Option<i8> {
+    data.feature_class
+        .get(&feature)
+        .map(|&class| if class == 0 { -1 } else { 1 })
+}
+
+/// Grows clause (OR) models from the best models of the previous level.
+///
+/// Every parent (classic models count as OR models with singleton clauses) is extended by one
+/// feature of `features_to_keep` in two ways: as a new singleton clause, or merged into an existing
+/// clause of the same sign whose size is below `beam.max_clause_size` (0 = unlimited). Children are
+/// produced for each requested OR language, with the sign rules of its base language (Binary-OR:
+/// positive features only; Ternary-OR without negative feature becomes Binary-OR; Ratio-OR needs
+/// both signs). Singleton-only children share the hash of the corresponding classic model, so the
+/// caller deduplicates with `remove_clone`.
+///
+/// Parents are taken in order of fitness until the estimated number of children exceeds
+/// `beam.max_nb_of_models` (at least `min(5, parents)` parents are kept). The construction uses
+/// no randomness and iterates sorted structures only, so it is deterministic.
+pub fn grow_or(
+    best_pop: &Population,
+    features_to_keep: &[usize],
+    data: &Data,
+    epoch: usize,
+    param: &Param,
+) -> Vec<Individual> {
+    let or_languages: Vec<u8> = {
+        let mut langs: Vec<u8> = param
+            .general
+            .language
+            .split(",")
+            .map(language)
+            .filter(|&l| is_or_language(l))
+            .collect();
+        langs.dedup();
+        langs
+    };
+    if or_languages.is_empty() || best_pop.individuals.is_empty() {
+        return vec![];
+    }
+    let max_clause = param.beam.max_clause_size;
+    let max_models = param.beam.max_nb_of_models;
+
+    // Parent budget: estimated children = new features × (1 + clauses) × OR languages
+    let min_parents = std::cmp::min(5, best_pop.individuals.len());
+    let mut parents: Vec<&Individual> = Vec::new();
+    let mut estimated = 0usize;
+    for (i, parent) in best_pop.individuals.iter().enumerate() {
+        let new_features = features_to_keep
+            .iter()
+            .filter(|f| !parent.features.contains_key(f))
+            .count();
+        let n = new_features * (1 + parent.effective_clauses().len()) * or_languages.len();
+        if max_models != 0 && estimated + n > max_models && i >= min_parents {
+            debug!(
+                "Limiting OR parent models from {} to {} to respect max_nb_of_models={}",
+                best_pop.individuals.len(),
+                i,
+                max_models
+            );
+            break;
+        }
+        parents.push(parent);
+        estimated += n;
+    }
+
+    let mut children: Vec<Individual> = Vec::new();
+    for parent in parents {
+        let parent_clauses = parent.effective_clauses();
+        for &f in features_to_keep {
+            if parent.features.contains_key(&f) {
+                continue;
+            }
+            let coef = match feature_coefficient(data, f) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Candidate clause structures: f alone, or f merged into a same-sign clause
+            let mut candidates: Vec<Vec<Vec<usize>>> = Vec::new();
+            let mut alone = parent_clauses.clone();
+            alone.push(vec![f]);
+            candidates.push(alone);
+            for (ci, clause) in parent_clauses.iter().enumerate() {
+                if parent.clause_coefficient(clause) == coef
+                    && (max_clause == 0 || clause.len() < max_clause)
+                {
+                    let mut merged = parent_clauses.clone();
+                    merged[ci].push(f);
+                    candidates.push(merged);
+                }
+            }
+
+            for &or_lang in &or_languages {
+                for clauses in &candidates {
+                    let mut child = Individual::child(parent);
+                    child.features = parent.features.clone();
+                    child.features.insert(f, coef);
+                    let has_negative = child.features.values().any(|&c| c < 0);
+                    let has_positive = child.features.values().any(|&c| c > 0);
+                    let lang = match base_language(or_lang) {
+                        BINARY_LANG => {
+                            if has_negative {
+                                continue;
+                            }
+                            BINARY_OR_LANG
+                        }
+                        TERNARY_LANG => {
+                            if !has_positive {
+                                continue;
+                            }
+                            if has_negative {
+                                or_lang
+                            } else {
+                                BINARY_OR_LANG
+                            }
+                        }
+                        RATIO_LANG => {
+                            if !has_positive || !has_negative {
+                                continue;
+                            }
+                            or_lang
+                        }
+                        _ => continue,
+                    };
+                    child.language = lang;
+                    child.clauses = Some(clauses.clone());
+                    child.canonicalize_clauses();
+                    child.k = child.features.len();
+                    child.epoch = epoch;
+                    child.parents = Some(vec![parent.hash]);
+                    if child.k != epoch {
+                        continue;
+                    }
+                    child.compute_hash();
+                    children.push(child);
+                }
+            }
+        }
+    }
+    children
+}
+
 /// Generate all possible combinations between the features_to_keep
 /// Combinations are limited by features_to_keep (by param.beam.best_models_criterion)
 /// These features can be limited with param.beam.max_nb_of_models
@@ -1097,7 +1336,13 @@ pub fn combine(
     data: &Data,
     param: &Param,
 ) -> Vec<Vec<usize>> {
-    let mut languages: Vec<u8> = param.general.language.split(",").map(language).collect();
+    let mut languages: Vec<u8> = param
+        .general
+        .language
+        .split(",")
+        .map(|l| base_language(language(l)))
+        .collect();
+    languages.dedup();
     let mut combinations: Vec<Vec<usize>>;
     let bin_combinations: Vec<Vec<usize>>;
 
@@ -1286,6 +1531,10 @@ pub fn keep_n_best_model_within_collection(collection: &Vec<Population>, n: usiz
 ///
 /// An optional GPU assay if conditions are met, otherwise None.
 fn get_gpu_assay(data: &Data, param: &Param) -> Option<GpuAssay> {
+    if param.general.gpu && uses_or_language(param) {
+        warn!("OR languages are scored on CPU: the GPU kernels do not implement clause maxima. Running without GPU.");
+        return None;
+    }
     let languages: Vec<u8> = param
         .general
         .language
@@ -1345,7 +1594,7 @@ fn create_gpu_assays_for_folds_beam(
     cv: &CV,
     param: &Param,
 ) -> Vec<(Option<GpuAssay>, Option<GpuAssay>)> {
-    if !param.general.gpu {
+    if !param.general.gpu || uses_or_language(param) {
         return vec![(None, None); cv.validation_folds.len()];
     }
 
@@ -1427,7 +1676,59 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
+            clauses: None,
         }
+    }
+
+    fn singleton(feature: usize, fit: f64, hash: u64) -> Individual {
+        let mut ind = create_test_individual();
+        ind.features = vec![(feature, 1)].into_iter().collect();
+        ind.k = 1;
+        ind.fit = fit;
+        ind.hash = hash;
+        ind
+    }
+
+    #[test]
+    fn parent_feature_coverage_extends_small_levels_in_fitness_order() {
+        // A level of 12 singletons sorted by fit; a 10% selection keeps one parent.
+        let pop = Population {
+            individuals: (0..12)
+                .map(|i| singleton(100 + i, 1.0 - i as f64 / 100.0, i as u64 + 1))
+                .collect(),
+        };
+        let best = Population {
+            individuals: vec![pop.individuals[0].clone()],
+        };
+
+        let extended = ensure_parent_feature_coverage(best.clone(), &pop, 12);
+        assert_eq!(extended.individuals.len(), MIN_PARENT_FEATURES);
+        let features: Vec<usize> = extended
+            .individuals
+            .iter()
+            .map(|i| *i.features.keys().next().unwrap())
+            .collect();
+        assert_eq!(features, (100..110).collect::<Vec<usize>>());
+
+        // Fewer selected features than the minimum: every model of the level becomes a parent.
+        let small = Population {
+            individuals: pop.individuals[..4].to_vec(),
+        };
+        let extended = ensure_parent_feature_coverage(best.clone(), &small, 4);
+        assert_eq!(extended.individuals.len(), 4);
+
+        // Parents that already cover enough features are returned unchanged.
+        let wide = Population {
+            individuals: pop.individuals[..10].to_vec(),
+        };
+        let unchanged = ensure_parent_feature_coverage(wide.clone(), &pop, 12);
+        assert_eq!(unchanged.individuals.len(), 10);
+
+        // Models already among the parents are not added twice.
+        let mut dup = pop.clone();
+        dup.individuals.insert(1, pop.individuals[0].clone());
+        let extended = ensure_parent_feature_coverage(best, &dup, 12);
+        assert_eq!(extended.individuals.len(), MIN_PARENT_FEATURES);
     }
 
     #[test]
@@ -1541,6 +1842,7 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
+            clauses: None,
         }
     }
 
@@ -2377,5 +2679,176 @@ mod tests {
 
         // C(2,3) = 0, impossible
         assert!(combinations.is_empty(), "Should return empty when k > n");
+    }
+}
+
+#[cfg(test)]
+mod or_language_tests {
+    use super::*;
+    use crate::individual::{RATIO_OR_LANG, TERNARY_OR_LANG};
+
+    /// 4 features: 0,1 associated with class 1 (+1), 2,3 with class 0 (-1)
+    fn data() -> Data {
+        let mut d = Data::new();
+        d.features = ["f0", "f1", "f2", "f3"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        d.feature_len = 4;
+        d.sample_len = 2;
+        d.feature_selection = vec![0, 1, 2, 3];
+        d.feature_class.insert(0, 1);
+        d.feature_class.insert(1, 1);
+        d.feature_class.insert(2, 0);
+        d.feature_class.insert(3, 0);
+        d
+    }
+
+    fn param(languages: &str, max_clause_size: usize) -> Param {
+        let mut p = Param::default();
+        p.general.algo = "beam".to_string();
+        p.general.language = languages.to_string();
+        p.general.data_type = "raw".to_string();
+        p.beam.max_clause_size = max_clause_size;
+        p.beam.max_nb_of_models = 0;
+        p
+    }
+
+    fn parent(features: &[(usize, i8)], clauses: Option<&[&[usize]]>, language: u8) -> Individual {
+        let mut ind = Individual::new();
+        ind.features = features.iter().copied().collect();
+        ind.k = ind.features.len();
+        ind.language = language;
+        ind.clauses = clauses.map(|c| c.iter().map(|x| x.to_vec()).collect());
+        ind.compute_hash();
+        ind
+    }
+
+    #[test]
+    fn pop_from_combinations_builds_singleton_clauses_for_or_languages() {
+        let d = data();
+        let p = param("ter-or,ratio-or", 3);
+        let pattern = generate_individual(&d, TERNARY_LANG, RAW_TYPE, &p);
+        let pop = pop_from_combinations(vec![vec![0, 2], vec![0, 1]], pattern, 2, &p);
+        // [0,2] -> Ternary-OR and Ratio-OR; [0,1] (positive only) -> Binary-OR, Ratio-OR rejected
+        let langs: Vec<u8> = pop.individuals.iter().map(|i| i.language).collect();
+        assert_eq!(langs, vec![TERNARY_OR_LANG, RATIO_OR_LANG, BINARY_OR_LANG]);
+        for ind in &pop.individuals {
+            assert_eq!(ind.k, 2);
+            assert_eq!(
+                ind.clauses,
+                Some(vec![
+                    vec![0],
+                    vec![ind.features.keys().nth(1).copied().unwrap()]
+                ])
+            );
+            assert!(ind.clauses_are_valid().is_ok());
+        }
+        // Same combination, classic language: no clauses, same hash as the singleton OR model
+        let classic = pop_from_combinations(
+            vec![vec![0, 2]],
+            generate_individual(&d, TERNARY_LANG, RAW_TYPE, &p),
+            2,
+            &param("ter", 3),
+        );
+        assert_eq!(classic.individuals[0].clauses, None);
+        assert_eq!(classic.individuals[0].hash, pop.individuals[0].hash);
+    }
+
+    #[test]
+    fn grow_or_opens_or_extends_clauses() {
+        let d = data();
+        let p = param("ter-or", 3);
+        // Parent (f0 ∨ f1) - f2, k=3 ; new feature f3 (negative)
+        let mut best = Population::new();
+        best.individuals.push(parent(
+            &[(0, 1), (1, 1), (2, -1)],
+            Some(&[&[0, 1], &[2]]),
+            TERNARY_OR_LANG,
+        ));
+        let children = grow_or(&best, &[0, 1, 2, 3], &d, 4, &p);
+        // f3 alone, or merged into the negative clause [2]; never into the positive clause
+        let structures: Vec<Vec<Vec<usize>>> = children
+            .iter()
+            .map(|c| c.clauses.clone().unwrap())
+            .collect();
+        assert_eq!(
+            structures,
+            vec![
+                vec![vec![0, 1], vec![2], vec![3]],
+                vec![vec![0, 1], vec![2, 3]]
+            ]
+        );
+        for c in &children {
+            assert_eq!(c.k, 4);
+            assert_eq!(c.language, TERNARY_OR_LANG);
+            assert_eq!(c.features[&3], -1);
+            assert_eq!(c.epoch, 4);
+            assert_eq!(c.parents, Some(vec![best.individuals[0].hash]));
+            assert!(c.clauses_are_valid().is_ok());
+        }
+        assert_ne!(children[0].hash, children[1].hash);
+
+        // max_clause_size = 1 forbids merging
+        let only_alone = grow_or(&best, &[3], &d, 4, &param("ter-or", 1));
+        assert_eq!(only_alone.len(), 1);
+        assert_eq!(
+            only_alone[0].clauses,
+            Some(vec![vec![0, 1], vec![2], vec![3]])
+        );
+
+        // Deterministic
+        let again = grow_or(&best, &[0, 1, 2, 3], &d, 4, &p);
+        assert_eq!(again, children);
+    }
+
+    #[test]
+    fn grow_or_applies_base_language_sign_rules() {
+        let d = data();
+        // Classic ternary parent f0 - f2 seen as singleton clauses
+        let mut best = Population::new();
+        best.individuals
+            .push(parent(&[(0, 1), (2, -1)], None, TERNARY_LANG));
+
+        // Binary-OR: a parent with a negative feature yields nothing
+        assert!(grow_or(&best, &[1, 3], &d, 3, &param("bin-or", 3)).is_empty());
+
+        // Ternary-OR: f1 alone or merged with f0; f3 alone or merged with f2
+        let ter = grow_or(&best, &[1, 3], &d, 3, &param("ter-or", 3));
+        assert_eq!(ter.len(), 4);
+        assert!(ter
+            .iter()
+            .all(|c| c.language == TERNARY_OR_LANG && c.k == 3));
+
+        // Ratio-OR needs both signs: a positive-only parent gets no positive child
+        let mut pos_only = Population::new();
+        pos_only
+            .individuals
+            .push(parent(&[(0, 1)], None, BINARY_LANG));
+        let ratio = grow_or(&pos_only, &[1, 2], &d, 2, &param("ratio-or", 3));
+        assert_eq!(ratio.len(), 1);
+        assert_eq!(ratio[0].language, RATIO_OR_LANG);
+        assert_eq!(ratio[0].features[&2], -1);
+
+        // Ternary-OR without negative feature becomes Binary-OR
+        let ter_pos = grow_or(&pos_only, &[1], &d, 2, &param("ter-or", 3));
+        assert_eq!(ter_pos.len(), 2);
+        assert!(ter_pos.iter().all(|c| c.language == BINARY_OR_LANG));
+    }
+
+    #[test]
+    fn grow_or_respects_the_model_budget() {
+        let d = data();
+        let mut best = Population::new();
+        for i in 0..10 {
+            let mut ind = parent(&[(0, 1), (2, -1)], None, TERNARY_LANG);
+            ind.fit = 1.0 - i as f64 * 0.01;
+            best.individuals.push(ind);
+        }
+        let mut p = param("ter-or", 3);
+        p.beam.max_nb_of_models = 1; // forces the floor of min(5, parents) parents
+        let children = grow_or(&best, &[1, 3], &d, 3, &p);
+        // 5 parents × 2 features × (alone + merge) = 20 children before deduplication
+        assert_eq!(children.len(), 20);
     }
 }

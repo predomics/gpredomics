@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use statrs::function::logistic::logistic;
 use std::cmp::min;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
@@ -127,6 +127,12 @@ pub struct Individual {
 
     /// For MCMC individuals, the beta coefficients
     pub betas: Option<Betas>,
+
+    /// For the OR languages, the disjunctive clauses of the model: each clause is a sorted list of
+    /// feature indices that share the same coefficient in `features`; clauses are disjoint, cover
+    /// every feature of the model and are sorted by their first index. `None` for classic languages.
+    #[serde(default)]
+    pub clauses: Option<Vec<Vec<usize>>>,
 }
 
 /// Constants for language and data type representations
@@ -140,6 +146,44 @@ pub const TERNARY_LANG: u8 = 1;
 pub const POW2_LANG: u8 = 2;
 /// Ratio language with coefficients in {-1,0,1}
 pub const RATIO_LANG: u8 = 3;
+/// Binary-OR language: each term is a positive disjunctive clause (max over its features),
+/// clause coefficients 0 or 1
+pub const BINARY_OR_LANG: u8 = 4;
+/// Ternary-OR language: clause terms with coefficients -1, 0 or 1
+pub const TERNARY_OR_LANG: u8 = 5;
+/// Reserved for Pow2-OR (clause terms with power-of-two coefficients); not implemented yet
+pub const POW2_OR_LANG: u8 = 6;
+/// Ratio-OR language: sum of positive clause terms over sum of negative clause terms
+pub const RATIO_OR_LANG: u8 = 7;
+
+/// Returns true for the clause-based (OR) languages
+pub fn is_or_language(lang: u8) -> bool {
+    matches!(lang, BINARY_OR_LANG | TERNARY_OR_LANG | RATIO_OR_LANG)
+}
+
+/// Maps a classic language to its OR counterpart (Binary -> Binary-OR, Ternary -> Ternary-OR,
+/// Ratio -> Ratio-OR); other codes map to themselves
+pub fn or_language(lang: u8) -> u8 {
+    match lang {
+        BINARY_LANG => BINARY_OR_LANG,
+        TERNARY_LANG => TERNARY_OR_LANG,
+        POW2_LANG => POW2_OR_LANG,
+        RATIO_LANG => RATIO_OR_LANG,
+        other => other,
+    }
+}
+
+/// Maps an OR language to the classic language whose arithmetic it shares
+/// (Binary-OR -> Binary, Ternary-OR -> Ternary, Ratio-OR -> Ratio); other codes map to themselves
+pub fn base_language(lang: u8) -> u8 {
+    match lang {
+        BINARY_OR_LANG => BINARY_LANG,
+        TERNARY_OR_LANG => TERNARY_LANG,
+        POW2_OR_LANG => POW2_LANG,
+        RATIO_OR_LANG => RATIO_LANG,
+        other => other,
+    }
+}
 /// Raw data type
 pub const RAW_TYPE: u8 = 0;
 /// Prevalence data type
@@ -168,11 +212,20 @@ const DEFAULT_POW2_START: u8 = 4;
 /// assert_eq!(lang, 0);
 /// ```
 pub fn language(language_string: &str) -> u8 {
-    match language_string.to_lowercase().as_str() {
+    match language_string.trim().to_lowercase().as_str() {
         "binary" | "bin" => BINARY_LANG,
         "ternary" | "ter" => TERNARY_LANG,
         "pow2" => POW2_LANG,
         "ratio" => RATIO_LANG,
+        "binary-or" | "bin-or" | "binary_or" | "bin_or" | "0-or" => BINARY_OR_LANG,
+        "ternary-or" | "ter-or" | "ternary_or" | "ter_or" | "1-or" => TERNARY_OR_LANG,
+        "ratio-or" | "ratio_or" | "3-or" => RATIO_OR_LANG,
+        "pow2-or" | "pow2_or" | "2-or" => {
+            panic!(
+                "Language {} (Pow2-OR) is reserved but not implemented yet",
+                language_string
+            )
+        }
         "generic" | "mcmc_generic" => MCMC_GENERIC_LANG,
         other => panic!("Unrecognized language {}", other),
     }
@@ -185,6 +238,10 @@ pub fn language_name(lang: u8) -> &'static str {
         TERNARY_LANG => "ternary",
         POW2_LANG => "pow2",
         RATIO_LANG => "ratio",
+        BINARY_OR_LANG => "binary-or",
+        TERNARY_OR_LANG => "ternary-or",
+        POW2_OR_LANG => "pow2-or",
+        RATIO_OR_LANG => "ratio-or",
         MCMC_GENERIC_LANG => "mcmc_generic",
         _ => "unknown",
     }
@@ -236,6 +293,7 @@ impl Individual {
             epsilon: DEFAULT_MINIMUM,
             parents: None,
             betas: None,
+            clauses: None,
         }
     }
 
@@ -366,69 +424,10 @@ impl Individual {
             }
         };
 
-        // Sort features by index
-        let mut sorted_features: Vec<_> = self.features.iter().collect();
-        sorted_features.sort_by(|a, b| a.0.cmp(b.0));
-
-        let mut positive_features: Vec<_> = sorted_features
-            .iter()
-            .filter(|&&(_, &coef)| coef > 0)
-            .collect();
-        let mut negative_features: Vec<_> = sorted_features
-            .iter()
-            .filter(|&&(_, &coef)| coef < 0)
-            .collect();
-
-        positive_features.sort_by(|a, b| b.1.cmp(a.1));
-        negative_features.sort_by(|a, b| a.1.cmp(b.1));
-
-        let positive_str: Vec<String> = positive_features
-            .iter()
-            .enumerate()
-            .map(|(_i, &&(index, coef))| {
-                let mut str = format!("\x1b[96m{}\x1b[0m", data.features[*index]);
-
-                if self.data_type == PREVALENCE_TYPE {
-                    str = format!("{}⁰", str);
-                }
-                if self.language == POW2_LANG && !(*coef == 1_i8) && self.data_type != LOG_TYPE {
-                    str = format!("{}*{}", coef, str);
-                } else if self.language == POW2_LANG
-                    && !(*coef == 1_i8)
-                    && self.data_type == LOG_TYPE
-                {
-                    // b*ln(a) == ln(a^b)
-                    str = format!("{}^{}", str, coef);
-                }
-                str
-            })
-            .collect();
-
-        let negative_str: Vec<String> = negative_features
-            .iter()
-            .enumerate()
-            .map(|(_i, &&(index, coef))| {
-                let mut str = format!("\x1b[95m{}\x1b[0m", data.features[*index]);
-
-                if self.data_type == PREVALENCE_TYPE {
-                    str = format!("{}⁰", str);
-                }
-                if self.language == POW2_LANG && !(*coef == -1_i8) && self.data_type != LOG_TYPE {
-                    str = format!("{}*{}", coef.abs(), str);
-                } else if self.language == POW2_LANG
-                    && !(*coef == -1_i8)
-                    && self.data_type == LOG_TYPE
-                {
-                    // b*ln(a) == ln(a^b)
-                    // absolute coeff as minus is before ln() -> ln(prod(pos)) - ln(prod(neg)) = threshold + ln(prod(data.type_minimum^coeff)
-                    str = format!("{}^{}", str, coef.abs());
-                }
-                str
-            })
-            .collect();
+        let (positive_str, negative_str) = self.term_strings(data);
 
         let mut negative_str_owned = negative_str.clone();
-        if self.language == RATIO_LANG && self.data_type != LOG_TYPE {
+        if base_language(self.language) == RATIO_LANG && self.data_type != LOG_TYPE {
             negative_str_owned.push(format!("{:2e}", self.epsilon));
         }
 
@@ -492,12 +491,14 @@ impl Individual {
             )
         };
 
-        let formatted_string = if self.language == BINARY_LANG {
+        let formatted_string = if base_language(self.language) == BINARY_LANG {
             format!(
                 "{}\n{} {} {}",
                 metrics, second_line_first_part, positive_joined, second_line_second_part
             )
-        } else if self.language == TERNARY_LANG || self.language == POW2_LANG {
+        } else if base_language(self.language) == TERNARY_LANG
+            || base_language(self.language) == POW2_LANG
+        {
             format!(
                 "{}\n{} {} - {} {}",
                 metrics,
@@ -506,7 +507,7 @@ impl Individual {
                 negative_joined,
                 second_line_second_part
             )
-        } else if self.language == RATIO_LANG {
+        } else if base_language(self.language) == RATIO_LANG {
             if self.data_type == LOG_TYPE {
                 // LOG+RATIO: Display ln() - ln() instead of /
                 format!(
@@ -619,64 +620,10 @@ impl Individual {
             }
         };
 
-        // Sort features by index
-        let mut sorted_features: Vec<_> = self.features.iter().collect();
-        sorted_features.sort_by(|a, b| a.0.cmp(b.0));
-
-        let mut positive_features: Vec<_> = sorted_features
-            .iter()
-            .filter(|&&(_, &coef)| coef > 0)
-            .collect();
-        let mut negative_features: Vec<_> = sorted_features
-            .iter()
-            .filter(|&&(_, &coef)| coef < 0)
-            .collect();
-
-        positive_features.sort_by(|a, b| b.1.cmp(a.1));
-        negative_features.sort_by(|a, b| a.1.cmp(b.1));
-
-        let positive_str: Vec<String> = positive_features
-            .iter()
-            .enumerate()
-            .map(|(_i, &&(index, coef))| {
-                let mut str = format!("\x1b[96m{}\x1b[0m", data.features[*index]);
-                if self.data_type == PREVALENCE_TYPE {
-                    str = format!("{}⁰", str);
-                }
-                if self.language == POW2_LANG && !(*coef == 1_i8) && self.data_type != LOG_TYPE {
-                    str = format!("{}*{}", coef, str);
-                } else if self.language == POW2_LANG
-                    && !(*coef == 1_i8)
-                    && self.data_type == LOG_TYPE
-                {
-                    str = format!("{}^{}", str, coef);
-                }
-                str
-            })
-            .collect();
-
-        let negative_str: Vec<String> = negative_features
-            .iter()
-            .enumerate()
-            .map(|(_i, &&(index, coef))| {
-                let mut str = format!("\x1b[95m{}\x1b[0m", data.features[*index]);
-                if self.data_type == PREVALENCE_TYPE {
-                    str = format!("{}⁰", str);
-                }
-                if self.language == POW2_LANG && !(*coef == -1_i8) && self.data_type != LOG_TYPE {
-                    str = format!("{}*{}", coef.abs(), str);
-                } else if self.language == POW2_LANG
-                    && !(*coef == -1_i8)
-                    && self.data_type == LOG_TYPE
-                {
-                    str = format!("{}^{}", str, coef.abs());
-                }
-                str
-            })
-            .collect();
+        let (positive_str, negative_str) = self.term_strings(data);
 
         let mut negative_str_owned = negative_str.clone();
-        if self.language == RATIO_LANG && self.data_type != LOG_TYPE {
+        if base_language(self.language) == RATIO_LANG && self.data_type != LOG_TYPE {
             negative_str_owned.push(format!("{:2e}", self.epsilon));
         }
 
@@ -727,12 +674,14 @@ impl Individual {
         let second_line_first_part = "score =".to_string();
         let second_line_second_part = String::new();
 
-        let formatted_string = if self.language == BINARY_LANG {
+        let formatted_string = if base_language(self.language) == BINARY_LANG {
             format!(
                 "{}\n{} {} {}",
                 metrics, second_line_first_part, positive_joined, second_line_second_part
             )
-        } else if self.language == TERNARY_LANG || self.language == POW2_LANG {
+        } else if base_language(self.language) == TERNARY_LANG
+            || base_language(self.language) == POW2_LANG
+        {
             format!(
                 "{}\n{} {} - {} {}",
                 metrics,
@@ -741,7 +690,7 @@ impl Individual {
                 negative_joined,
                 second_line_second_part
             )
-        } else if self.language == RATIO_LANG {
+        } else if base_language(self.language) == RATIO_LANG {
             if self.data_type == LOG_TYPE {
                 format!(
                     "{}\n{} {} - {} - {} {}",
@@ -789,6 +738,13 @@ impl Individual {
         // BTreeMap already iterates in sorted order — deterministic hashing
         self.features.hash(&mut hasher);
         self.betas.hash(&mut hasher);
+        // Clause structure only matters once a clause groups several features: an OR model made of
+        // singleton clauses is the base-language model and must keep its hash.
+        if let Some(clauses) = &self.clauses {
+            if clauses.iter().any(|c| c.len() > 1) {
+                clauses.hash(&mut hasher);
+            }
+        }
         self.hash = hasher.finish();
     }
 
@@ -857,7 +813,7 @@ impl Individual {
 
         // Check feature values according to language
         for (&feature_idx, &value) in self.features.iter() {
-            let valid = match self.language {
+            let valid = match base_language(self.language) {
                 BINARY_LANG => value == 1,
                 TERNARY_LANG | RATIO_LANG => value >= -1 && value <= 1,
                 POW2_LANG => {
@@ -879,6 +835,13 @@ impl Individual {
             }
         }
 
+        if is_or_language(self.language) {
+            if let Err(e) = self.clauses_are_valid() {
+                error!("Individual has invalid clauses: {}", e);
+                is_compatible = false;
+            }
+        }
+
         // Warn if features are present but not in feature_selection
         if !data.feature_selection.is_empty() {
             let selection_set: HashSet<usize> = data.feature_selection.iter().copied().collect();
@@ -894,6 +857,213 @@ impl Individual {
         }
 
         is_compatible
+    }
+
+    /// Returns the clauses of the model: the stored ones for an OR model, otherwise one singleton
+    /// clause per feature (a classic model seen as an OR model).
+    pub fn effective_clauses(&self) -> Vec<Vec<usize>> {
+        match &self.clauses {
+            Some(clauses) => clauses.clone(),
+            None => self.features.keys().map(|&f| vec![f]).collect(),
+        }
+    }
+
+    /// Stores one singleton clause per feature: the OR model equivalent to the base-language model.
+    pub fn set_singleton_clauses(&mut self) {
+        self.clauses = Some(self.features.keys().map(|&f| vec![f]).collect());
+    }
+
+    /// Puts the clauses in canonical form: features sorted and deduplicated inside each clause,
+    /// empty clauses dropped, clauses sorted by their first feature.
+    pub fn canonicalize_clauses(&mut self) {
+        if let Some(clauses) = &mut self.clauses {
+            for clause in clauses.iter_mut() {
+                clause.sort_unstable();
+                clause.dedup();
+            }
+            clauses.retain(|c| !c.is_empty());
+            clauses.sort();
+        }
+    }
+
+    /// Checks the clause invariants: non-empty, disjoint, covering exactly the features of the model,
+    /// and with a single coefficient per clause. A model without stored clauses is always valid.
+    pub fn clauses_are_valid(&self) -> Result<(), String> {
+        let clauses = match &self.clauses {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for clause in clauses {
+            let first = match clause.first() {
+                Some(&f) => f,
+                None => return Err("a clause is empty".to_string()),
+            };
+            let coef = match self.features.get(&first) {
+                Some(&c) => c,
+                None => return Err(format!("feature {} of a clause is not in the model", first)),
+            };
+            for &f in clause {
+                if !seen.insert(f) {
+                    return Err(format!("feature {} appears in two clauses", f));
+                }
+                match self.features.get(&f) {
+                    Some(&c) if c == coef => {}
+                    Some(&c) => {
+                        return Err(format!(
+                            "clause starting at feature {} mixes coefficients {} and {}",
+                            first, coef, c
+                        ))
+                    }
+                    None => return Err(format!("feature {} of a clause is not in the model", f)),
+                }
+            }
+        }
+        if seen.len() != self.features.len() {
+            return Err(format!(
+                "{} features in clauses but {} in the model",
+                seen.len(),
+                self.features.len()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Removes a feature from the model and from its clause (an emptied clause is dropped).
+    /// Returns the removed coefficient. `k` is left to the caller.
+    pub fn remove_feature(&mut self, idx: usize) -> Option<i8> {
+        let removed = self.features.remove(&idx);
+        if let Some(clauses) = &mut self.clauses {
+            for clause in clauses.iter_mut() {
+                clause.retain(|&f| f != idx);
+            }
+            clauses.retain(|c| !c.is_empty());
+        }
+        removed
+    }
+
+    /// Coefficient shared by the features of a clause (0 for an empty clause or unknown feature).
+    pub fn clause_coefficient(&self, clause: &[usize]) -> i8 {
+        clause
+            .first()
+            .and_then(|f| self.features.get(f))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Scores an OR-language model: every clause takes the maximum of the transformed values of its
+    /// features (`value(sample, feature)`), then the arithmetic of the base language is applied to
+    /// the clause values: `sum(coef * clause)` for Binary-OR / Ternary-OR, and
+    /// `sum(positive clauses) / (sum(negative clauses) + epsilon)` for Ratio-OR.
+    fn evaluate_or_with<F>(&self, value: F, sample_len: usize) -> Vec<f64>
+    where
+        F: Fn(usize, usize) -> f64,
+    {
+        let mut positive = vec![0.0; sample_len];
+        let mut negative = vec![0.0; sample_len];
+        for clause in self.effective_clauses() {
+            let coef = self.clause_coefficient(&clause);
+            if coef == 0 {
+                continue;
+            }
+            let weight = coef.unsigned_abs() as f64;
+            for sample in 0..sample_len {
+                let mut v = f64::NEG_INFINITY;
+                for &feature in &clause {
+                    v = v.max(value(sample, feature));
+                }
+                if v.is_finite() {
+                    if coef > 0 {
+                        positive[sample] += v * weight;
+                    } else {
+                        negative[sample] += v * weight;
+                    }
+                }
+            }
+        }
+        if base_language(self.language) == RATIO_LANG {
+            positive
+                .iter()
+                .zip(&negative)
+                .map(|(p, n)| p / (n + self.epsilon))
+                .collect()
+        } else {
+            positive.iter().zip(&negative).map(|(p, n)| p - n).collect()
+        }
+    }
+
+    /// Builds the display strings of the positive and negative terms of the model. For the classic
+    /// languages a term is a feature (ordered by index, then by coefficient); for the OR languages a
+    /// term is a clause, shown as `(A ∨ B)` when it has several features.
+    fn term_strings(&self, data: &Data) -> (Vec<String>, Vec<String>) {
+        let label = |index: usize, color: &str| -> String {
+            let mut s = format!("\x1b[{}m{}\x1b[0m", color, data.features[index]);
+            if self.data_type == PREVALENCE_TYPE {
+                s = format!("{}⁰", s);
+            }
+            s
+        };
+
+        if is_or_language(self.language) {
+            let mut positive = Vec::new();
+            let mut negative = Vec::new();
+            for clause in self.effective_clauses() {
+                let coef = self.clause_coefficient(&clause);
+                if coef == 0 {
+                    continue;
+                }
+                let color = if coef > 0 { "96" } else { "95" };
+                let labels: Vec<String> = clause.iter().map(|&i| label(i, color)).collect();
+                let term = if labels.len() == 1 {
+                    labels.into_iter().next().unwrap()
+                } else {
+                    format!("({})", labels.join(" ∨ "))
+                };
+                if coef > 0 {
+                    positive.push(term);
+                } else {
+                    negative.push(term);
+                }
+            }
+            return (positive, negative);
+        }
+
+        let mut positive_features: Vec<(usize, i8)> = self
+            .features
+            .iter()
+            .filter(|(_, &c)| c > 0)
+            .map(|(&i, &c)| (i, c))
+            .collect();
+        let mut negative_features: Vec<(usize, i8)> = self
+            .features
+            .iter()
+            .filter(|(_, &c)| c < 0)
+            .map(|(&i, &c)| (i, c))
+            .collect();
+        positive_features.sort_by(|a, b| b.1.cmp(&a.1));
+        negative_features.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let pow2 = |s: String, coef: i8, unit: i8| -> String {
+            if self.language == POW2_LANG && coef != unit {
+                if self.data_type == LOG_TYPE {
+                    // b*ln(a) == ln(a^b)
+                    format!("{}^{}", s, coef.abs())
+                } else {
+                    format!("{}*{}", coef.abs(), s)
+                }
+            } else {
+                s
+            }
+        };
+        let positive = positive_features
+            .iter()
+            .map(|&(i, c)| pow2(label(i, "96"), c, 1))
+            .collect();
+        let negative = negative_features
+            .iter()
+            .map(|&(i, c)| pow2(label(i, "95"), c, -1))
+            .collect();
+        (positive, negative)
     }
 
     /// Generates a child Individual from a main parent Individual
@@ -1108,6 +1278,12 @@ impl Individual {
     /// let scores = individual.evaluate_raw(&X, sample_len);
     /// ```
     fn evaluate_raw(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
+        if is_or_language(self.language) {
+            return self.evaluate_or_with(
+                |sample, feature| *X.get(&(sample, feature)).unwrap_or(&0.0),
+                sample_len,
+            );
+        }
         let mut score = vec![0.0; sample_len];
 
         // BTreeMap iterates in sorted key order — deterministic accumulation
@@ -1181,6 +1357,18 @@ impl Individual {
     /// let scores = individual.evaluate_prevalence(&X, sample_len);
     /// ```
     fn evaluate_prevalence(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
+        if is_or_language(self.language) {
+            return self.evaluate_or_with(
+                |sample, feature| {
+                    if X.get(&(sample, feature)).unwrap_or(&0.0) > &self.epsilon {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                },
+                sample_len,
+            );
+        }
         let mut score = vec![0.0; sample_len];
 
         if self.language == RATIO_LANG {
@@ -1268,6 +1456,17 @@ impl Individual {
     /// let scores = individual.evaluate_log(&X, sample_len);
     /// ```
     fn evaluate_log(&self, X: &HashMap<(usize, usize), f64>, sample_len: usize) -> Vec<f64> {
+        if is_or_language(self.language) {
+            // Like the classic log path, a feature absent from X contributes 0 (= ln(1))
+            return self.evaluate_or_with(
+                |sample, feature| {
+                    X.get(&(sample, feature))
+                        .map(|val| (val / self.epsilon).ln())
+                        .unwrap_or(0.0)
+                },
+                sample_len,
+            );
+        }
         let mut score = vec![0.0; sample_len];
 
         if self.language == RATIO_LANG {
@@ -1344,6 +1543,17 @@ impl Individual {
             panic!(
                 "evaluate_zscore requires feature_means and feature_stds to be computed. \
                  Call data.compute_zscore_stats() before evaluation."
+            );
+        }
+
+        if is_or_language(self.language) {
+            return self.evaluate_or_with(
+                |sample, feature| {
+                    let mean = *feature_means.get(&feature).unwrap_or(&0.0);
+                    let std = *feature_stds.get(&feature).unwrap_or(&1.0);
+                    (*X.get(&(sample, feature)).unwrap_or(&0.0) - mean) / std
+                },
+                sample_len,
             );
         }
 
@@ -2557,6 +2767,10 @@ impl Individual {
             TERNARY_LANG => "Ternary",
             RATIO_LANG => "Ratio",
             POW2_LANG => "Pow2",
+            BINARY_OR_LANG => "Binary-OR",
+            TERNARY_OR_LANG => "Ternary-OR",
+            POW2_OR_LANG => "Pow2-OR",
+            RATIO_OR_LANG => "Ratio-OR",
             MCMC_GENERIC_LANG => "MCMC_Generic",
             _ => "Unknown",
         }
@@ -2890,7 +3104,7 @@ impl Individual {
 
         // Apply pruning
         for f in to_drop {
-            self.features.remove(&f);
+            self.remove_feature(f);
         }
         self.k = self.features.len();
 
@@ -2977,6 +3191,7 @@ mod tests {
                 epsilon: f64::MIN_POSITIVE,
                 parents: None,
                 betas: None,
+                clauses: None,
                 cls: ClassificationMetrics {
                     auc: 0.4,
                     specificity: 0.15,
@@ -3006,6 +3221,7 @@ mod tests {
                 epsilon: f64::MIN_POSITIVE,
                 parents: None,
                 betas: None,
+                clauses: None,
                 cls: ClassificationMetrics {
                     auc: 0.4,
                     specificity: 0.15,
@@ -3039,6 +3255,7 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
+                clauses: None,
                 cls: ClassificationMetrics {
                     auc: 0.8,
                     specificity: 0.1,
@@ -3080,6 +3297,7 @@ mod tests {
                 epsilon: 0.0,
                 parents: None,
                 betas: None,
+                clauses: None,
                 cls: ClassificationMetrics::default(),
             }
         }
@@ -3107,6 +3325,7 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
+                clauses: None,
                 cls: ClassificationMetrics {
                     auc: 0.8,
                     specificity,
@@ -3145,6 +3364,7 @@ mod tests {
                 epsilon: DEFAULT_MINIMUM,
                 parents: None,
                 betas: None,
+                clauses: None,
                 cls: ClassificationMetrics {
                     auc: 0.8,
                     specificity: 0.75,
@@ -4501,6 +4721,7 @@ mod tests {
             epsilon: DEFAULT_MINIMUM,
             parents: None,
             betas: None,
+            clauses: None,
             cls: ClassificationMetrics {
                 auc: 0.8,
                 specificity: 0.75,
@@ -8043,5 +8264,347 @@ mod cls_refactor_tests {
         assert!(ind.cls.sensitivity >= 0.0 && ind.cls.sensitivity <= 1.0);
         assert!(ind.cls.specificity >= 0.0 && ind.cls.specificity <= 1.0);
         assert!(ind.cls.accuracy >= 0.0 && ind.cls.accuracy <= 1.0);
+    }
+}
+
+#[cfg(test)]
+mod or_language_tests {
+    use super::*;
+
+    /// 3 samples × 4 features; absent cells are zeros of the sparse matrix.
+    fn small_data() -> Data {
+        let mut d = Data::new();
+        d.features = ["f0", "f1", "f2", "f3"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        d.feature_len = 4;
+        d.samples = (0..3).map(|i| format!("s{}", i)).collect();
+        d.sample_len = 3;
+        d.y = vec![0.0, 1.0, 1.0];
+        d.classes = vec!["neg".to_string(), "pos".to_string()];
+        for (k, v) in [
+            ((0, 0), 0.5),
+            ((0, 1), 0.2),
+            ((0, 2), 0.1),
+            ((0, 3), 0.4),
+            ((1, 1), 0.3),
+            ((1, 2), 0.6),
+            ((2, 0), 0.1),
+            ((2, 3), 0.2),
+        ] {
+            d.X.insert(k, v);
+        }
+        d
+    }
+
+    fn or_model(
+        language: u8,
+        data_type: u8,
+        features: &[(usize, i8)],
+        clauses: &[&[usize]],
+    ) -> Individual {
+        let mut ind = Individual::new();
+        ind.features = features.iter().copied().collect();
+        ind.k = ind.features.len();
+        ind.language = language;
+        ind.data_type = data_type;
+        ind.clauses = Some(clauses.iter().map(|c| c.to_vec()).collect());
+        ind.compute_hash();
+        ind
+    }
+
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for n in chars.by_ref() {
+                    if n == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    fn assert_close(a: &[f64], b: &[f64]) {
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b) {
+            assert!((x - y).abs() < 1e-9, "{} != {}", x, y);
+        }
+    }
+
+    #[test]
+    fn parses_or_language_aliases() {
+        for alias in [
+            "binary-or",
+            "bin-or",
+            "bin_or",
+            "0-or",
+            "BIN-OR",
+            " bin-or ",
+        ] {
+            assert_eq!(language(alias), BINARY_OR_LANG, "{}", alias);
+        }
+        for alias in ["ternary-or", "ter-or", "ter_or", "1-or"] {
+            assert_eq!(language(alias), TERNARY_OR_LANG, "{}", alias);
+        }
+        for alias in ["ratio-or", "ratio_or", "3-or"] {
+            assert_eq!(language(alias), RATIO_OR_LANG, "{}", alias);
+        }
+        assert_eq!(language_name(BINARY_OR_LANG), "binary-or");
+        assert_eq!(language_name(TERNARY_OR_LANG), "ternary-or");
+        assert_eq!(language_name(RATIO_OR_LANG), "ratio-or");
+        assert!(is_or_language(TERNARY_OR_LANG));
+        assert!(!is_or_language(TERNARY_LANG));
+        assert_eq!(base_language(BINARY_OR_LANG), BINARY_LANG);
+        assert_eq!(base_language(TERNARY_OR_LANG), TERNARY_LANG);
+        assert_eq!(base_language(RATIO_OR_LANG), RATIO_LANG);
+        assert_eq!(base_language(POW2_LANG), POW2_LANG);
+        let mut ind = Individual::new();
+        ind.language = RATIO_OR_LANG;
+        assert_eq!(ind.get_language(), "Ratio-OR");
+    }
+
+    #[test]
+    #[should_panic(expected = "not implemented yet")]
+    fn pow2_or_is_rejected() {
+        language("pow2-or");
+    }
+
+    #[test]
+    fn ternary_or_raw_takes_clause_maximum() {
+        let d = small_data();
+        let ind = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, 1), (3, -1)],
+            &[&[0, 1], &[2], &[3]],
+        );
+        // max(f0,f1) + f2 - f3
+        assert_close(&ind.evaluate(&d), &[0.2, 0.9, -0.1]);
+    }
+
+    #[test]
+    fn binary_or_prevalence_is_boolean_or() {
+        let d = small_data();
+        let ind = or_model(
+            BINARY_OR_LANG,
+            PREVALENCE_TYPE,
+            &[(0, 1), (1, 1), (2, 1)],
+            &[&[0, 1], &[2]],
+        );
+        // (f0 ∨ f1) + f2 on presence/absence
+        assert_close(&ind.evaluate(&d), &[2.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn ratio_or_raw_divides_clause_sums() {
+        let d = small_data();
+        let ind = or_model(
+            RATIO_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, -1), (3, -1)],
+            &[&[0, 1], &[2], &[3]],
+        );
+        // max(f0,f1) / (f2 + f3 + eps)
+        assert_close(&ind.evaluate(&d), &[1.0, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn log_and_zscore_or_paths_run() {
+        let mut d = small_data();
+        let ind = or_model(
+            TERNARY_OR_LANG,
+            LOG_TYPE,
+            &[(0, 1), (1, 1), (2, -1)],
+            &[&[0, 1], &[2]],
+        );
+        let mut expected = Individual::new();
+        expected.epsilon = ind.epsilon;
+        // sample 1: f0 absent -> 0, so the clause takes ln(f1/eps)
+        let s = ind.evaluate(&d);
+        assert!((s[1] - ((0.3 / ind.epsilon).ln() - (0.6 / ind.epsilon).ln())).abs() < 1e-9);
+        d.compute_zscore_stats();
+        let z = or_model(
+            TERNARY_OR_LANG,
+            ZSCORE_TYPE,
+            &[(0, 1), (1, 1), (2, -1)],
+            &[&[0, 1], &[2]],
+        );
+        assert_eq!(z.evaluate(&d).len(), 3);
+    }
+
+    #[test]
+    fn singleton_clauses_match_the_base_model_scores_and_hash() {
+        let d = small_data();
+        let mut ter = Individual::new();
+        ter.features = [(0, 1), (1, 1), (2, -1)].into_iter().collect();
+        ter.language = TERNARY_LANG;
+        ter.compute_hash();
+
+        let mut ter_or = ter.clone();
+        ter_or.language = TERNARY_OR_LANG;
+        ter_or.set_singleton_clauses();
+        ter_or.compute_hash();
+
+        assert_close(&ter.evaluate(&d), &ter_or.evaluate(&d));
+        assert_eq!(ter.hash, ter_or.hash);
+
+        let grouped = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, -1)],
+            &[&[0, 1], &[2]],
+        );
+        assert_ne!(grouped.hash, ter.hash);
+        let other = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, 1)],
+            &[&[0], &[1, 2]],
+        );
+        let another = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, 1)],
+            &[&[0, 1], &[2]],
+        );
+        assert_ne!(other.hash, another.hash);
+    }
+
+    #[test]
+    fn clause_invariants_are_checked() {
+        let ok = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, -1)],
+            &[&[0, 1], &[2]],
+        );
+        assert!(ok.clauses_are_valid().is_ok());
+        let mixed = or_model(TERNARY_OR_LANG, RAW_TYPE, &[(0, 1), (1, -1)], &[&[0, 1]]);
+        assert!(mixed.clauses_are_valid().unwrap_err().contains("mixes"));
+        let overlap = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1)],
+            &[&[0, 1], &[1]],
+        );
+        assert!(overlap
+            .clauses_are_valid()
+            .unwrap_err()
+            .contains("two clauses"));
+        let missing = or_model(TERNARY_OR_LANG, RAW_TYPE, &[(0, 1), (1, 1)], &[&[0]]);
+        assert!(missing.clauses_are_valid().is_err());
+        let unknown = or_model(TERNARY_OR_LANG, RAW_TYPE, &[(0, 1)], &[&[0], &[7]]);
+        assert!(unknown
+            .clauses_are_valid()
+            .unwrap_err()
+            .contains("not in the model"));
+
+        let d = small_data();
+        assert!(ok.check_compatibility(&d));
+        assert!(!mixed.check_compatibility(&d));
+    }
+
+    #[test]
+    fn remove_feature_and_canonicalize_keep_clauses_in_sync() {
+        let mut ind = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, -1)],
+            &[&[1, 0], &[2]],
+        );
+        ind.canonicalize_clauses();
+        assert_eq!(ind.clauses, Some(vec![vec![0, 1], vec![2]]));
+        assert_eq!(ind.remove_feature(2), Some(-1));
+        assert_eq!(ind.clauses, Some(vec![vec![0, 1]]));
+        assert_eq!(ind.remove_feature(0), Some(1));
+        assert_eq!(ind.clauses, Some(vec![vec![1]]));
+        assert!(ind.clauses_are_valid().is_ok());
+        assert_eq!(ind.clause_coefficient(&[1]), 1);
+        assert_eq!(ind.clause_coefficient(&[]), 0);
+    }
+
+    #[test]
+    fn display_shows_clauses() {
+        let d = small_data();
+        let ind = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, 1), (3, -1)],
+            &[&[0, 1], &[2], &[3]],
+        );
+        let text = strip_ansi(&ind.display(&d, None, &"beam".to_string(), 0.05));
+        assert!(text.starts_with("Ternary-OR:Raw [k=4]"), "{}", text);
+        assert!(
+            text.contains("Class pos: ((f0 ∨ f1) + f2) - (f3) ≥"),
+            "{}",
+            text
+        );
+
+        let prev = or_model(
+            BINARY_OR_LANG,
+            PREVALENCE_TYPE,
+            &[(0, 1), (1, 1), (2, 1)],
+            &[&[0, 1], &[2]],
+        );
+        let text = strip_ansi(&prev.display(&d, None, &"beam".to_string(), 0.05));
+        assert!(
+            text.contains("Class pos: ((f0⁰ ∨ f1⁰) + f2⁰) ≥"),
+            "{}",
+            text
+        );
+
+        let ratio = or_model(
+            RATIO_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, -1), (3, -1)],
+            &[&[0, 1], &[2, 3]],
+        );
+        let text = strip_ansi(&ratio.display(&d, None, &"beam".to_string(), 0.05));
+        assert!(text.contains("((f0 ∨ f1)) / ((f2 ∨ f3) + "), "{}", text);
+    }
+
+    #[test]
+    fn classic_display_is_unchanged() {
+        let d = small_data();
+        let mut ter = Individual::new();
+        ter.features = [(0, 1), (1, 1), (2, -1)].into_iter().collect();
+        ter.language = TERNARY_LANG;
+        let text = strip_ansi(&ter.display(&d, None, &"beam".to_string(), 0.05));
+        assert!(text.contains("Class pos: (f0 + f1) - (f2) ≥ 0"), "{}", text);
+        let mut pow2 = ter.clone();
+        pow2.language = POW2_LANG;
+        pow2.features = [(0, 4), (1, 1), (2, -2)].into_iter().collect();
+        let text = strip_ansi(&pow2.display(&d, None, &"ga".to_string(), 0.05));
+        assert!(text.contains("(4*f0 + f1) - (2*f2) ≥ 0"), "{}", text);
+    }
+
+    #[test]
+    fn serde_keeps_clauses_and_reads_models_without_them() {
+        let ind = or_model(
+            TERNARY_OR_LANG,
+            RAW_TYPE,
+            &[(0, 1), (1, 1), (2, -1)],
+            &[&[0, 1], &[2]],
+        );
+        let json = serde_json::to_string(&ind).unwrap();
+        let back: Individual = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.clauses, ind.clauses);
+        assert_eq!(back, ind);
+
+        let classic = Individual::test();
+        let json = serde_json::to_string(&classic).unwrap();
+        assert!(json.contains("\"clauses\":null"));
+        let legacy = json.replace(",\"clauses\":null", "");
+        assert!(!legacy.contains("clauses"));
+        let back: Individual = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(back.clauses, None);
+        assert_eq!(back, classic);
     }
 }

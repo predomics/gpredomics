@@ -4,7 +4,10 @@ use crate::experiment::ImportanceAggregation;
 use crate::experiment::{Importance, ImportanceCollection, ImportanceScope, ImportanceType};
 use crate::gpu::GpuAssay;
 use crate::individual::Individual;
-use crate::individual::{BINARY_LANG, POW2_LANG, RATIO_LANG, TERNARY_LANG};
+use crate::individual::{
+    BINARY_LANG, BINARY_OR_LANG, POW2_LANG, RATIO_LANG, RATIO_OR_LANG, TERNARY_LANG,
+    TERNARY_OR_LANG,
+};
 use crate::param::FbmCIMethod;
 use crate::param::FitFunction;
 use crate::param::Param;
@@ -1533,6 +1536,8 @@ impl Population {
                 let family_lang: u8 = match individual.language {
                     BINARY_LANG | TERNARY_LANG | POW2_LANG => 0, // linear family
                     RATIO_LANG => 1,                             // ratio family
+                    BINARY_OR_LANG | TERNARY_OR_LANG => 2,       // linear family over clauses
+                    RATIO_OR_LANG => 3,                          // ratio family over clauses
                     other => other,                              // MCMC or future languages
                 };
 
@@ -1893,6 +1898,7 @@ mod tests {
                     epsilon: f64::MIN_POSITIVE + (i as f64 * 0.001),
                     parents: None,
                     betas: None,
+                    clauses: None,
                 };
                 pop.individuals.push(ind);
             }
@@ -1948,6 +1954,7 @@ mod tests {
                     epsilon: DEFAULT_MINIMUM,
                     parents: None,
                     betas: None,
+                    clauses: None,
                 });
             }
             Population { individuals }
@@ -2366,6 +2373,7 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
+            clauses: None,
         };
         let ind2 = Individual {
             cls: ClassificationMetrics {
@@ -2393,6 +2401,7 @@ mod tests {
             epsilon: f64::MIN_POSITIVE,
             parents: None,
             betas: None,
+            clauses: None,
         };
         let ind_vec = vec![ind1, ind2];
         pop_to_add.individuals = ind_vec.clone();

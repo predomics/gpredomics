@@ -378,6 +378,9 @@ pub struct BEAM {
     pub fbm_ci_method: FbmCIMethod,
     #[serde(default = "max_nb_of_models_default")]
     pub max_nb_of_models: usize,
+    /// OR languages only: maximum number of features in one disjunctive clause (0 = no limit)
+    #[serde(default = "max_clause_size_default")]
+    pub max_clause_size: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -828,6 +831,7 @@ fn check_unknown_params(yaml_value: &serde_yaml::Value) -> Result<(), String> {
         "best_models_criterion",
         "fbm_ci_method",
         "max_nb_of_models",
+        "max_clause_size",
     ]
     .iter()
     .cloned()
@@ -1093,6 +1097,18 @@ pub fn validate(param: &mut Param) -> Result<(), String> {
         If you want to get the best models across all k size, please enable keep_trace.");
     }
 
+    let uses_or_language = param.general.language.split(',').any(|l| {
+        let l = l.trim().to_lowercase();
+        l.ends_with("-or") || l.ends_with("_or")
+    });
+    if uses_or_language && param.general.algo != "beam" {
+        return Err(format!(
+            "OR languages (binary-or, ternary-or, ratio-or) are only supported by the beam algorithm, \
+             but general.algo is '{}'",
+            param.general.algo
+        ));
+    }
+
     if param.general.threshold_ci_alpha > 0.0 && param.general.threshold_ci_alpha < 1.0 {
         validate_bootstrap(param)?
     };
@@ -1352,6 +1368,9 @@ fn fbm_ci_method_default() -> FbmCIMethod {
 fn max_nb_of_models_default() -> usize {
     10000
 }
+fn max_clause_size_default() -> usize {
+    3
+}
 fn class_names_default() -> Vec<String> {
     Vec::new()
 }
@@ -1505,6 +1524,19 @@ mod tests {
             "#;
         let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
         assert!(check_unknown_params(&value).is_ok());
+    }
+
+    #[test]
+    fn test_validate_or_languages_require_beam() {
+        let mut param = Param::default();
+        param.general.algo = "ga".to_string();
+        param.general.language = "bin,ter-or".to_string();
+        let err = validate(&mut param).unwrap_err();
+        assert!(err.contains("beam"), "{}", err);
+
+        param.general.algo = "beam".to_string();
+        assert!(validate(&mut param).is_ok());
+        assert_eq!(param.beam.max_clause_size, 3);
     }
 
     #[test]
