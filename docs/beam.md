@@ -66,6 +66,8 @@ At each level, the "beam width" is controlled by `best_models_criterion`:
 
 The FBM approach is more principled: it automatically adapts the beam width based on how clearly the best model separates from the rest, while percentage-based selection gives direct control.
 
+Whatever the criterion, the parents of a level are extended in fitness order until they cover at least 10 distinct features (or every selected feature when fewer pass the feature selection). Without this floor, a small level (for example the 21 singletons of a dataset where only 21 features pass the FDR filter) keeps one or two parents with a 10% criterion, the next level has a single candidate combination, often rejected by the sign rules of the language, and the search stops with no model. Levels whose parents already cover 10 features are unchanged.
+
 ### Feature Pruning
 
 When the number of retained features would produce more combinations than `max_nb_of_models`, the algorithm prunes features intelligently:

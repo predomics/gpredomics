@@ -901,6 +901,7 @@ pub fn iterative_growth(
             "Kept {:?} individuals from the best models",
             best_pop.individuals.len()
         );
+        let best_pop = ensure_parent_feature_coverage(best_pop, &pop, data.feature_selection.len());
 
         // Generate new population based on best one - reuse GPU assays
         last_pop = pop;
@@ -959,6 +960,56 @@ pub fn iterative_growth(
     }
 
     populations
+}
+
+/// Minimum number of distinct features the parents of a level must cover (when the data has
+/// that many selected features) for the next level to have enough combinations to choose from.
+pub const MIN_PARENT_FEATURES: usize = 10;
+
+/// Extends the parents of a level, in fitness order, until they cover at least
+/// [`MIN_PARENT_FEATURES`] distinct features (or every one of the `n_selected` features).
+///
+/// A percentage-based selection on a small level (for example 10% of the 21 singletons of a
+/// dataset with 21 selected features) keeps so few parents, hence so few features, that the next
+/// level has one or two candidate combinations, often rejected by the sign rules of the language:
+/// Beam then stops with no result. Populations whose parents already cover enough features are
+/// returned unchanged, so the usual runs are not affected.
+pub fn ensure_parent_feature_coverage(
+    mut best_pop: Population,
+    pop: &Population,
+    n_selected: usize,
+) -> Population {
+    let target = MIN_PARENT_FEATURES.min(n_selected);
+    let mut covered: HashSet<usize> = best_pop
+        .individuals
+        .iter()
+        .flat_map(|ind| ind.features.keys().copied())
+        .collect();
+    if covered.len() >= target {
+        return best_pop;
+    }
+    let kept: HashSet<u64> = best_pop.individuals.iter().map(|ind| ind.hash).collect();
+    let before = best_pop.individuals.len();
+    for ind in pop.individuals.iter() {
+        if covered.len() >= target {
+            break;
+        }
+        if kept.contains(&ind.hash) {
+            continue;
+        }
+        covered.extend(ind.features.keys().copied());
+        best_pop.individuals.push(ind.clone());
+    }
+    if best_pop.individuals.len() > before {
+        debug!(
+            "Extended the parents from {} to {} models so that they cover {} features (minimum {})",
+            before,
+            best_pop.individuals.len(),
+            covered.len(),
+            target
+        );
+    }
+    best_pop
 }
 
 /// Grows a new population from the best models of the previous generation.
@@ -1627,6 +1678,57 @@ mod tests {
             betas: None,
             clauses: None,
         }
+    }
+
+    fn singleton(feature: usize, fit: f64, hash: u64) -> Individual {
+        let mut ind = create_test_individual();
+        ind.features = vec![(feature, 1)].into_iter().collect();
+        ind.k = 1;
+        ind.fit = fit;
+        ind.hash = hash;
+        ind
+    }
+
+    #[test]
+    fn parent_feature_coverage_extends_small_levels_in_fitness_order() {
+        // A level of 12 singletons sorted by fit; a 10% selection keeps one parent.
+        let pop = Population {
+            individuals: (0..12)
+                .map(|i| singleton(100 + i, 1.0 - i as f64 / 100.0, i as u64 + 1))
+                .collect(),
+        };
+        let best = Population {
+            individuals: vec![pop.individuals[0].clone()],
+        };
+
+        let extended = ensure_parent_feature_coverage(best.clone(), &pop, 12);
+        assert_eq!(extended.individuals.len(), MIN_PARENT_FEATURES);
+        let features: Vec<usize> = extended
+            .individuals
+            .iter()
+            .map(|i| *i.features.keys().next().unwrap())
+            .collect();
+        assert_eq!(features, (100..110).collect::<Vec<usize>>());
+
+        // Fewer selected features than the minimum: every model of the level becomes a parent.
+        let small = Population {
+            individuals: pop.individuals[..4].to_vec(),
+        };
+        let extended = ensure_parent_feature_coverage(best.clone(), &small, 4);
+        assert_eq!(extended.individuals.len(), 4);
+
+        // Parents that already cover enough features are returned unchanged.
+        let wide = Population {
+            individuals: pop.individuals[..10].to_vec(),
+        };
+        let unchanged = ensure_parent_feature_coverage(wide.clone(), &pop, 12);
+        assert_eq!(unchanged.individuals.len(), 10);
+
+        // Models already among the parents are not added twice.
+        let mut dup = pop.clone();
+        dup.individuals.insert(1, pop.individuals[0].clone());
+        let extended = ensure_parent_feature_coverage(best, &dup, 12);
+        assert_eq!(extended.individuals.len(), MIN_PARENT_FEATURES);
     }
 
     #[test]
