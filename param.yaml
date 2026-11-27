@@ -7,7 +7,7 @@ general:
   cv: false                                   # Should cross-validation be enabled?
   thread_number: 8                            # The number of threads used in feature selection and fit computation.
   gpu: false                                  # Should Gpredomics use the GPU? (GA and beam only)
-  language: bin,ratio,pow2,ter                # Possible values are ter, bin, ratio, pow2. See README.md for details. A comma-separated list (no spaces) is accepted; the initial population will be split among the listed languages.
+  language: bin,ratio,pow2,ter                # Possible values are ter, bin, ratio, pow2, and the clause languages ter-or, bin-or, ratio-or (beam only, see docs/individual.md). See README.md for details. A comma-separated list (no spaces) is accepted; the initial population will be split among the listed languages.
   data_type: raw,prev,log                     # Possible values: raw, prev, log, zscore. See docs/individual.md. Comma-separated list accepted. zscore standardizes features using training mean/std (propagated to test).
   epsilon: 1e-5                               # Used for data_type 'prev' (threshold) and 'log' (floor for values below threshold). Not used for 'zscore'.
   fit: auc                                    # Possible values are auc, specificity, sensitivity, mcc, f1_score, g_mean (classification). See README.md for details.
@@ -100,6 +100,7 @@ beam:
   best_models_criterion : 10                  # If ≤1: alpha for FBM confidence interval based on best fit (smaller = larger range). If >1: percentage of best models to keep (e.g., 5 = top 5%, R-like approach with frequency-based feature selection).
   fbm_ci_method: wilson                          # CI method for beam FBM selection: wald, wald_continuity (blaise), wilson, agresti_coull, clopper_pearson.
   max_nb_of_models: 20000                     # Limits the number of features_to_keep at each epoch according to the number of models made possible by them (truncated according to significance).
+  max_clause_size: 3                          # OR languages only (ter-or, bin-or, ratio-or): maximum number of features grouped in one disjunctive clause (0 = no limit).
 
 mcmc:
   method: gibbs                               # "gibbs" (joint variable selection, default) or "sbs" (sequential backward selection).

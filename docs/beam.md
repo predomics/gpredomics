@@ -87,6 +87,15 @@ Beam search handles BTR languages with special care:
 - **k>1**: Ternary models must have at least one negative feature; ratio models must have both positive and negative features. Invalid models are rejected.
 - **Coefficient signs** are determined by the feature's class association from the initial statistical test, not randomly assigned.
 
+### OR languages (clause models)
+
+When an OR language (`bin-or`, `ter-or`, `ratio-or`, see [individual.md](individual.md#or-languages-clause-models)) is requested, every level k still contains models with exactly k features, but a feature may be grouped with others in a disjunctive clause. The growth is **mixed**: starting from each model of the previous family of best models (classic models count as clause models with one feature per clause), each candidate feature is added either
+
+- as a new clause of its own (the same model the classic combination step would produce), or
+- inside an existing clause of the same sign whose size is below `max_clause_size` (0 = no limit).
+
+Children are generated for each requested OR language with the sign rules of its base language (Binary-OR takes positive features only, a Ternary-OR model without negative feature becomes Binary-OR, Ratio-OR needs both signs), then merged with the classic combinations of the level and deduplicated by hash before fitting. Selection (FBM or top percentage) then puts clause models and classic models in direct competition. The number of parents extended is capped so that the estimated number of children stays under `max_nb_of_models`. Clause models are scored on CPU: when an OR language is requested, `gpu: true` is ignored with a warning.
+
 ## Comparison with Other Algorithms
 
 | Aspect | GA | ACO | SA | Beam |
@@ -109,6 +118,7 @@ beam:
   best_models_criterion: 0.05  # FBM alpha (<= 1.0) or top percentage (> 1.0)
   fbm_ci_method: Binomial      # CI method for FBM selection
   max_nb_of_models: 500000     # Max combinations per level (0 = unlimited)
+  max_clause_size: 3           # OR languages only: max features per clause (0 = unlimited)
 ```
 
 ### Tuning Guide
